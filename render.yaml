@@ -9,3 +9,7 @@ services:
         value: 3.11.9
       - key: POLYGON_API_KEY
         sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
