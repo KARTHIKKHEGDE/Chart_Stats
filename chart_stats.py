@@ -1366,14 +1366,21 @@ canvas{display:block;width:100%}
 
 <!-- Admin Search History View -->
 <div id="admin_view" style="display:none;padding:24px 34px">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px;border-bottom:1px solid #333;padding-bottom:14px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:16px;border-bottom:1px solid #333;padding-bottom:16px">
     <div>
-      <div class="big" style="color:#29a8ff">User-Wise Searched Symbols</div>
-      <div style="color:#8a8a8a;font-size:13px;margin-top:4px">Symbols searched grouped by each user (with counts &amp; recent activity)</div>
+      <div class="big" style="color:#29a8ff;font-size:20px">Searched Symbols Audit</div>
+      <div style="color:#8a8a8a;font-size:13px;margin-top:4px">View search history grouped by user or by recent tickers (IST)</div>
     </div>
-    <div style="display:flex;gap:10px">
-      <button id="admin_rf_btn" style="height:38px;font-size:14px;padding:0 14px">Refresh</button>
-      <button id="admin_back_btn" style="height:38px;font-size:14px;padding:0 14px;border-color:#29a8ff;color:#29a8ff">Back to Terminal</button>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:8px">
+        <label for="admin_view_mode" style="font-size:13px;color:#aaa">View:</label>
+        <select id="admin_view_mode" style="height:36px;padding:0 12px;font-size:13px;background:#111;color:#fff;border:1px solid #444;border-radius:3px;cursor:pointer">
+          <option value="user" selected>User-wise (Click user to view)</option>
+          <option value="ticker">Ticker-wise (Recent-wise)</option>
+        </select>
+      </div>
+      <button id="admin_rf_btn" style="height:36px;font-size:13px;padding:0 14px">Refresh</button>
+      <button id="admin_back_btn" style="height:36px;font-size:13px;padding:0 14px;border-color:#29a8ff;color:#29a8ff">Back to Terminal</button>
     </div>
   </div>
   <div id="admin_list" style="margin-top:10px"></div>
@@ -1638,6 +1645,179 @@ function openPwdModal(){
   $('#pwd_input').focus();
 }
 
+let adminRows = [];
+let expandedUsers = {};
+let activeViewMode = 'user';
+let tickerFilterQuery = '';
+
+function toggleUserAudit(u){
+  expandedUsers[u] = !expandedUsers[u];
+  renderAdminView();
+}
+window.toggleUserAudit = toggleUserAudit;
+
+function renderAdminView(){
+  const container = $('#admin_list');
+  if(!container) return;
+
+  if(!adminRows.length){
+    container.innerHTML = '<div class="panel" style="padding:24px;text-align:center"><span class="d">No searches recorded yet. Search any ticker in the terminal to see it logged here!</span></div>';
+    return;
+  }
+
+  const uColors = { 'GUNSHOW': '#ffd23f', 'LOCKE': '#3ddc84', 'KARTHIK': '#29a8ff' };
+
+  if(activeViewMode === 'user'){
+    // User-wise view: by default show users, click on a user to expand what they searched
+    const byUser = {};
+    // Ensure standard users appear in fixed order
+    ['KARTHIK', 'LOCKE', 'GUNSHOW'].forEach(u => {
+      byUser[u] = { count: 0, tickers: {}, history: [] };
+    });
+
+    adminRows.forEach(s => {
+      const u = (s.user || 'UNKNOWN').toUpperCase();
+      if(!byUser[u]) byUser[u] = { count: 0, tickers: {}, history: [] };
+      byUser[u].count++;
+      byUser[u].tickers[s.ticker] = (byUser[u].tickers[s.ticker] || 0) + 1;
+      byUser[u].history.push(s);
+    });
+
+    let html = '<div style="margin-bottom:12px;font-size:13px;color:#8a8a8a">Click on any user below to see what symbols they have searched:</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:12px;margin-bottom:24px">';
+
+    for(const [u, obj] of Object.entries(byUser)){
+      const col = uColors[u] || '#e8e8e8';
+      const isExp = !!expandedUsers[u];
+      const uniqueTickers = Object.entries(obj.tickers).sort((a,b)=>b[1]-a[1]);
+
+      html += `<div class="panel" style="margin-top:0;border-left:4px solid ${col};padding:0;overflow:hidden;border-color:#333">`+
+        `<div onclick="toggleUserAudit('${esc(u)}')" style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;cursor:pointer;background:#0d0d0d;user-select:none" onmouseover="this.style.background='#151515'" onmouseout="this.style.background='#0d0d0d'">`+
+          `<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">`+
+            `<span style="font-size:18px;font-weight:bold;color:${col}">${esc(u)}</span>`+
+            `<span style="font-size:12px;background:#1a1a1a;border:1px solid #333;padding:2px 10px;border-radius:3px;color:#ccc">${obj.count} total search${obj.count===1?'':'es'}</span>`+
+            `<span style="font-size:12px;background:#1a1a1a;border:1px solid #333;padding:2px 10px;border-radius:3px;color:#ccc">${uniqueTickers.length} unique symbol${uniqueTickers.length===1?'':'s'}</span>`+
+          `</div>`+
+          `<div style="font-size:13px;color:#29a8ff;display:flex;align-items:center;gap:6px;font-weight:bold">`+
+            `<span>${isExp ? 'Hide Searched Symbols ▲' : 'Click to view searched symbols ▼'}</span>`+
+          `</div>`+
+        `</div>`;
+
+      if(isExp){
+        html += `<div style="padding:18px 20px;border-top:1px solid #222;background:#080808">`;
+        if(!obj.count){
+          html += `<div style="color:#666;font-size:13px;padding:8px 0">No searches recorded yet for ${esc(u)}.</div>`;
+        } else {
+          html += `<div style="font-size:12px;color:#8a8a8a;margin-bottom:8px">Symbols Searched (${uniqueTickers.length}):</div>`+
+            `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px">`+
+              uniqueTickers.map(([tkr, cnt])=>`<span style="background:#161616;border:1px solid #333;padding:5px 12px;font-size:13px;border-radius:3px;display:inline-flex;align-items:center;gap:6px"><b style="color:${col}">${esc(tkr)}</b> <span style="color:#8a8a8a;font-size:11px">(${cnt}x)</span></span>`).join('')+
+            `</div>`+
+            `<div style="font-size:12px;color:#8a8a8a;margin-bottom:6px">Query History (${obj.history.length}):</div>`+
+            `<div class="scroll" style="max-height:220px;background:#030303;border:1px solid #222;border-radius:2px">`+
+              `<table style="margin:0"><thead><tr><th style="width:40px">#</th><th style="width:190px">Time (IST)</th><th>Ticker Searched</th></tr></thead><tbody>`+
+              obj.history.map((h, i)=>`<tr><td class="d">${i+1}</td><td class="w">${esc(h.time)}</td><td class="big c" style="color:${col};font-weight:bold">${esc(h.ticker)}</td></tr>`).join('')+
+              `</tbody></table>`+
+            `</div>`;
+        }
+        html += `</div>`;
+      }
+      html += `</div>`;
+    }
+    html += '</div>';
+
+    // Chronological summary table below
+    html += `<div class="panel"><div class="ttl" style="margin-bottom:10px">All Searches Chronological Log</div>`+
+      `<div class="scroll"><table><thead><tr><th>#</th><th>Time (IST)</th><th>User</th><th>Ticker</th></tr></thead><tbody>`+
+      adminRows.map((s, idx)=>{
+        const col = uColors[s.user] || '#fff';
+        return `<tr><td class="d">${idx+1}</td><td class="w">${esc(s.time)}</td><td style="color:${col};font-weight:bold">${esc(s.user)}</td><td class="big c">${esc(s.ticker)}</td></tr>`;
+      }).join('')+
+      `</tbody></table></div></div>`;
+
+    container.innerHTML = html;
+
+  } else {
+    // Ticker-wise view: tickers sorted by recent-wise searched
+    const byTicker = {};
+    adminRows.forEach(s => {
+      const t = (s.ticker || '').toUpperCase();
+      if(!t) return;
+      if(!byTicker[t]){
+        byTicker[t] = {
+          ticker: t,
+          latestTime: s.time,
+          count: 0,
+          users: {},
+          history: []
+        };
+      }
+      byTicker[t].count++;
+      const u = (s.user || 'UNKNOWN').toUpperCase();
+      byTicker[t].users[u] = (byTicker[t].users[u] || 0) + 1;
+      byTicker[t].history.push(s);
+    });
+
+    // Sort by recent search time descending
+    let tickerList = Object.values(byTicker).sort((a,b)=>(b.latestTime||'').localeCompare(a.latestTime||''));
+
+    if(tickerFilterQuery){
+      const q = tickerFilterQuery.toUpperCase();
+      tickerList = tickerList.filter(t => t.ticker.includes(q));
+    }
+
+    let html = `<div class="panel" style="margin-top:0;padding:18px 22px">`+
+      `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:12px">`+
+        `<div>`+
+          `<div class="ttl" style="margin-bottom:4px">Tickers Searched (Recent-Wise)</div>`+
+          `<div style="font-size:12px;color:#8a8a8a">Sorted from newest search to oldest (${tickerList.length} unique symbols)</div>`+
+        `</div>`+
+        `<div style="display:flex;align-items:center;gap:8px">`+
+          `<input id="ticker_filter" placeholder="Quick filter ticker..." value="${esc(tickerFilterQuery)}" style="height:34px;width:180px;font-size:13px;padding:0 10px;background:#000;border:1px solid #444;color:#fff" autocomplete="off">`+
+        `</div>`+
+      `</div>`;
+
+    if(!tickerList.length){
+      html += `<div style="text-align:center;padding:24px;color:#666">No tickers match "${esc(tickerFilterQuery)}".</div>`;
+    } else {
+      html += `<div class="scroll"><table><thead><tr>`+
+        `<th style="width:50px">#</th>`+
+        `<th style="width:120px">Ticker</th>`+
+        `<th style="width:190px">Most Recent Search (IST)</th>`+
+        `<th style="width:130px">Total Searches</th>`+
+        `<th>Searched By Users</th>`+
+        `</tr></thead><tbody>`+
+        tickerList.map((item, idx)=>{
+          const userBadges = Object.entries(item.users).map(([u, c])=>{
+            const col = uColors[u] || '#e8e8e8';
+            return `<span style="background:#151515;border:1px solid #333;padding:3px 8px;border-radius:3px;margin-right:6px;font-size:12px"><b style="color:${col}">${esc(u)}</b> <span style="color:#8a8a8a">(${c}x)</span></span>`;
+          }).join('');
+
+          return `<tr>`+
+            `<td class="d">${idx+1}</td>`+
+            `<td class="big c" style="font-weight:bold;font-size:16px">${esc(item.ticker)}</td>`+
+            `<td class="w">${esc(item.latestTime)}</td>`+
+            `<td><span style="background:#181818;border:1px solid #333;padding:3px 9px;border-radius:3px;color:#fff">${item.count} search${item.count===1?'':'es'}</span></td>`+
+            `<td>${userBadges}</td>`+
+          `</tr>`;
+        }).join('')+
+        `</tbody></table></div>`;
+    }
+    html += `</div>`;
+
+    container.innerHTML = html;
+
+    const filterInput = $('#ticker_filter');
+    if(filterInput){
+      filterInput.oninput = (e)=>{
+        tickerFilterQuery = (e.target.value || '').trim();
+        renderAdminView();
+        const f = $('#ticker_filter');
+        if(f){ f.focus(); f.selectionStart = f.selectionEnd = f.value.length; }
+      };
+    }
+  }
+}
+
 async function loadAdminSearches(){
   $('#admin_list').innerHTML = '<span class="d">Loading search logs…</span>';
   try {
@@ -1647,55 +1827,8 @@ async function loadAdminSearches(){
       $('#admin_list').innerHTML = `<span class="r">${esc(data.error)}</span>`;
       return;
     }
-    const rows = data.searches || [];
-    if(!rows.length){
-      $('#admin_list').innerHTML = '<div class="panel" style="padding:24px;text-align:center"><span class="d">No searches recorded yet. Search any ticker in the terminal to see it logged here!</span></div>';
-      return;
-    }
-
-    // Group searches by user
-    const byUser = {};
-    rows.forEach(s => {
-      const u = (s.user || 'UNKNOWN').toUpperCase();
-      if(!byUser[u]) byUser[u] = { count: 0, tickers: {}, history: [] };
-      byUser[u].count++;
-      byUser[u].tickers[s.ticker] = (byUser[u].tickers[s.ticker] || 0) + 1;
-      byUser[u].history.push(s);
-    });
-
-    const uColors = { 'GUNSHOW': '#ffd23f', 'LOCKE': '#3ddc84', 'KARTHIK': '#29a8ff' };
-    let html = '<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));gap:16px;margin-bottom:24px">';
-
-    for(const [u, obj] of Object.entries(byUser)){
-      const col = uColors[u] || '#e8e8e8';
-      const uniqueTickers = Object.entries(obj.tickers).sort((a,b)=>b[1]-a[1]);
-      html += `<div class="panel" style="margin-top:0;border-left:4px solid ${col};padding:16px">`+
-        `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">`+
-          `<div style="font-size:18px;font-weight:bold;color:${col}">${esc(u)}</div>`+
-          `<div style="font-size:12px;color:#8a8a8a">${obj.count} total search${obj.count>1?'es':''}</div>`+
-        `</div>`+
-        `<div style="font-size:12px;color:#8a8a8a;margin-bottom:8px">Symbols Searched (${uniqueTickers.length}):</div>`+
-        `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px">`+
-          uniqueTickers.map(([tkr, cnt])=>`<span style="background:#151515;border:1px solid #333;color:#fff;padding:4px 9px;font-size:13px;border-radius:3px"><b>${esc(tkr)}</b> <span style="color:#8a8a8a;font-size:11px">(${cnt}x)</span></span>`).join('')+
-        `</div>`+
-        `<div style="font-size:12px;color:#8a8a8a;margin-bottom:6px">Recent Query Log:</div>`+
-        `<div style="max-height:160px;overflow-y:auto;font-size:12px;background:#050505;padding:8px 10px;border:1px solid #222">`+
-          obj.history.slice(0, 30).map(h=>`<div style="display:flex;justify-content:space-between;padding:3px 0"><span style="color:${col};font-weight:bold">${esc(h.ticker)}</span><span style="color:#666">${esc(h.time)}</span></div>`).join('')+
-        `</div>`+
-      `</div>`;
-    }
-    html += '</div>';
-
-    // Full chronological log below
-    html += `<div class="panel"><div class="ttl" style="margin-bottom:10px">All Searches Chronological Log</div>`+
-      `<div class="scroll"><table><thead><tr><th>#</th><th>Time (IST)</th><th>User</th><th>Ticker</th></tr></thead><tbody>`+
-      rows.map((s, idx)=>{
-        const col = uColors[s.user] || 'w';
-        return `<tr><td class="d">${idx+1}</td><td class="w">${esc(s.time)}</td><td style="color:${col};font-weight:bold">${esc(s.user)}</td><td class="big c">${esc(s.ticker)}</td></tr>`;
-      }).join('')+
-      `</tbody></table></div></div>`;
-
-    $('#admin_list').innerHTML = html;
+    adminRows = data.searches || [];
+    renderAdminView();
   } catch(e) {
     $('#admin_list').innerHTML = `<span class="r">Failed to load search logs: ${esc(e)}</span>`;
   }
@@ -1739,6 +1872,10 @@ $('#admin_back_btn').onclick=()=>{
   $('#t').focus();
 };
 $('#admin_rf_btn').onclick=loadAdminSearches;
+$('#admin_view_mode').onchange=(e)=>{
+  activeViewMode = e.target.value;
+  renderAdminView();
+};
 
 checkAuth();
 </script></body></html>"""
