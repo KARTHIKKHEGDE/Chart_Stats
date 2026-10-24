@@ -1236,8 +1236,14 @@ def index():
     return Response(HTML, mimetype="text/html")
 
 
+ALLOWED_USERS = {"karthik", "locke", "gunshow"}
+
+
 @app.route("/api/start")
 def start():
+    u = (request.args.get("user") or "").strip().lower()
+    if u not in ALLOWED_USERS:
+        return jsonify({"error": "Access denied. Allowed users: karthik, locke, gunshow"}), 401
     t = (request.args.get("ticker") or "").strip().upper()
     if not re.fullmatch(r"[A-Z.\-]{1,10}", t):
         return jsonify({"error": "Invalid ticker"}), 400
@@ -1262,7 +1268,7 @@ HTML = r"""<!doctype html>
 :root{--g:#3ddc84;--r:#ff5a5a;--y:#ffd23f;--b:#6cc4ff;--c:#29a8ff;--w:#e8e8e8;--d:#8a8a8a;--line:#333}
 *{box-sizing:border-box}
 body{margin:0;background:#000;color:var(--w);font:15px/1.45 Consolas,"SF Mono","Roboto Mono",Menlo,monospace}
-.bar{display:flex;gap:12px;padding:20px 34px;flex-wrap:wrap}
+.bar{display:flex;gap:12px;padding:20px 34px;flex-wrap:wrap;align-items:center}
 input{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:20px;padding:0 14px;height:48px;width:300px}
 button{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:18px;padding:0 16px;height:48px;cursor:pointer}
 button:hover{background:#1a1a1a}
@@ -1293,15 +1299,71 @@ canvas{display:block;width:100%}
 .tag{border:1px solid var(--y);color:var(--y);padding:0 6px;font-size:11px;margin-left:8px}
 @media(max-width:1100px){.three{grid-template-columns:1fr}.two{grid-template-columns:1fr}.two>div+div{border-left:0;padding-left:14px}.evgrid{grid-template-columns:1fr}}
 </style></head><body>
-<div class="bar">
-  <input id="t" placeholder="ticker" autocomplete="off" spellcheck="false" autofocus>
-  <button id="go">Get notes</button>
-  <button id="rf">Refresh</button>
-  <button id="cp">Copy all</button>
+<!-- Access Gate Modal -->
+<div id="gate" style="position:fixed;inset:0;background:#000;z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px">
+  <div style="background:#0c0c0c;border:1px solid #333;padding:36px 32px;width:380px;max-width:92vw;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,0.95)">
+    <div style="font-size:22px;font-weight:bold;color:#29a8ff;margin-bottom:8px">Gap-Up Fade Terminal</div>
+    <div style="color:#8a8a8a;font-size:14px;margin-bottom:24px">Authorized access only. Enter your name:</div>
+    <input id="gate_name" placeholder="Name (e.g. karthik)" style="width:100%;height:46px;font-size:17px;margin-bottom:14px;padding:0 14px;background:#000;border:1px solid #444;color:#fff;text-align:center" autofocus spellcheck="false" autocomplete="off">
+    <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:22px;font-size:13px;color:#aaa">
+      <input type="checkbox" id="gate_rem" checked style="width:16px;height:16px;cursor:pointer">
+      <label for="gate_rem" style="cursor:pointer">Remember my device</label>
+    </div>
+    <button id="gate_btn" style="width:100%;height:46px;font-size:16px;background:#141414;border:1px solid #29a8ff;color:#29a8ff;cursor:pointer;font-weight:bold">Enter Terminal</button>
+    <div id="gate_err" style="color:#ff5a5a;font-size:13px;margin-top:14px;display:none"></div>
+  </div>
 </div>
-<div id="out"><span class="d">Enter a ticker that is gapping up 30%+ and press Get notes.</span></div>
+
+<!-- Main Application -->
+<div id="app_main" style="display:none">
+  <div class="bar">
+    <input id="t" placeholder="ticker" autocomplete="off" spellcheck="false">
+    <button id="go">Get notes</button>
+    <button id="rf">Refresh</button>
+    <button id="cp">Copy all</button>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:12px;font-size:13px;color:#8a8a8a">
+      <span>User: <span id="u_name" style="color:#29a8ff;font-weight:bold"></span></span>
+      <button id="logout_btn" style="height:34px;font-size:12px;padding:0 12px;border-color:#444">Exit</button>
+    </div>
+  </div>
+  <div id="out"><span class="d">Enter a ticker that is gapping up 30%+ and press Get notes.</span></div>
+</div>
 <script>
 const $=s=>document.querySelector(s);
+const ALLOWED = ['karthik', 'locke', 'gunshow'];
+let currentUser = localStorage.getItem('gap_user') || '';
+
+function checkAuth(){
+  if(currentUser && ALLOWED.includes(currentUser.toLowerCase())){
+    $('#gate').style.display='none';
+    $('#app_main').style.display='block';
+    $('#u_name').textContent=currentUser.toUpperCase();
+    $('#t').focus();
+    return true;
+  }
+  $('#gate').style.display='flex';
+  $('#app_main').style.display='none';
+  $('#gate_name').focus();
+  return false;
+}
+
+function submitGate(){
+  const val = ($('#gate_name').value||'').trim().toLowerCase();
+  if(!ALLOWED.includes(val)){
+    $('#gate_err').textContent='Access denied. Allowed names: karthik, locke, gunshow';
+    $('#gate_err').style.display='block';
+    return;
+  }
+  $('#gate_err').style.display='none';
+  currentUser = val;
+  if($('#gate_rem').checked){
+    localStorage.setItem('gap_user', val);
+  } else {
+    localStorage.removeItem('gap_user');
+  }
+  checkAuth();
+}
+
 let lastText="", timer=null, lastChart=null, EV=[];
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const kv=rows=>'<div class="kv">'+rows.map(([l,v,c])=>`<span>${esc(l)}:</span><span class="${c}">${esc(v)}</span>`).join('')+'</div>';
@@ -1323,10 +1385,11 @@ function makeSortable(tb){
 }
 
 async function run(refresh){
+  if(!checkAuth()) return;
   const t=$('#t').value.trim().toUpperCase(); if(!t) return;
   clearInterval(timer);
   $('#out').innerHTML='<span class="d">Starting…</span>';
-  const r=await fetch('/api/start?ticker='+encodeURIComponent(t)+(refresh?'&refresh=1':''));
+  const r=await fetch('/api/start?ticker='+encodeURIComponent(t)+'&user='+encodeURIComponent(currentUser)+(refresh?'&refresh=1':''));
   const j=await r.json();
   if(j.error){$('#out').innerHTML=`<span class="r">${esc(j.error)}</span>`;return;}
   const poll=async()=>{
@@ -1470,6 +1533,15 @@ async function copyAll(){
 }
 $('#go').onclick=()=>run(false); $('#rf').onclick=()=>run(true); $('#cp').onclick=copyAll;
 $('#t').addEventListener('keydown',e=>{if(e.key==='Enter')run(false)});
+$('#gate_btn').onclick=submitGate;
+$('#gate_name').addEventListener('keydown',e=>{if(e.key==='Enter')submitGate();});
+$('#logout_btn').onclick=()=>{
+  localStorage.removeItem('gap_user');
+  currentUser='';
+  $('#gate_name').value='';
+  checkAuth();
+};
+checkAuth();
 </script></body></html>"""
 
 
