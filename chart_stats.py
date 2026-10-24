@@ -1322,11 +1322,25 @@ canvas{display:block;width:100%}
     <button id="rf">Refresh</button>
     <button id="cp">Copy all</button>
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px;font-size:13px;color:#8a8a8a">
-      <span>User: <span id="u_name" style="color:#29a8ff;font-weight:bold"></span></span>
+      <span>User: <span id="u_name" style="color:#29a8ff;font-weight:bold;cursor:pointer;text-decoration:underline dotted" title="Click to verify password"></span><span id="u_badge"></span></span>
       <button id="logout_btn" style="height:34px;font-size:12px;padding:0 12px;border-color:#444">Exit</button>
     </div>
   </div>
   <div id="out"><span class="d">Enter a ticker that is gapping up 30%+ and press Get notes.</span></div>
+</div>
+
+<!-- Password Verification Modal -->
+<div id="pwd_modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:99999;display:none;align-items:center;justify-content:center;padding:20px">
+  <div style="background:#0c0c0c;border:1px solid #333;padding:32px 28px;width:340px;max-width:92vw;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,0.95)">
+    <div style="font-size:18px;font-weight:bold;color:#29a8ff;margin-bottom:8px">Password Required</div>
+    <div id="pwd_prompt" style="color:#8a8a8a;font-size:13px;margin-bottom:18px">Enter password:</div>
+    <input type="password" id="pwd_input" placeholder="Password" style="width:100%;height:44px;font-size:18px;margin-bottom:14px;padding:0 14px;background:#000;border:1px solid #444;color:#fff;text-align:center" autocomplete="off">
+    <div style="display:flex;gap:10px">
+      <button id="pwd_cancel" style="flex:1;height:42px;font-size:14px;background:#1a1a1a;border:1px solid #444;color:#aaa;cursor:pointer">Cancel</button>
+      <button id="pwd_submit" style="flex:1;height:42px;font-size:14px;background:#141414;border:1px solid #29a8ff;color:#29a8ff;cursor:pointer;font-weight:bold">Submit</button>
+    </div>
+    <div id="pwd_err" style="color:#ff5a5a;font-size:13px;margin-top:14px;display:none"></div>
+  </div>
 </div>
 <script>
 const $=s=>document.querySelector(s);
@@ -1539,8 +1553,55 @@ $('#logout_btn').onclick=()=>{
   localStorage.removeItem('gap_user');
   currentUser='';
   $('#gate_name').value='';
+  $('#u_badge').innerHTML='';
   checkAuth();
 };
+
+const PWD_USERS = ['karthik', 'locke'];
+
+function openPwdModal(){
+  $('#pwd_modal').style.display='flex';
+  $('#pwd_prompt').textContent='Enter password for ' + currentUser.toUpperCase() + ':';
+  $('#pwd_input').value='';
+  $('#pwd_err').style.display='none';
+  $('#pwd_input').focus();
+}
+
+function verifyPwd(){
+  const cur = (currentUser||'').toLowerCase();
+  const pwd = ($('#pwd_input').value||'').trim();
+  if(!PWD_USERS.includes(cur)){
+    $('#pwd_err').textContent='Access denied. Password only works for karthik and locke.';
+    $('#pwd_err').style.display='block';
+    setTimeout(()=>{
+      localStorage.removeItem('gap_user');
+      currentUser='';
+      $('#pwd_modal').style.display='none';
+      checkAuth();
+    }, 1500);
+    return;
+  }
+  if(pwd === '500'){
+    $('#pwd_err').style.display='none';
+    $('#pwd_modal').style.display='none';
+    $('#u_badge').innerHTML=' <span style="color:#3ddc84;font-size:11px;border:1px solid #3ddc84;padding:1px 6px;margin-left:4px;border-radius:2px">✓ VERIFIED</span>';
+  } else {
+    $('#pwd_err').textContent='Incorrect password! Access revoked.';
+    $('#pwd_err').style.display='block';
+    setTimeout(()=>{
+      localStorage.removeItem('gap_user');
+      currentUser='';
+      $('#pwd_modal').style.display='none';
+      checkAuth();
+    }, 1500);
+  }
+}
+
+$('#u_name').onclick=openPwdModal;
+$('#pwd_submit').onclick=verifyPwd;
+$('#pwd_cancel').onclick=()=>{ $('#pwd_modal').style.display='none'; };
+$('#pwd_input').addEventListener('keydown',e=>{if(e.key==='Enter')verifyPwd();});
+
 checkAuth();
 </script></body></html>"""
 
