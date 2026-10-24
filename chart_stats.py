@@ -1237,6 +1237,25 @@ def index():
 
 
 ALLOWED_USERS = {"karthik", "locke", "gunshow"}
+ADMIN_USERS = {"karthik", "locke"}
+SEARCH_LOG_FILE = CACHE / "searches.json"
+
+
+def log_search(user, ticker):
+    try:
+        now_ist = dt.datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+        entry = {"user": user.upper(), "ticker": ticker, "time": now_ist}
+        data = []
+        if SEARCH_LOG_FILE.exists():
+            try:
+                data = json.loads(SEARCH_LOG_FILE.read_text())
+            except Exception:
+                data = []
+        data.insert(0, entry)
+        data = data[:1000]
+        SEARCH_LOG_FILE.write_text(json.dumps(data))
+    except Exception:
+        pass
 
 
 @app.route("/api/start")
@@ -1247,10 +1266,26 @@ def start():
     t = (request.args.get("ticker") or "").strip().upper()
     if not re.fullmatch(r"[A-Z.\-]{1,10}", t):
         return jsonify({"error": "Invalid ticker"}), 400
+    log_search(u, t)
     jid = uuid.uuid4().hex[:10]
     JOBS[jid] = {"status": "running", "msg": "Starting…"}
     threading.Thread(target=run_job, args=(JOBS[jid], t, request.args.get("refresh") == "1"), daemon=True).start()
     return jsonify({"job": jid})
+
+
+@app.route("/api/admin/searches")
+def admin_searches():
+    u = (request.args.get("user") or "").strip().lower()
+    pwd = (request.args.get("pwd") or "").strip()
+    if u not in ADMIN_USERS or pwd != "500":
+        return jsonify({"error": "Unauthorized"}), 401
+    data = []
+    if SEARCH_LOG_FILE.exists():
+        try:
+            data = json.loads(SEARCH_LOG_FILE.read_text())
+        except Exception:
+            data = []
+    return jsonify({"searches": data})
 
 
 @app.route("/api/job/<jid>")
@@ -1322,11 +1357,26 @@ canvas{display:block;width:100%}
     <button id="rf">Refresh</button>
     <button id="cp">Copy all</button>
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px;font-size:13px;color:#8a8a8a">
-      <span>User: <span id="u_name" style="color:#29a8ff;font-weight:bold;cursor:pointer;text-decoration:underline dotted" title="Click to verify password"></span><span id="u_badge"></span></span>
+      <span>User: <span id="u_name" style="color:#29a8ff;font-weight:bold"></span><span id="u_badge"></span></span>
       <button id="logout_btn" style="height:34px;font-size:12px;padding:0 12px;border-color:#444">Exit</button>
     </div>
   </div>
   <div id="out"><span class="d">Enter a ticker that is gapping up 30%+ and press Get notes.</span></div>
+</div>
+
+<!-- Admin Search History View -->
+<div id="admin_view" style="display:none;padding:24px 34px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px;border-bottom:1px solid #333;padding-bottom:14px">
+    <div>
+      <div class="big" style="color:#29a8ff">User Search History Audit</div>
+      <div style="color:#8a8a8a;font-size:13px;margin-top:4px">Tickers searched across all user sessions (Times in IST)</div>
+    </div>
+    <div style="display:flex;gap:10px">
+      <button id="admin_rf_btn" style="height:38px;font-size:14px;padding:0 14px">Refresh</button>
+      <button id="admin_back_btn" style="height:38px;font-size:14px;padding:0 14px;border-color:#29a8ff;color:#29a8ff">Back to Terminal</button>
+    </div>
+  </div>
+  <div id="admin_list" style="margin-top:10px"></div>
 </div>
 
 <!-- Password Verification Modal -->
@@ -1345,18 +1395,29 @@ canvas{display:block;width:100%}
 <script>
 const $=s=>document.querySelector(s);
 const ALLOWED = ['karthik', 'locke', 'gunshow'];
+const PWD_USERS = ['karthik', 'locke'];
 let currentUser = localStorage.getItem('gap_user') || '';
 
 function checkAuth(){
-  if(currentUser && ALLOWED.includes(currentUser.toLowerCase())){
+  const cur = (currentUser || '').toLowerCase();
+  if(currentUser && ALLOWED.includes(cur)){
     $('#gate').style.display='none';
+    $('#admin_view').style.display='none';
     $('#app_main').style.display='block';
     $('#u_name').textContent=currentUser.toUpperCase();
+    if(PWD_USERS.includes(cur)){
+      $('#u_name').style.cursor='pointer';
+      $('#u_name').style.textDecoration='underline dotted';
+    } else {
+      $('#u_name').style.cursor='default';
+      $('#u_name').style.textDecoration='none';
+    }
     $('#t').focus();
     return true;
   }
   $('#gate').style.display='flex';
   $('#app_main').style.display='none';
+  $('#admin_view').style.display='none';
   $('#gate_name').focus();
   return false;
 }
@@ -1557,34 +1618,59 @@ $('#logout_btn').onclick=()=>{
   checkAuth();
 };
 
-const PWD_USERS = ['karthik', 'locke'];
+let adminPwd = '';
 
 function openPwdModal(){
+  const cur = (currentUser||'').toLowerCase();
+  if(!PWD_USERS.includes(cur)){
+    return;
+  }
   $('#pwd_modal').style.display='flex';
-  $('#pwd_prompt').textContent='Enter password for ' + currentUser.toUpperCase() + ':';
+  $('#pwd_prompt').textContent='Enter password:';
   $('#pwd_input').value='';
   $('#pwd_err').style.display='none';
   $('#pwd_input').focus();
 }
 
-function verifyPwd(){
+async function loadAdminSearches(){
+  $('#admin_list').innerHTML = '<span class="d">Loading searches…</span>';
+  try {
+    const res = await fetch('/api/admin/searches?user=' + encodeURIComponent(currentUser) + '&pwd=' + encodeURIComponent(adminPwd));
+    const data = await res.json();
+    if(data.error){
+      $('#admin_list').innerHTML = `<span class="r">${esc(data.error)}</span>`;
+      return;
+    }
+    const rows = data.searches || [];
+    if(!rows.length){
+      $('#admin_list').innerHTML = '<span class="d">No searches recorded yet.</span>';
+      return;
+    }
+    let html = '<div class="scroll"><table><thead><tr><th>#</th><th>Time (IST)</th><th>User</th><th>Ticker Searched</th></tr></thead><tbody>';
+    rows.forEach((s, idx) => {
+      const uColor = s.user === 'GUNSHOW' ? 'y' : (s.user === 'KARTHIK' ? 'c' : 'g');
+      html += `<tr><td class="d">${idx+1}</td><td class="w">${esc(s.time)}</td><td class="${uColor}"><b>${esc(s.user)}</b></td><td class="big c">${esc(s.ticker)}</td></tr>`;
+    });
+    html += '</tbody></table></div>';
+    $('#admin_list').innerHTML = html;
+  } catch(e) {
+    $('#admin_list').innerHTML = `<span class="r">Failed to load search logs: ${esc(e)}</span>`;
+  }
+}
+
+async function verifyPwd(){
   const cur = (currentUser||'').toLowerCase();
   const pwd = ($('#pwd_input').value||'').trim();
   if(!PWD_USERS.includes(cur)){
-    $('#pwd_err').textContent='Access denied. Password only works for karthik and locke.';
-    $('#pwd_err').style.display='block';
-    setTimeout(()=>{
-      localStorage.removeItem('gap_user');
-      currentUser='';
-      $('#pwd_modal').style.display='none';
-      checkAuth();
-    }, 1500);
     return;
   }
   if(pwd === '500'){
+    adminPwd = '500';
     $('#pwd_err').style.display='none';
     $('#pwd_modal').style.display='none';
-    $('#u_badge').innerHTML=' <span style="color:#3ddc84;font-size:11px;border:1px solid #3ddc84;padding:1px 6px;margin-left:4px;border-radius:2px">✓ VERIFIED</span>';
+    $('#app_main').style.display='none';
+    $('#admin_view').style.display='block';
+    await loadAdminSearches();
   } else {
     $('#pwd_err').textContent='Incorrect password! Access revoked.';
     $('#pwd_err').style.display='block';
@@ -1593,7 +1679,7 @@ function verifyPwd(){
       currentUser='';
       $('#pwd_modal').style.display='none';
       checkAuth();
-    }, 1500);
+    }, 1400);
   }
 }
 
@@ -1601,6 +1687,12 @@ $('#u_name').onclick=openPwdModal;
 $('#pwd_submit').onclick=verifyPwd;
 $('#pwd_cancel').onclick=()=>{ $('#pwd_modal').style.display='none'; };
 $('#pwd_input').addEventListener('keydown',e=>{if(e.key==='Enter')verifyPwd();});
+$('#admin_back_btn').onclick=()=>{
+  $('#admin_view').style.display='none';
+  $('#app_main').style.display='block';
+  $('#t').focus();
+};
+$('#admin_rf_btn').onclick=loadAdminSearches;
 
 checkAuth();
 </script></body></html>"""
