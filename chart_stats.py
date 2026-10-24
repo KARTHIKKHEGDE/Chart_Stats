@@ -1414,8 +1414,8 @@ function render(r){
   (r.tables||[]).forEach(t=>{
     o+=`<div class="panel"><div class="ttl">${esc(t.title)}</div>${table(t.cols,t.rows,t.dim,true)}<div class="foot">${esc(t.foot||'')}</div></div>`;
   });
-  o+=`<div class="panel"><div class="ttl">${esc(T.p6)}<select id="sig"><option value="all">All entry models</option>`+
-     (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`<option value="none">No signals</option></select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" checked style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/20 EMA cloud + BB)</label></div>`+
+  o+=`<div class="panel"><div class="ttl">${esc(T.p6)}<select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
+     (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/20 EMA cloud + BB)</label></div>`+
      `<div class="evgrid">`+EV.map((c,i)=>`<div class="evc"><div class="evt">${esc(c.title)}${c.sim?'':'<span class="d"> (not in similar set)</span>'}</div><canvas id="ev${i}"></canvas></div>`).join('')+
      `</div><div class="foot"><span class="c">━ VWAP</span>  <span class="y">┅ PM high</span>  <span class="d">┅ prev close</span> &nbsp; <span style="color:#d7ff6e">━ EMA9</span> <span style="color:#ffa500">━ EMA20</span> <span class="g">▒</span><span class="r">▒</span> cloud (green = 9 above 20) <span class="d">━ BB(20,2)</span> &nbsp; ▼ SELL (short entry) &nbsp; ▲ BUY (cover at stop or close, with P&amp;L). Shaded = premarket. X axis = IST.</div></div>`;
   o+=`<div class="panel"><div class="ttl">${esc(T.p7)}</div><canvas id="cv"></canvas>`+
@@ -1447,7 +1447,7 @@ function bone(b){
   }
   return {e9,e20,bu,bl};
 }
-function drawEvAll(){const sel=$('#sig')?$('#sig').value:'all'; EV.forEach((c,i)=>{const cv=document.getElementById('ev'+i); if(cv) drawEv(cv,c.chart,sel);});}
+function drawEvAll(){const sel=$('#sig')?$('#sig').value:'none'; EV.forEach((c,i)=>{const cv=document.getElementById('ev'+i); if(cv) drawEv(cv,c.chart,sel);});}
 function drawEv(cv,c,sel){
   const dpr=window.devicePixelRatio||1, W=Math.max(300,cv.parentElement.clientWidth-16), H=330;
   cv.style.width=W+'px'; cv.style.height=H+'px'; cv.width=W*dpr; cv.height=H*dpr;
