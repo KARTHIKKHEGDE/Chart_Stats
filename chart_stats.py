@@ -72,7 +72,8 @@ MIN_PRICE = float(os.getenv("MIN_PRICE", "0.5"))
 MIN_DAY_VOL = int(os.getenv("MIN_DAY_VOL", "100000"))
 MIN_PM_VOL = int(os.getenv("MIN_PM_VOL", "0"))
 STOP_PCT = float(os.getenv("STOP_PCT", "0.20"))
-CACHE = Path(os.getenv("CACHE_DIR", "/tmp/.gapcache" if os.getenv("VERCEL") else ".gapcache"))
+ROOT_DIR = Path(__file__).resolve().parent
+CACHE = Path(os.getenv("CACHE_DIR", str(ROOT_DIR / ".gapcache")))
 try:
     CACHE.mkdir(exist_ok=True, parents=True)
 except Exception:
@@ -81,6 +82,8 @@ NPTS = 144                    # 5-minute steps from 04:00 ET to 16:00 ET (premar
 PM_START, RG_START, RG_END = 240, 570, 960   # minutes since midnight ET
 
 # ----------------------------------------------------------------------------- cache / http
+_cache_lock = threading.Lock()
+
 def cget(key, ttl=None):
     p = CACHE / f"{key}.json"
     if not p.exists():
@@ -88,13 +91,18 @@ def cget(key, ttl=None):
     if ttl and time.time() - p.stat().st_mtime > ttl:
         return None
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return None
 
 
 def cput(key, val):
-    (CACHE / f"{key}.json").write_text(json.dumps(val))
+    try:
+        with _cache_lock:
+            p = CACHE / f"{key}.json"
+            p.write_text(json.dumps(val), encoding="utf-8")
+    except Exception:
+        pass
 
 
 _rl_lock = threading.Lock()
@@ -1238,24 +1246,28 @@ def index():
 
 ALLOWED_USERS = {"karthik", "locke", "gunshow"}
 ADMIN_USERS = {"karthik", "locke"}
-SEARCH_LOG_FILE = CACHE / "searches.json"
+SEARCH_LOG_FILE = ROOT_DIR / "searches.json"
+_search_log_lock = threading.Lock()
 
 
 def log_search(user, ticker):
-    try:
-        now_ist = dt.datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
-        entry = {"user": user.upper(), "ticker": ticker, "time": now_ist}
-        data = []
-        if SEARCH_LOG_FILE.exists():
-            try:
-                data = json.loads(SEARCH_LOG_FILE.read_text())
-            except Exception:
-                data = []
-        data.insert(0, entry)
-        data = data[:1000]
-        SEARCH_LOG_FILE.write_text(json.dumps(data))
-    except Exception:
-        pass
+    if not user or not ticker:
+        return
+    with _search_log_lock:
+        try:
+            now_ist = dt.datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+            entry = {"user": user.upper(), "ticker": ticker, "time": now_ist}
+            data = []
+            if SEARCH_LOG_FILE.exists():
+                try:
+                    data = json.loads(SEARCH_LOG_FILE.read_text(encoding="utf-8"))
+                except Exception:
+                    data = []
+            data.insert(0, entry)
+            data = data[:2000]
+            SEARCH_LOG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
 
 @app.route("/api/start")
@@ -1280,11 +1292,12 @@ def admin_searches():
     if u not in ADMIN_USERS or pwd != "500":
         return jsonify({"error": "Unauthorized"}), 401
     data = []
-    if SEARCH_LOG_FILE.exists():
-        try:
-            data = json.loads(SEARCH_LOG_FILE.read_text())
-        except Exception:
-            data = []
+    with _search_log_lock:
+        if SEARCH_LOG_FILE.exists():
+            try:
+                data = json.loads(SEARCH_LOG_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                data = []
     return jsonify({"searches": data})
 
 
