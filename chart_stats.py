@@ -1248,15 +1248,30 @@ ALLOWED_USERS = {"karthik", "locke", "gunshow"}
 ADMIN_USERS = {"karthik", "locke"}
 SEARCH_LOG_FILE = ROOT_DIR / "searches.json"
 _search_log_lock = threading.Lock()
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+
+
+def _supabase_headers():
+    global SUPABASE_KEY
+    k = SUPABASE_KEY or os.getenv("SUPABASE_KEY", "")
+    return {
+        "apikey": k,
+        "Authorization": f"Bearer {k}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal"
+    }
 
 
 def log_search(user, ticker):
     if not user or not ticker:
         return
+    now_ist = dt.datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+    entry = {"user": user.upper(), "ticker": ticker, "time": now_ist}
+
+    # 1. Local searches.json file (reliable fallback)
     with _search_log_lock:
         try:
-            now_ist = dt.datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
-            entry = {"user": user.upper(), "ticker": ticker, "time": now_ist}
             data = []
             if SEARCH_LOG_FILE.exists():
                 try:
@@ -1266,6 +1281,17 @@ def log_search(user, ticker):
             data.insert(0, entry)
             data = data[:2000]
             SEARCH_LOG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    # 2. Supabase Cloud Database (if configured)
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if sub_url and sub_key:
+        try:
+            endpoint = f"{sub_url}/rest/v1/searches"
+            payload = {"user_name": user.upper(), "ticker": ticker, "time_ist": now_ist}
+            requests.post(endpoint, json=payload, headers=_supabase_headers(), timeout=5)
         except Exception:
             pass
 
@@ -1291,6 +1317,21 @@ def admin_searches():
     pwd = (request.args.get("pwd") or "").strip()
     if u not in ADMIN_USERS or pwd != "500":
         return jsonify({"error": "Unauthorized"}), 401
+
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if sub_url and sub_key:
+        try:
+            endpoint = f"{sub_url}/rest/v1/searches?select=user_name,ticker,time_ist&order=id.desc&limit=1000"
+            r = requests.get(endpoint, headers=_supabase_headers(), timeout=5)
+            if r.status_code == 200:
+                rows = r.json()
+                if isinstance(rows, list) and len(rows):
+                    data = [{"user": (x.get("user_name") or x.get("user") or "").upper(), "ticker": x.get("ticker"), "time": x.get("time_ist") or x.get("time")} for x in rows]
+                    return jsonify({"searches": data})
+        except Exception:
+            pass
+
     data = []
     with _search_log_lock:
         if SEARCH_LOG_FILE.exists():
@@ -1374,7 +1415,11 @@ canvas{display:block;width:100%}
       <button id="logout_btn" style="height:34px;font-size:12px;padding:0 12px;border-color:#444">Exit</button>
     </div>
   </div>
-  <div id="out"><span class="d">Enter a ticker that is gapping up 30%+ and press Get notes.</span></div>
+  <!-- Multi-Ticker Tab Bar -->
+  <div id="tab_bar" style="display:none;padding:8px 24px 0;background:#050505;border-bottom:1px solid #222;gap:6px;overflow-x:auto;align-items:center;flex-wrap:nowrap"></div>
+  <div id="tabs_view">
+    <div id="out" style="padding:24px 34px"><span class="d">Enter a ticker that is gapping up 30%+ and press Get notes.</span></div>
+  </div>
 </div>
 
 <!-- Admin Search History View -->
@@ -1496,50 +1541,210 @@ function makeSortable(tb){
   });
 }
 
-async function run(refresh){
-  if(!checkAuth()) return;
-  const t=$('#t').value.trim().toUpperCase(); if(!t) return;
-  clearInterval(timer);
-  $('#out').innerHTML='<span class="d">Starting…</span>';
-  const r=await fetch('/api/start?ticker='+encodeURIComponent(t)+'&user='+encodeURIComponent(currentUser)+(refresh?'&refresh=1':''));
-  const j=await r.json();
-  if(j.error){$('#out').innerHTML=`<span class="r">${esc(j.error)}</span>`;return;}
-  const poll=async()=>{
-    const s=await (await fetch('/api/job/'+j.job)).json();
-    if(s.status==='running'){$('#out').innerHTML=`<span class="d">${esc(s.msg)}</span>`;return;}
-    clearInterval(timer);
-    if(s.status==='error'){$('#out').innerHTML=`<span class="r">${esc(s.error)}</span>`;return;}
-    render(s.result);
-  };
-  timer=setInterval(poll,1500); poll();
+let openTabs = {}; // ticker -> { ticker, result, lastText, lastChart, EV, container, timer, isRunning }
+let activeTab = null;
+
+function renderTabBar(){
+  const bar = $('#tab_bar');
+  const tickers = Object.keys(openTabs);
+  if(!tickers.length){
+    bar.style.display = 'none';
+    $('#out').style.display = 'block';
+    return;
+  }
+  bar.style.display = 'flex';
+  $('#out').style.display = 'none';
+
+  bar.innerHTML = tickers.map(t => {
+    const isActive = t === activeTab;
+    const tabObj = openTabs[t];
+    const isRunning = tabObj && tabObj.isRunning;
+    const bg = isActive ? '#141414' : '#080808';
+    const borderTop = isActive ? '2px solid #29a8ff' : '2px solid transparent';
+    const color = isActive ? '#fff' : '#888';
+    const border = isActive ? '1px solid #333' : '1px solid #1f1f1f';
+
+    return `<div class="ticker_tab" onclick="switchTab('${esc(t)}')" style="background:${bg};border:${border};border-top:${borderTop};color:${color};padding:8px 14px;border-radius:4px 4px 0 0;font-size:13px;cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none;transition:background 0.15s">`+
+      `<span style="font-weight:bold">${esc(t)}</span>`+
+      (isRunning ? '<span style="color:#ffd23f;font-size:11px" title="Analyzing...">●</span>' : '')+
+      `<span onclick="event.stopPropagation(); closeTab('${esc(t)}')" style="font-size:14px;color:#666;line-height:1;padding:0 2px" onmouseover="this.style.color='#ff5a5a'" onmouseout="this.style.color='#666'">✕</span>`+
+    `</div>`;
+  }).join('');
 }
 
-function render(r){
-  lastText=r.text; lastChart=r.chart; EV=r.evcharts||[]; const h=r.head, T=r.titles; let o='';
-  o+=`<div class="big">Ticker: <span class="c">${esc(h.ticker)}</span></div><div class="w">${esc(h.sub)}</div><div>==========================================</div><br>`;
-  o+=`<div>Final Fade Grade:<span class="badge ${h.gcls}">${esc(h.grade)}</span>(${esc(h.score)})</div>`;
-  o+=`<div>Similar Setups: <span class="c">${h.n}</span> (${h.total ? 'of ' + h.total + ' gap-ups' : ''})</div>`;
-  o+=`<div>Verdict: <span class="${h.gcls}">${esc(h.verdict)}</span></div>`;
-  o+=`<div>Summary: ${esc(h.summary)}</div>`;
-  (h.notes||[]).forEach(n=>o+=`<div class="y">Note: ${esc(n)}</div>`);
-  o+=`<div class="panel two"><div><div class="ttl">${esc(T.p1)}</div>${kv(r.p1.left)}</div><div>${kv(r.p1.right)}</div></div>`;
-  (r.tables||[]).forEach(t=>{
-    o+=`<div class="panel"><div class="ttl">${esc(t.title)}</div>${table(t.cols,t.rows,t.dim,true)}<div class="foot">${esc(t.foot||'')}</div></div>`;
+function switchTab(t){
+  if(!openTabs[t]) return;
+  activeTab = t;
+  $('#t').value = t;
+
+  Object.keys(openTabs).forEach(k => {
+    const el = openTabs[k].container;
+    if(el) el.style.display = (k === t) ? 'block' : 'none';
   });
-  o+=`<div class="panel"><div class="ttl">${esc(T.p6)}<select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
+
+  renderTabBar();
+
+  const tab = openTabs[t];
+  if(tab && tab.lastChart){
+    const cv = tab.container.querySelector('#cv');
+    if(cv) drawChart(tab.lastChart, cv);
+  }
+}
+
+function closeTab(t){
+  if(!openTabs[t]) return;
+  if(openTabs[t].timer) clearInterval(openTabs[t].timer);
+  if(openTabs[t].container) openTabs[t].container.remove();
+  delete openTabs[t];
+
+  if(activeTab === t){
+    const remaining = Object.keys(openTabs);
+    activeTab = remaining.length ? remaining[remaining.length - 1] : null;
+    if(activeTab){
+      switchTab(activeTab);
+    } else {
+      $('#t').value = '';
+      $('#out').style.display = 'block';
+      renderTabBar();
+    }
+  } else {
+    renderTabBar();
+  }
+}
+
+async function run(refresh){
+  if(!checkAuth()) return;
+  let t = ($('#t').value || '').trim().toUpperCase();
+  if(!t && activeTab) t = activeTab;
+  if(!t) return;
+
+  if(!openTabs[t]){
+    const cont = document.createElement('div');
+    cont.id = 'tab_content_' + t;
+    cont.style.padding = '24px 34px';
+    $('#tabs_view').appendChild(cont);
+
+    openTabs[t] = {
+      ticker: t,
+      container: cont,
+      isRunning: true,
+      lastText: '',
+      lastChart: null,
+      EV: [],
+      timer: null
+    };
+  }
+
+  const tab = openTabs[t];
+  tab.isRunning = true;
+  switchTab(t);
+
+  const statusMsg = refresh 
+    ? "Refreshing today's live stats (Volume, Float Rotation, Price, Gap)..." 
+    : 'Starting analysis for ' + t + '…';
+
+  if(!tab.result){
+    tab.container.innerHTML = `<span class="d">${statusMsg}</span>`;
+  } else {
+    const banner = tab.container.querySelector('.refresh_banner');
+    if(banner){
+      banner.style.display = 'block';
+      banner.textContent = statusMsg;
+    }
+  }
+
+  if(tab.timer) clearInterval(tab.timer);
+
+  try {
+    const r = await fetch('/api/start?ticker=' + encodeURIComponent(t) + '&user=' + encodeURIComponent(currentUser) + (refresh ? '&refresh=1' : ''));
+    const j = await r.json();
+    if(j.error){
+      tab.isRunning = false;
+      renderTabBar();
+      tab.container.innerHTML = `<span class="r">${esc(j.error)}</span>`;
+      return;
+    }
+
+    const poll = async () => {
+      try {
+        const s = await (await fetch('/api/job/' + j.job)).json();
+        if(s.status === 'running'){
+          if(!tab.result){
+            tab.container.innerHTML = `<span class="d">${esc(s.msg)}</span>`;
+          }
+          return;
+        }
+        clearInterval(tab.timer);
+        tab.isRunning = false;
+        renderTabBar();
+        if(s.status === 'error'){
+          tab.container.innerHTML = `<span class="r">${esc(s.error)}</span>`;
+          return;
+        }
+        renderTab(tab, s.result, refresh);
+      } catch(e){
+        clearInterval(tab.timer);
+        tab.isRunning = false;
+        renderTabBar();
+      }
+    };
+
+    tab.timer = setInterval(poll, 1500);
+    poll();
+  } catch(e) {
+    tab.isRunning = false;
+    renderTabBar();
+    tab.container.innerHTML = `<span class="r">Network error: ${esc(e)}</span>`;
+  }
+}
+
+function renderTab(tab, r, isRefresh){
+  tab.lastText = r.text;
+  tab.lastChart = r.chart;
+  tab.EV = r.evcharts || [];
+  tab.result = r;
+
+  const h = r.head, T = r.titles;
+  let o = '';
+
+  const nowIstStr = new Date().toLocaleTimeString('en-US', {timeZone: 'Asia/Kolkata', hour12: false});
+  const refreshBadge = isRefresh
+    ? `<span style="background:#161616;border:1px solid #333;color:#3ddc84;font-size:11px;padding:3px 9px;border-radius:3px;margin-left:12px;font-weight:normal">● LIVE DAY STATS UPDATED: ${nowIstStr} IST</span>`
+    : '';
+
+  o += `<div class="refresh_banner" style="display:none;background:#141414;border:1px solid #29a8ff;padding:8px 12px;margin-bottom:14px;color:#29a8ff;font-size:13px"></div>`;
+  o += `<div style="display:flex;align-items:center;flex-wrap:wrap"><span class="big">Ticker: <span class="c">${esc(h.ticker)}</span></span>${refreshBadge}</div><div class="w">${esc(h.sub)}</div><div>==========================================</div><br>`;
+  o += `<div>Final Fade Grade:<span class="badge ${h.gcls}">${esc(h.grade)}</span>(${esc(h.score)})</div>`;
+  o += `<div>Similar Setups: <span class="c">${h.n}</span> (${h.total ? 'of ' + h.total + ' gap-ups' : ''})</div>`;
+  o += `<div>Verdict: <span class="${h.gcls}">${esc(h.verdict)}</span></div>`;
+  o += `<div>Summary: ${esc(h.summary)}</div>`;
+  (h.notes||[]).forEach(n=>o+=`<div class="y">Note: ${esc(n)}</div>`);
+  o += `<div class="panel two"><div><div class="ttl">${esc(T.p1)}</div>${kv(r.p1.left)}</div><div>${kv(r.p1.right)}</div></div>`;
+  (r.tables||[]).forEach(t=>{
+    o += `<div class="panel"><div class="ttl">${esc(t.title)}</div>${table(t.cols,t.rows,t.dim,true)}<div class="foot">${esc(t.foot||'')}</div></div>`;
+  });
+  o += `<div class="panel"><div class="ttl">${esc(T.p6)}<select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
      (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/20 EMA cloud + BB)</label></div>`+
-     `<div class="evgrid">`+EV.map((c,i)=>`<div class="evc"><div class="evt">${esc(c.title)}${c.sim?'':'<span class="d"> (not in similar set)</span>'}</div><canvas id="ev${i}"></canvas></div>`).join('')+
+     `<div class="evgrid">`+tab.EV.map((c,i)=>`<div class="evc"><div class="evt">${esc(c.title)}${c.sim?'':'<span class="d"> (not in similar set)</span>'}</div><canvas id="ev${i}"></canvas></div>`).join('')+
      `</div><div class="foot"><span class="c">━ VWAP</span>  <span class="y">┅ PM high</span>  <span class="d">┅ prev close</span> &nbsp; <span style="color:#d7ff6e">━ EMA9</span> <span style="color:#ffa500">━ EMA20</span> <span class="g">▒</span><span class="r">▒</span> cloud (green = 9 above 20) <span class="d">━ BB(20,2)</span> &nbsp; ▼ SELL (short entry) &nbsp; ▲ BUY (cover at stop or close, with P&amp;L). Shaded = premarket. X axis = IST.</div></div>`;
-  o+=`<div class="panel"><div class="ttl">${esc(T.p7)}</div><canvas id="cv"></canvas>`+
+  o += `<div class="panel"><div class="ttl">${esc(T.p7)}</div><canvas id="cv"></canvas>`+
      `<div class="foot"><span class="b">━ history median</span> &nbsp; <span style="color:#6c8">▒ p25–p75</span> &nbsp; <span class="y">━ today</span> &nbsp; <span class="y">┅ today projected (history re-based at now)</span> &nbsp; <span class="d">━ each similar setup</span> &nbsp; Y = % from previous close</div></div>`;
-  o+=`<div class="three"><div class="panel"><div class="ttl">${esc(T.pa)}</div>${kv(r.pa)}</div>`+
+  o += `<div class="three"><div class="panel"><div class="ttl">${esc(T.pa)}</div>${kv(r.pa)}</div>`+
      `<div class="panel"><div class="ttl">${esc(T.pb)}</div>${kv(r.pb)}</div>`+
      `<div class="panel"><div class="ttl">${esc(T.pc)}</div>${kv(r.pc)}</div></div>`;
-  if(r.pd.rows.length) o+=`<div class="panel"><div class="ttl">${esc(T.pd)}</div>${table(r.pd.cols,r.pd.rows,null,false)}</div>`;
-  $('#out').innerHTML=o;
-  document.querySelectorAll('table.sort').forEach(makeSortable);
-  $('#sig').onchange=drawEvAll; $('#bz').onchange=drawEvAll;
-  drawEvAll(); drawChart(r.chart);
+  if(r.pd.rows.length) o += `<div class="panel"><div class="ttl">${esc(T.pd)}</div>${table(r.pd.cols,r.pd.rows,null,false)}</div>`;
+
+  tab.container.innerHTML = o;
+  tab.container.querySelectorAll('table.sort').forEach(makeSortable);
+
+  const sigSelect = tab.container.querySelector('#sig');
+  const bzCheck = tab.container.querySelector('#bz');
+  if(sigSelect) sigSelect.onchange = () => drawEvAll(tab.EV, tab.container);
+  if(bzCheck) bzCheck.onchange = () => drawEvAll(tab.EV, tab.container);
+
+  drawEvAll(tab.EV, tab.container);
+  const cv = tab.container.querySelector('#cv');
+  if(cv) drawChart(r.chart, cv);
 }
 
 const MC={"Short at open":"#ff9f43","PM high rejection":"#e056fd","5m low break":"#ff5a5a","First red 5m candle":"#ffd23f","VWAP loss (post-HOD)":"#6cc4ff"};
@@ -1559,8 +1764,16 @@ function bone(b){
   }
   return {e9,e20,bu,bl};
 }
-function drawEvAll(){const sel=$('#sig')?$('#sig').value:'none'; EV.forEach((c,i)=>{const cv=document.getElementById('ev'+i); if(cv) drawEv(cv,c.chart,sel);});}
-function drawEv(cv,c,sel){
+function drawEvAll(evList, containerEl){
+  const cEl = containerEl || (activeTab && openTabs[activeTab] ? openTabs[activeTab].container : document);
+  const list = evList || (activeTab && openTabs[activeTab] ? openTabs[activeTab].EV : []);
+  const selEl = cEl.querySelector('#sig');
+  const sel = selEl ? selEl.value : 'none';
+  const bzEl = cEl.querySelector('#bz');
+  const bzChecked = bzEl ? bzEl.checked : false;
+  list.forEach((c,i)=>{const cv=cEl.querySelector('#ev'+i); if(cv) drawEv(cv,c.chart,sel,bzChecked);});
+}
+function drawEv(cv,c,sel,bzChecked){
   const dpr=window.devicePixelRatio||1, W=Math.max(300,cv.parentElement.clientWidth-16), H=330;
   cv.style.width=W+'px'; cv.style.height=H+'px'; cv.width=W*dpr; cv.height=H*dpr;
   const x=cv.getContext('2d'); x.setTransform(dpr,0,0,dpr,0,0); x.clearRect(0,0,W,H); x.font='11px Consolas,monospace';
@@ -1578,7 +1791,7 @@ function drawEv(cv,c,sel){
   const dash=(v,col)=>{if(v==null||v<lo||v>hi)return;x.strokeStyle=col;x.setLineDash([4,4]);x.beginPath();x.moveTo(L,Y(v));x.lineTo(W-R,Y(v));x.stroke();x.setLineDash([]);};
   dash(c.pc,'#888'); dash(c.pmh,'#ffd23f');
   // ---- bone zone: 9/20 EMA cloud + Bollinger Bands (20, 2) on the 2-min closes, continuous from 04:00 ET
-  const BZ=(!$('#bz')||$('#bz').checked)?bone(b):null;
+  const BZ=bzChecked?bone(b):null;
   const clipP=()=>{x.save();x.beginPath();x.rect(L,T,pw,ph);x.clip();};
   const poly=(a,col,w)=>{x.strokeStyle=col;x.lineWidth=w;x.beginPath();let on=false;for(let i=0;i<a.length;i++){if(a[i]==null){on=false;continue;}const xx=X(b.t[i]+1),yy=Y(a[i]);if(!on){x.moveTo(xx,yy);on=true}else x.lineTo(xx,yy);}x.stroke();x.lineWidth=1;};
   if(BZ){clipP();
@@ -1608,8 +1821,9 @@ function drawEv(cv,c,sel){
   });
 }
 
-function drawChart(ch){
-  const cv=$('#cv'); if(!cv) return;
+function drawChart(ch, cvElement){
+  const cv = cvElement || (activeTab && openTabs[activeTab] ? openTabs[activeTab].container.querySelector('#cv') : $('#cv'));
+  if(!cv) return;
   const dpr=window.devicePixelRatio||1, W=cv.parentElement.clientWidth-28, H=400;
   cv.style.width=W+'px'; cv.style.height=H+'px'; cv.width=W*dpr; cv.height=H*dpr;
   const x=cv.getContext('2d'); x.setTransform(dpr,0,0,dpr,0,0); x.font='12px Consolas,monospace';
@@ -1635,12 +1849,24 @@ function drawChart(ch){
   line(ch.today,'#ffd23f',2.5);
   if(ch.now_k!=null&&ch.today[ch.now_k]!=null){x.fillStyle='#ffd23f';x.beginPath();x.arc(X(ch.now_k),Y(ch.today[ch.now_k]),4,0,7);x.fill();}
 }
-window.addEventListener('resize',()=>{if(lastChart){drawChart(lastChart);drawEvAll();}});
+window.addEventListener('resize',()=>{
+  if(activeTab && openTabs[activeTab]){
+    const tab = openTabs[activeTab];
+    if(tab.lastChart){
+      const cv = tab.container.querySelector('#cv');
+      if(cv) drawChart(tab.lastChart, cv);
+    }
+    if(tab.EV && tab.EV.length){
+      drawEvAll(tab.EV, tab.container);
+    }
+  }
+});
 
 async function copyAll(){
-  if(!lastText) return;
-  try{await navigator.clipboard.writeText(lastText)}
-  catch(e){const a=document.createElement('textarea');a.value=lastText;document.body.appendChild(a);a.select();document.execCommand('copy');a.remove();}
+  if(!activeTab || !openTabs[activeTab] || !openTabs[activeTab].lastText) return;
+  const txt = openTabs[activeTab].lastText;
+  try{await navigator.clipboard.writeText(txt)}
+  catch(e){const a=document.createElement('textarea');a.value=txt;document.body.appendChild(a);a.select();document.execCommand('copy');a.remove();}
   const b=$('#cp'); b.textContent='Copied ✓'; setTimeout(()=>b.textContent='Copy all',1200);
 }
 $('#go').onclick=()=>run(false); $('#rf').onclick=()=>run(true); $('#cp').onclick=copyAll;
