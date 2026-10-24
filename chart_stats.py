@@ -1243,7 +1243,7 @@ ALLOWED_USERS = {"karthik", "locke", "gunshow"}
 def start():
     u = (request.args.get("user") or "").strip().lower()
     if u not in ALLOWED_USERS:
-        return jsonify({"error": "Access denied. Allowed users: karthik, locke, gunshow"}), 401
+        return jsonify({"error": "Access denied"}), 401
     t = (request.args.get("ticker") or "").strip().upper()
     if not re.fullmatch(r"[A-Z.\-]{1,10}", t):
         return jsonify({"error": "Invalid ticker"}), 400
@@ -1304,7 +1304,7 @@ canvas{display:block;width:100%}
   <div style="background:#0c0c0c;border:1px solid #333;padding:36px 32px;width:380px;max-width:92vw;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,0.95)">
     <div style="font-size:22px;font-weight:bold;color:#29a8ff;margin-bottom:8px">Gap-Up Fade Terminal</div>
     <div style="color:#8a8a8a;font-size:14px;margin-bottom:24px">Authorized access only. Enter your name:</div>
-    <input id="gate_name" placeholder="Name (e.g. karthik)" style="width:100%;height:46px;font-size:17px;margin-bottom:14px;padding:0 14px;background:#000;border:1px solid #444;color:#fff;text-align:center" autofocus spellcheck="false" autocomplete="off">
+    <input id="gate_name" placeholder="Enter name" style="width:100%;height:46px;font-size:17px;margin-bottom:14px;padding:0 14px;background:#000;border:1px solid #444;color:#fff;text-align:center" autofocus spellcheck="false" autocomplete="off">
     <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:22px;font-size:13px;color:#aaa">
       <input type="checkbox" id="gate_rem" checked style="width:16px;height:16px;cursor:pointer">
       <label for="gate_rem" style="cursor:pointer">Remember my device</label>
@@ -1350,7 +1350,7 @@ function checkAuth(){
 function submitGate(){
   const val = ($('#gate_name').value||'').trim().toLowerCase();
   if(!ALLOWED.includes(val)){
-    $('#gate_err').textContent='Access denied. Allowed names: karthik, locke, gunshow';
+    $('#gate_err').textContent='Access denied.';
     $('#gate_err').style.display='block';
     return;
   }
