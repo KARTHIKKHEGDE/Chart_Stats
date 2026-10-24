@@ -1247,14 +1247,13 @@ def index():
 ALLOWED_USERS = {"karthik", "locke", "gunshow"}
 ADMIN_USERS = {"karthik", "locke"}
 SEARCH_LOG_FILE = ROOT_DIR / "searches.json"
-_search_log_lock = threading.Lock()
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+_search_log_lock = threading.Lock()
 
 
 def _supabase_headers():
-    global SUPABASE_KEY
-    k = SUPABASE_KEY or os.getenv("SUPABASE_KEY", "")
+    k = os.getenv("SUPABASE_KEY", "") or SUPABASE_KEY
     return {
         "apikey": k,
         "Authorization": f"Bearer {k}",
@@ -1332,12 +1331,12 @@ def admin_searches():
     sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
     if sub_url and sub_key:
         try:
-            endpoint = f"{sub_url}/rest/v1/searches?select=user_name,ticker,time_ist&order=id.desc&limit=1000"
+            endpoint = f"{sub_url}/rest/v1/searches?select=user_name,ticker,time_ist,date_ist&order=id.desc&limit=1000"
             r = requests.get(endpoint, headers=_supabase_headers(), timeout=5)
             if r.status_code == 200:
                 rows = r.json()
                 if isinstance(rows, list) and len(rows):
-                    data = [{"user": (x.get("user_name") or x.get("user") or "").upper(), "ticker": x.get("ticker"), "time": x.get("time_ist") or x.get("time")} for x in rows]
+                    data = [{"user": (x.get("user_name") or x.get("user") or "").upper(), "ticker": x.get("ticker"), "time": x.get("time_ist") or x.get("time"), "date": x.get("date_ist")} for x in rows]
                     return jsonify({"searches": data})
         except Exception:
             pass
