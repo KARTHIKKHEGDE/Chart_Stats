@@ -1368,8 +1368,8 @@ canvas{display:block;width:100%}
 <div id="admin_view" style="display:none;padding:24px 34px">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px;border-bottom:1px solid #333;padding-bottom:14px">
     <div>
-      <div class="big" style="color:#29a8ff">User Search History Audit</div>
-      <div style="color:#8a8a8a;font-size:13px;margin-top:4px">Tickers searched across all user sessions (Times in IST)</div>
+      <div class="big" style="color:#29a8ff">User-Wise Searched Symbols</div>
+      <div style="color:#8a8a8a;font-size:13px;margin-top:4px">Symbols searched grouped by each user (with counts &amp; recent activity)</div>
     </div>
     <div style="display:flex;gap:10px">
       <button id="admin_rf_btn" style="height:38px;font-size:14px;padding:0 14px">Refresh</button>
@@ -1625,6 +1625,12 @@ function openPwdModal(){
   if(!PWD_USERS.includes(cur)){
     return;
   }
+  if(adminPwd === '500'){
+    $('#app_main').style.display='none';
+    $('#admin_view').style.display='block';
+    loadAdminSearches();
+    return;
+  }
   $('#pwd_modal').style.display='flex';
   $('#pwd_prompt').textContent='Enter password:';
   $('#pwd_input').value='';
@@ -1633,7 +1639,7 @@ function openPwdModal(){
 }
 
 async function loadAdminSearches(){
-  $('#admin_list').innerHTML = '<span class="d">Loading searches…</span>';
+  $('#admin_list').innerHTML = '<span class="d">Loading search logs…</span>';
   try {
     const res = await fetch('/api/admin/searches?user=' + encodeURIComponent(currentUser) + '&pwd=' + encodeURIComponent(adminPwd));
     const data = await res.json();
@@ -1643,15 +1649,52 @@ async function loadAdminSearches(){
     }
     const rows = data.searches || [];
     if(!rows.length){
-      $('#admin_list').innerHTML = '<span class="d">No searches recorded yet.</span>';
+      $('#admin_list').innerHTML = '<div class="panel" style="padding:24px;text-align:center"><span class="d">No searches recorded yet. Search any ticker in the terminal to see it logged here!</span></div>';
       return;
     }
-    let html = '<div class="scroll"><table><thead><tr><th>#</th><th>Time (IST)</th><th>User</th><th>Ticker Searched</th></tr></thead><tbody>';
-    rows.forEach((s, idx) => {
-      const uColor = s.user === 'GUNSHOW' ? 'y' : (s.user === 'KARTHIK' ? 'c' : 'g');
-      html += `<tr><td class="d">${idx+1}</td><td class="w">${esc(s.time)}</td><td class="${uColor}"><b>${esc(s.user)}</b></td><td class="big c">${esc(s.ticker)}</td></tr>`;
+
+    // Group searches by user
+    const byUser = {};
+    rows.forEach(s => {
+      const u = (s.user || 'UNKNOWN').toUpperCase();
+      if(!byUser[u]) byUser[u] = { count: 0, tickers: {}, history: [] };
+      byUser[u].count++;
+      byUser[u].tickers[s.ticker] = (byUser[u].tickers[s.ticker] || 0) + 1;
+      byUser[u].history.push(s);
     });
-    html += '</tbody></table></div>';
+
+    const uColors = { 'GUNSHOW': '#ffd23f', 'LOCKE': '#3ddc84', 'KARTHIK': '#29a8ff' };
+    let html = '<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));gap:16px;margin-bottom:24px">';
+
+    for(const [u, obj] of Object.entries(byUser)){
+      const col = uColors[u] || '#e8e8e8';
+      const uniqueTickers = Object.entries(obj.tickers).sort((a,b)=>b[1]-a[1]);
+      html += `<div class="panel" style="margin-top:0;border-left:4px solid ${col};padding:16px">`+
+        `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">`+
+          `<div style="font-size:18px;font-weight:bold;color:${col}">${esc(u)}</div>`+
+          `<div style="font-size:12px;color:#8a8a8a">${obj.count} total search${obj.count>1?'es':''}</div>`+
+        `</div>`+
+        `<div style="font-size:12px;color:#8a8a8a;margin-bottom:8px">Symbols Searched (${uniqueTickers.length}):</div>`+
+        `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px">`+
+          uniqueTickers.map(([tkr, cnt])=>`<span style="background:#151515;border:1px solid #333;color:#fff;padding:4px 9px;font-size:13px;border-radius:3px"><b>${esc(tkr)}</b> <span style="color:#8a8a8a;font-size:11px">(${cnt}x)</span></span>`).join('')+
+        `</div>`+
+        `<div style="font-size:12px;color:#8a8a8a;margin-bottom:6px">Recent Query Log:</div>`+
+        `<div style="max-height:160px;overflow-y:auto;font-size:12px;background:#050505;padding:8px 10px;border:1px solid #222">`+
+          obj.history.slice(0, 30).map(h=>`<div style="display:flex;justify-content:space-between;padding:3px 0"><span style="color:${col};font-weight:bold">${esc(h.ticker)}</span><span style="color:#666">${esc(h.time)}</span></div>`).join('')+
+        `</div>`+
+      `</div>`;
+    }
+    html += '</div>';
+
+    // Full chronological log below
+    html += `<div class="panel"><div class="ttl" style="margin-bottom:10px">All Searches Chronological Log</div>`+
+      `<div class="scroll"><table><thead><tr><th>#</th><th>Time (IST)</th><th>User</th><th>Ticker</th></tr></thead><tbody>`+
+      rows.map((s, idx)=>{
+        const col = uColors[s.user] || 'w';
+        return `<tr><td class="d">${idx+1}</td><td class="w">${esc(s.time)}</td><td style="color:${col};font-weight:bold">${esc(s.user)}</td><td class="big c">${esc(s.ticker)}</td></tr>`;
+      }).join('')+
+      `</tbody></table></div></div>`;
+
     $('#admin_list').innerHTML = html;
   } catch(e) {
     $('#admin_list').innerHTML = `<span class="r">Failed to load search logs: ${esc(e)}</span>`;
@@ -1668,6 +1711,7 @@ async function verifyPwd(){
     adminPwd = '500';
     $('#pwd_err').style.display='none';
     $('#pwd_modal').style.display='none';
+    $('#u_badge').innerHTML=' <span style="color:#3ddc84;font-size:11px;border:1px solid #3ddc84;padding:1px 6px;margin-left:4px;border-radius:2px;cursor:pointer" title="Click to view User Searches">✓ VERIFIED</span>';
     $('#app_main').style.display='none';
     $('#admin_view').style.display='block';
     await loadAdminSearches();
@@ -1677,6 +1721,7 @@ async function verifyPwd(){
     setTimeout(()=>{
       localStorage.removeItem('gap_user');
       currentUser='';
+      adminPwd='';
       $('#pwd_modal').style.display='none';
       checkAuth();
     }, 1400);
@@ -1684,6 +1729,7 @@ async function verifyPwd(){
 }
 
 $('#u_name').onclick=openPwdModal;
+$('#u_badge').onclick=openPwdModal;
 $('#pwd_submit').onclick=verifyPwd;
 $('#pwd_cancel').onclick=()=>{ $('#pwd_modal').style.display='none'; };
 $('#pwd_input').addEventListener('keydown',e=>{if(e.key==='Enter')verifyPwd();});
