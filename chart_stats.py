@@ -1266,8 +1266,10 @@ def _supabase_headers():
 def log_search(user, ticker):
     if not user or not ticker:
         return
-    now_ist = dt.datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
-    entry = {"user": user.upper(), "ticker": ticker, "time": now_ist}
+    now_dt = dt.datetime.now(IST)
+    now_ist = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+    now_date = now_dt.strftime("%Y-%m-%d")
+    entry = {"user": user.upper(), "ticker": ticker, "time": now_ist, "date": now_date}
 
     # 1. Local searches.json file (reliable fallback)
     with _search_log_lock:
@@ -1290,8 +1292,16 @@ def log_search(user, ticker):
     if sub_url and sub_key:
         try:
             endpoint = f"{sub_url}/rest/v1/searches"
-            payload = {"user_name": user.upper(), "ticker": ticker, "time_ist": now_ist}
-            requests.post(endpoint, json=payload, headers=_supabase_headers(), timeout=5)
+            payload = {
+                "user_name": user.upper(),
+                "ticker": ticker,
+                "time_ist": now_ist,
+                "date_ist": now_date
+            }
+            r = requests.post(endpoint, json=payload, headers=_supabase_headers(), timeout=5)
+            if r.status_code not in (200, 201):
+                # Fallback if date_ist column is not yet created in table
+                requests.post(endpoint, json={"user_name": user.upper(), "ticker": ticker, "time_ist": now_ist}, headers=_supabase_headers(), timeout=5)
         except Exception:
             pass
 
