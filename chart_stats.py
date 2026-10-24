@@ -1399,6 +1399,23 @@ canvas{display:block;width:100%}
     <div id="pwd_err" style="color:#ff5a5a;font-size:13px;margin-top:14px;display:none"></div>
   </div>
 </div>
+
+<!-- User Details Popup Modal -->
+<div id="user_popup" style="position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:99999;display:none;align-items:center;justify-content:center;padding:20px" onclick="if(event.target===this)closeUserPopup()">
+  <div style="background:#0e0e0e;border:1px solid #333;width:600px;max-width:94vw;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 16px 50px rgba(0,0,0,0.95);border-radius:4px;overflow:hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #222;background:#141414">
+      <div>
+        <div id="up_name" style="font-size:18px;font-weight:bold;color:#fff"></div>
+        <div id="up_summary" style="font-size:12px;color:#8a8a8a;margin-top:2px"></div>
+      </div>
+      <button onclick="closeUserPopup()" style="background:transparent;border:none;color:#888;font-size:20px;cursor:pointer;padding:4px 8px;line-height:1" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#888'">✕</button>
+    </div>
+    <div id="up_content" style="padding:20px;overflow-y:auto;flex:1"></div>
+    <div style="padding:12px 20px;border-top:1px solid #222;display:flex;justify-content:flex-end;background:#141414">
+      <button onclick="closeUserPopup()" style="height:34px;padding:0 18px;font-size:13px;background:#202020;border:1px solid #444;color:#ddd;cursor:pointer">Close</button>
+    </div>
+  </div>
+</div>
 <script>
 const $=s=>document.querySelector(s);
 const ALLOWED = ['karthik', 'locke', 'gunshow'];
@@ -1646,15 +1663,52 @@ function openPwdModal(){
 }
 
 let adminRows = [];
-let expandedUsers = {};
 let activeViewMode = 'user';
 let tickerFilterQuery = '';
 
-function toggleUserAudit(u){
-  expandedUsers[u] = !expandedUsers[u];
-  renderAdminView();
-}
-window.toggleUserAudit = toggleUserAudit;
+window.openUserPopup = function(u){
+  const byUser = {};
+  adminRows.forEach(s => {
+    const usr = (s.user || 'UNKNOWN').toUpperCase();
+    if(!byUser[usr]) byUser[usr] = { count: 0, tickers: {}, history: [] };
+    byUser[usr].count++;
+    byUser[usr].tickers[s.ticker] = (byUser[usr].tickers[s.ticker] || 0) + 1;
+    byUser[usr].history.push(s);
+  });
+
+  const uname = (u || '').toUpperCase();
+  const obj = byUser[uname] || { count: 0, tickers: {}, history: [] };
+  const uniqueTickers = Object.entries(obj.tickers).sort((a,b)=>b[1]-a[1]);
+
+  $('#up_name').textContent = uname;
+  $('#up_summary').textContent = obj.count ? `${obj.count} total search${obj.count===1?'':'es'} • ${uniqueTickers.length} unique symbol${uniqueTickers.length===1?'':'s'}` : 'No search activity recorded';
+
+  let contentHtml = '';
+  if(!obj.count){
+    contentHtml = '<div style="color:#777;text-align:center;padding:36px 10px;font-size:14px">No searches recorded yet for this user.</div>';
+  } else {
+    contentHtml = '<div style="font-size:12px;color:#8a8a8a;margin-bottom:8px">Symbols Searched (' + uniqueTickers.length + '):</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px">' +
+      uniqueTickers.map(([tkr, cnt]) =>
+        `<span style="background:#161616;border:1px solid #333;padding:5px 12px;font-size:13px;border-radius:3px;color:#fff"><b style="color:#29a8ff">${esc(tkr)}</b> <span style="color:#777;font-size:11px">(${cnt}x)</span></span>`
+      ).join('') +
+      '</div>' +
+      '<div style="font-size:12px;color:#8a8a8a;margin-bottom:8px">Query History (Recent first):</div>' +
+      '<div class="scroll" style="max-height:260px;background:#050505;border:1px solid #222;border-radius:3px">' +
+      '<table style="margin:0"><thead><tr><th style="width:40px">#</th><th style="width:180px">Time (IST)</th><th>Ticker</th></tr></thead><tbody>' +
+      obj.history.map((h, i) =>
+        `<tr><td class="d">${i+1}</td><td class="w">${esc(h.time)}</td><td class="big c" style="font-weight:bold">${esc(h.ticker)}</td></tr>`
+      ).join('') +
+      '</tbody></table></div>';
+  }
+
+  $('#up_content').innerHTML = contentHtml;
+  $('#user_popup').style.display = 'flex';
+};
+
+window.closeUserPopup = function(){
+  $('#user_popup').style.display = 'none';
+};
 
 function renderAdminView(){
   const container = $('#admin_list');
@@ -1665,72 +1719,25 @@ function renderAdminView(){
     return;
   }
 
-  const uColors = { 'GUNSHOW': '#ffd23f', 'LOCKE': '#3ddc84', 'KARTHIK': '#29a8ff' };
-
   if(activeViewMode === 'user'){
-    // User-wise view: by default show users, click on a user to expand what they searched
-    const byUser = {};
-    // Ensure standard users appear in fixed order
-    ['KARTHIK', 'LOCKE', 'GUNSHOW'].forEach(u => {
-      byUser[u] = { count: 0, tickers: {}, history: [] };
-    });
+    const users = ['KARTHIK', 'LOCKE', 'GUNSHOW'];
 
-    adminRows.forEach(s => {
-      const u = (s.user || 'UNKNOWN').toUpperCase();
-      if(!byUser[u]) byUser[u] = { count: 0, tickers: {}, history: [] };
-      byUser[u].count++;
-      byUser[u].tickers[s.ticker] = (byUser[u].tickers[s.ticker] || 0) + 1;
-      byUser[u].history.push(s);
-    });
+    let html = '<div style="margin-bottom:12px;font-size:13px;color:#8a8a8a">Select a user to view what symbols they have searched:</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:12px;margin-bottom:26px">';
 
-    let html = '<div style="margin-bottom:12px;font-size:13px;color:#8a8a8a">Click on any user below to see what symbols they have searched:</div>';
-    html += '<div style="display:flex;flex-direction:column;gap:12px;margin-bottom:24px">';
-
-    for(const [u, obj] of Object.entries(byUser)){
-      const col = uColors[u] || '#e8e8e8';
-      const isExp = !!expandedUsers[u];
-      const uniqueTickers = Object.entries(obj.tickers).sort((a,b)=>b[1]-a[1]);
-
-      html += `<div class="panel" style="margin-top:0;border-left:4px solid ${col};padding:0;overflow:hidden;border-color:#333">`+
-        `<div onclick="toggleUserAudit('${esc(u)}')" style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;cursor:pointer;background:#0d0d0d;user-select:none" onmouseover="this.style.background='#151515'" onmouseout="this.style.background='#0d0d0d'">`+
-          `<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">`+
-            `<span style="font-size:18px;font-weight:bold;color:${col}">${esc(u)}</span>`+
-            `<span style="font-size:12px;background:#1a1a1a;border:1px solid #333;padding:2px 10px;border-radius:3px;color:#ccc">${obj.count} total search${obj.count===1?'':'es'}</span>`+
-            `<span style="font-size:12px;background:#1a1a1a;border:1px solid #333;padding:2px 10px;border-radius:3px;color:#ccc">${uniqueTickers.length} unique symbol${uniqueTickers.length===1?'':'s'}</span>`+
-          `</div>`+
-          `<div style="font-size:13px;color:#29a8ff;display:flex;align-items:center;gap:6px;font-weight:bold">`+
-            `<span>${isExp ? 'Hide Searched Symbols ▲' : 'Click to view searched symbols ▼'}</span>`+
-          `</div>`+
-        `</div>`;
-
-      if(isExp){
-        html += `<div style="padding:18px 20px;border-top:1px solid #222;background:#080808">`;
-        if(!obj.count){
-          html += `<div style="color:#666;font-size:13px;padding:8px 0">No searches recorded yet for ${esc(u)}.</div>`;
-        } else {
-          html += `<div style="font-size:12px;color:#8a8a8a;margin-bottom:8px">Symbols Searched (${uniqueTickers.length}):</div>`+
-            `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px">`+
-              uniqueTickers.map(([tkr, cnt])=>`<span style="background:#161616;border:1px solid #333;padding:5px 12px;font-size:13px;border-radius:3px;display:inline-flex;align-items:center;gap:6px"><b style="color:${col}">${esc(tkr)}</b> <span style="color:#8a8a8a;font-size:11px">(${cnt}x)</span></span>`).join('')+
-            `</div>`+
-            `<div style="font-size:12px;color:#8a8a8a;margin-bottom:6px">Query History (${obj.history.length}):</div>`+
-            `<div class="scroll" style="max-height:220px;background:#030303;border:1px solid #222;border-radius:2px">`+
-              `<table style="margin:0"><thead><tr><th style="width:40px">#</th><th style="width:190px">Time (IST)</th><th>Ticker Searched</th></tr></thead><tbody>`+
-              obj.history.map((h, i)=>`<tr><td class="d">${i+1}</td><td class="w">${esc(h.time)}</td><td class="big c" style="color:${col};font-weight:bold">${esc(h.ticker)}</td></tr>`).join('')+
-              `</tbody></table>`+
-            `</div>`;
-        }
-        html += `</div>`;
-      }
-      html += `</div>`;
+    for(const u of users){
+      html += `<div onclick="openUserPopup('${esc(u)}')" style="background:#0e0e0e;border:1px solid #282828;padding:18px 20px;border-radius:4px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;transition:background 0.15s, border-color 0.15s;user-select:none" onmouseover="this.style.background='#161616';this.style.borderColor='#444'" onmouseout="this.style.background='#0e0e0e';this.style.borderColor='#282828'">`+
+        `<span style="font-size:16px;font-weight:bold;color:#f0f0f0">${esc(u)}</span>`+
+        `<span style="font-size:12px;color:#888">View →</span>`+
+      `</div>`;
     }
     html += '</div>';
 
-    // Chronological summary table below
+    // Full chronological log below with clean neutral colors
     html += `<div class="panel"><div class="ttl" style="margin-bottom:10px">All Searches Chronological Log</div>`+
-      `<div class="scroll"><table><thead><tr><th>#</th><th>Time (IST)</th><th>User</th><th>Ticker</th></tr></thead><tbody>`+
+      `<div class="scroll"><table><thead><tr><th style="width:50px">#</th><th style="width:190px">Time (IST)</th><th style="width:140px">User</th><th>Ticker</th></tr></thead><tbody>`+
       adminRows.map((s, idx)=>{
-        const col = uColors[s.user] || '#fff';
-        return `<tr><td class="d">${idx+1}</td><td class="w">${esc(s.time)}</td><td style="color:${col};font-weight:bold">${esc(s.user)}</td><td class="big c">${esc(s.ticker)}</td></tr>`;
+        return `<tr><td class="d">${idx+1}</td><td class="w">${esc(s.time)}</td><td style="color:#ddd;font-weight:bold">${esc(s.user)}</td><td class="big c">${esc(s.ticker)}</td></tr>`;
       }).join('')+
       `</tbody></table></div></div>`;
 
@@ -1757,7 +1764,6 @@ function renderAdminView(){
       byTicker[t].history.push(s);
     });
 
-    // Sort by recent search time descending
     let tickerList = Object.values(byTicker).sort((a,b)=>(b.latestTime||'').localeCompare(a.latestTime||''));
 
     if(tickerFilterQuery){
@@ -1772,7 +1778,7 @@ function renderAdminView(){
           `<div style="font-size:12px;color:#8a8a8a">Sorted from newest search to oldest (${tickerList.length} unique symbols)</div>`+
         `</div>`+
         `<div style="display:flex;align-items:center;gap:8px">`+
-          `<input id="ticker_filter" placeholder="Quick filter ticker..." value="${esc(tickerFilterQuery)}" style="height:34px;width:180px;font-size:13px;padding:0 10px;background:#000;border:1px solid #444;color:#fff" autocomplete="off">`+
+          `<input id="ticker_filter" placeholder="Filter ticker..." value="${esc(tickerFilterQuery)}" style="height:34px;width:180px;font-size:13px;padding:0 10px;background:#000;border:1px solid #444;color:#fff" autocomplete="off">`+
         `</div>`+
       `</div>`;
 
@@ -1784,12 +1790,11 @@ function renderAdminView(){
         `<th style="width:120px">Ticker</th>`+
         `<th style="width:190px">Most Recent Search (IST)</th>`+
         `<th style="width:130px">Total Searches</th>`+
-        `<th>Searched By Users</th>`+
+        `<th>Searched By</th>`+
         `</tr></thead><tbody>`+
         tickerList.map((item, idx)=>{
           const userBadges = Object.entries(item.users).map(([u, c])=>{
-            const col = uColors[u] || '#e8e8e8';
-            return `<span style="background:#151515;border:1px solid #333;padding:3px 8px;border-radius:3px;margin-right:6px;font-size:12px"><b style="color:${col}">${esc(u)}</b> <span style="color:#8a8a8a">(${c}x)</span></span>`;
+            return `<span style="background:#151515;border:1px solid #333;padding:3px 8px;border-radius:3px;margin-right:6px;font-size:12px;color:#ddd"><b>${esc(u)}</b> <span style="color:#777">(${c}x)</span></span>`;
           }).join('');
 
           return `<tr>`+
@@ -1876,6 +1881,15 @@ $('#admin_view_mode').onchange=(e)=>{
   activeViewMode = e.target.value;
   renderAdminView();
 };
+
+window.addEventListener('keydown', e => {
+  if(e.key === 'Escape'){
+    closeUserPopup();
+    if($('#pwd_modal').style.display === 'flex'){
+      $('#pwd_modal').style.display = 'none';
+    }
+  }
+});
 
 checkAuth();
 </script></body></html>"""
