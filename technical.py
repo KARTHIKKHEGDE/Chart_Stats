@@ -72,8 +72,11 @@ MIN_PRICE = float(os.getenv("MIN_PRICE", "0.5"))
 MIN_DAY_VOL = int(os.getenv("MIN_DAY_VOL", "100000"))
 MIN_PM_VOL = int(os.getenv("MIN_PM_VOL", "0"))
 STOP_PCT = float(os.getenv("STOP_PCT", "0.20"))
-CACHE = Path(".gapcache")
-CACHE.mkdir(exist_ok=True)
+CACHE = Path(os.getenv("CACHE_DIR", "/tmp/.gapcache" if os.getenv("VERCEL") else ".gapcache"))
+try:
+    CACHE.mkdir(exist_ok=True, parents=True)
+except Exception:
+    pass
 NPTS = 144                    # 5-minute steps from 04:00 ET to 16:00 ET (premarket + regular session)
 PM_START, RG_START, RG_END = 240, 570, 960   # minutes since midnight ET
 
