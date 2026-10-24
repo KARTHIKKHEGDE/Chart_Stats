@@ -1246,10 +1246,8 @@ def index():
 
 ALLOWED_USERS = {"karthik", "locke", "gunshow"}
 ADMIN_USERS = {"karthik", "locke"}
-SEARCH_LOG_FILE = ROOT_DIR / "searches.json"
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-_search_log_lock = threading.Lock()
 
 
 def _supabase_headers():
@@ -1265,44 +1263,28 @@ def _supabase_headers():
 def log_search(user, ticker):
     if not user or not ticker:
         return
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if not (sub_url and sub_key):
+        return
+
     now_dt = dt.datetime.now(IST)
     now_ist = now_dt.strftime("%Y-%m-%d %H:%M:%S")
     now_date = now_dt.strftime("%Y-%m-%d")
-    entry = {"user": user.upper(), "ticker": ticker, "time": now_ist, "date": now_date}
 
-    # 1. Local searches.json file (reliable fallback)
-    with _search_log_lock:
-        try:
-            data = []
-            if SEARCH_LOG_FILE.exists():
-                try:
-                    data = json.loads(SEARCH_LOG_FILE.read_text(encoding="utf-8"))
-                except Exception:
-                    data = []
-            data.insert(0, entry)
-            data = data[:2000]
-            SEARCH_LOG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        except Exception:
-            pass
-
-    # 2. Supabase Cloud Database (if configured)
-    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
-    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
-    if sub_url and sub_key:
-        try:
-            endpoint = f"{sub_url}/rest/v1/searches"
-            payload = {
-                "user_name": user.upper(),
-                "ticker": ticker,
-                "time_ist": now_ist,
-                "date_ist": now_date
-            }
-            r = requests.post(endpoint, json=payload, headers=_supabase_headers(), timeout=5)
-            if r.status_code not in (200, 201):
-                # Fallback if date_ist column is not yet created in table
-                requests.post(endpoint, json={"user_name": user.upper(), "ticker": ticker, "time_ist": now_ist}, headers=_supabase_headers(), timeout=5)
-        except Exception:
-            pass
+    try:
+        endpoint = f"{sub_url}/rest/v1/searches"
+        payload = {
+            "user_name": user.upper(),
+            "ticker": ticker,
+            "time_ist": now_ist,
+            "date_ist": now_date
+        }
+        r = requests.post(endpoint, json=payload, headers=_supabase_headers(), timeout=5)
+        if r.status_code not in (200, 201):
+            requests.post(endpoint, json={"user_name": user.upper(), "ticker": ticker, "time_ist": now_ist}, headers=_supabase_headers(), timeout=5)
+    except Exception:
+        pass
 
 
 @app.route("/api/start")
@@ -1329,6 +1311,7 @@ def admin_searches():
 
     sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
     sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    data = []
     if sub_url and sub_key:
         try:
             endpoint = f"{sub_url}/rest/v1/searches?select=user_name,ticker,time_ist,date_ist&order=id.desc&limit=1000"
@@ -1337,17 +1320,9 @@ def admin_searches():
                 rows = r.json()
                 if isinstance(rows, list) and len(rows):
                     data = [{"user": (x.get("user_name") or x.get("user") or "").upper(), "ticker": x.get("ticker"), "time": x.get("time_ist") or x.get("time"), "date": x.get("date_ist")} for x in rows]
-                    return jsonify({"searches": data})
         except Exception:
             pass
 
-    data = []
-    with _search_log_lock:
-        if SEARCH_LOG_FILE.exists():
-            try:
-                data = json.loads(SEARCH_LOG_FILE.read_text(encoding="utf-8"))
-            except Exception:
-                data = []
     return jsonify({"searches": data})
 
 
