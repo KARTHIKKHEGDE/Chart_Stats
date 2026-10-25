@@ -626,29 +626,27 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
             f"L{lg['leg_num']} {pct(lg['pct_gain'], 0)} (${lg['dollar_gain']:.2f}, {rot(lg['float_rot']) if lg.get('float_rot') else '-'})"
             for lg in legs_15
         )
-        p1_bases = ["15m Legs & Bases", f"{len(legs_15)} legs / {m_bases} bases", f"{len(legs_15)} legs before falling (15m structural pivot analysis)"]
-        p1_leg = ["15m Legs Breakdown", pct(rally_run, 0), f"low {px(D[si]['l'])} -> high {px(D[pi]['h'])} in {ndays}d  |  {leg_summary_15}"]
+        p1_leg = ["Leg", f"{len(legs_15)} legs  ({pct(rally_run, 0)})", leg_summary_15]
     else:
-        p1_bases = ["Bases", str(bases), f"{len(legs)} legs  (base = >={BASE_MIN_DAYS}d, >={int(BASE_MIN_DEPTH * 100)}% pullback, then new high)"]
-        p1_leg = ["Leg", pct(rally_run, 0), f"low {px(D[si]['l'])} -> high {px(D[pi]['h'])} in {ndays}d  |  {leg_txt}"]
+        p1_leg = ["Leg", f"{len(legs)} legs  ({pct(rally_run, 0)})", leg_txt]
 
     p1 = [
-        p1_bases,
         p1_leg,
-        ["Float", big(flt), flt_src],
+        ["Float (before rally)", big(flt), flt_src],
         ["Market cap (before rally)", usd(mcap_before), f"{dstr(pre['d'])} close {px(pre['c'])}"],
         ["Float rotation (start -> high)", rot(div(rally_vol, flt)), f"{big(rally_vol)} sh over {ndays}d"],
-        ["Dollar volume (start -> high)", usd(rally_dv), f"avg {usd(rally_dv / ndays)}/day"],
+        ["Market cap at rally high", f"{usd(mcap_peak)}  ({mx(div(mcap_peak, mcap_before))})", f"{mx(div(mcap_peak, mcap_before))} vs pre-rally {usd(mcap_before)}  (peak {px(D[pi]['h'])})"],
+        ["Dollar volume (start -> high)", usd(rally_dv), f"avg {usd(rally_dv / ndays)}/day over {ndays}d"],
         ["Run O->H (FRD)", pct(mb["o2h"]) if mb else (pct(div(frd["h"] - frd["o"], frd["o"])) if frd else "-"),
          f"open {px(mb['o'] if mb else frd['o'])} -> HOD {px(mb['h'] if mb else frd['h'])}" + (f" @ {mb['hod_t']} IST" if mb else "") if frd else "no FRD yet"],
         ["H->L (FRD)", pct(mb["h2l"]) if mb else (pct(div(frd["l"] - frd["h"], frd["h"])) if frd else "-"),
          ("HOD -> lowest low after HOD" + (f"  (close {pct(mb['close_from_h'])} from HOD)" if mb else "")) if frd else ""],
         ["Gap up (FRD)", pct(mb["gap"]) if mb else (pct(div(frd["o"] - prev_close, prev_close)) if frd else "-"),
-         f"prev close {px(prev_close)}" if frd else ""],
-        ["Pre-mkt vol (FRD)", big(mb["pm_vol"]) if mb else "-", "13:30-19:00 IST"],
-        ["Pre-mkt $ vol (FRD)", usd(mb["pm_dv"]) if mb else "-", f"PM high {px(mb['pm_high'])} @ {mb['pm_high_t']} IST" if mb and mb["pm_high"] else ""],
-        ["O->H vol (FRD)", big(mb["o2h_vol"]) if mb else "-", (usd(mb["o2h_dv"]) + "  traded 19:00 -> HOD") if mb else ""],
-        ["First red day", dstr(frd["d"]) if frd else "none yet", ("rally high " + dstr(D[pi]["d"])) + (" (same day)" if fi == pi else "")],
+         f"open {px(mb['o'] if mb else (frd['o'] if frd else None))} vs prev close {px(prev_close)}" if frd else ""],
+        ["Pre-mkt vol (FRD)", big(mb["pm_vol"]) if mb else "-", "04:00-09:30 ET / 13:30-19:00 IST"],
+        ["Pre-mkt $ vol (FRD)", usd(mb["pm_dv"]) if mb else "-", f"PM high {px(mb['pm_high'])} @ {mb['pm_high_t']} IST" if mb and mb.get("pm_high") else ""],
+        ["O->H vol (FRD)", big(mb["o2h_vol"]) if mb else "-", (usd(mb["o2h_dv"]) + " traded open -> HOD") if mb else ""],
+        ["Date of First Red Day", dstr(frd["d"]) if frd else "none yet", ("rally high " + dstr(D[pi]["d"])) + (" (same day)" if fi == pi else "") if frd else ""],
     ]
 
     # ================= PANEL 2 =================
