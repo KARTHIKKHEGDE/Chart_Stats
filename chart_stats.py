@@ -1500,6 +1500,50 @@ def admin_searches():
     return jsonify(resp)
 
 
+@app.route("/api/admin/clear-old-searches", methods=["POST", "DELETE", "GET"])
+def clear_old_searches():
+    u = (request.args.get("user") or request.form.get("user") or "").strip().lower()
+    pwd = (request.args.get("pwd") or request.form.get("pwd") or "").strip()
+    if u not in ADMIN_USERS or pwd != "500":
+        return jsonify({"error": "Unauthorized"}), 401
+
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if not (sub_url and sub_key):
+        return jsonify({"error": "Supabase not configured on server"}), 500
+
+    now_ist = dt.datetime.now(IST)
+    cutoff_dt = now_ist - dt.timedelta(days=14)
+    cutoff_date = cutoff_dt.strftime("%Y-%m-%d")
+    cutoff_z = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    deleted_count = 0
+    try:
+        h = _supabase_headers()
+        h["Prefer"] = "return=representation"
+
+        # Delete records older than 14 days by date_ist
+        r1 = requests.delete(f"{sub_url}/rest/v1/searches?date_ist=lt.{cutoff_date}", headers=h, timeout=15)
+        if r1.status_code in (200, 204):
+            data1 = r1.json() if r1.text else []
+            deleted_count += len(data1) if isinstance(data1, list) else 0
+
+        # Delete any rows where created_at is older than 14 days
+        r2 = requests.delete(f"{sub_url}/rest/v1/searches?created_at=lt.{cutoff_z}", headers=h, timeout=15)
+        if r2.status_code in (200, 204):
+            data2 = r2.json() if r2.text else []
+            deleted_count += len(data2) if isinstance(data2, list) else 0
+
+        return jsonify({
+            "ok": True,
+            "deleted": deleted_count,
+            "cutoff": cutoff_date,
+            "message": f"Successfully deleted {deleted_count} search record(s) older than 2 weeks ({cutoff_date})."
+        })
+    except Exception as ex:
+        return jsonify({"error": f"Failed to delete old records: {ex}"}), 500
+
+
 @app.route("/api/job/<jid>")
 def job(jid):
     j = JOBS.get(jid)
@@ -1599,6 +1643,7 @@ canvas{display:block;width:100%}
         </select>
       </div>
       <button id="admin_rf_btn" style="height:36px;font-size:13px;padding:0 14px">Refresh</button>
+      <button id="admin_clear_btn" style="height:36px;font-size:13px;padding:0 14px;background:#1a0808;border:1px solid #ff5a5a;color:#ff5a5a;cursor:pointer;border-radius:3px;font-weight:bold;display:none" title="Delete all search logs older than 2 weeks">🗑 Clear data &gt; 2 weeks</button>
       <button id="admin_back_btn" style="height:36px;font-size:13px;padding:0 14px;border-color:#29a8ff;color:#29a8ff">Back to Terminal</button>
     </div>
   </div>
@@ -1634,6 +1679,7 @@ canvas{display:block;width:100%}
       <button onclick="closeUserPopup()" style="height:34px;padding:0 18px;font-size:13px;background:#202020;border:1px solid #444;color:#ddd;cursor:pointer">Close</button>
     </div>
   </div>
+</div><!-- end #user_popup -->
 
 <!-- Big Chart Zoom Modal -->
 <div id="chart_modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:99999;display:none;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px)" onclick="if(event.target===this)closeChartModal()">
@@ -2172,7 +2218,7 @@ window.openChartModal = function(i){
   if(mainBz) $('#cm_bz').checked = mainBz.checked;
 
   $('#chart_modal').style.display = 'flex';
-  renderModalChart();
+  setTimeout(renderModalChart, 30);
 };
 
 window.renderModalChart = function(){
@@ -2314,6 +2360,7 @@ function openPwdModal(){
     return;
   }
   if(adminPwd === '500'){
+    $('#admin_clear_btn').style.display='inline-block';
     $('#app_main').style.display='none';
     $('#admin_view').style.display='block';
     loadAdminSearches();
@@ -2522,6 +2569,30 @@ async function loadAdminSearches(){
   }
 }
 
+async function clearOldSearches(){
+  const ok = confirm('Delete ALL search records older than 2 weeks (14 days) from the database?\n\nThis cannot be undone.');
+  if(!ok) return;
+  const btn = $('#admin_clear_btn');
+  const origText = btn.textContent;
+  btn.textContent = 'Deleting…';
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/admin/clear-old-searches?user=' + encodeURIComponent(currentUser) + '&pwd=' + encodeURIComponent(adminPwd), { method: 'POST' });
+    const data = await res.json();
+    if(data.error){
+      alert('Error: ' + data.error);
+    } else {
+      alert('\u2713 Done! Deleted ' + (data.deleted || 0) + ' record(s) older than ' + (data.cutoff || '14 days ago') + '.');
+      await loadAdminSearches();
+    }
+  } catch(e) {
+    alert('Request failed: ' + e);
+  } finally {
+    btn.textContent = origText;
+    btn.disabled = false;
+  }
+}
+
 async function verifyPwd(){
   const cur = (currentUser||'').toLowerCase();
   const pwd = ($('#pwd_input').value||'').trim();
@@ -2533,6 +2604,7 @@ async function verifyPwd(){
     $('#pwd_err').style.display='none';
     $('#pwd_modal').style.display='none';
     $('#u_badge').innerHTML=' <span style="color:#3ddc84;font-size:11px;border:1px solid #3ddc84;padding:1px 6px;margin-left:4px;border-radius:2px;cursor:pointer" title="Click to view User Searches">✓ VERIFIED</span>';
+    $('#admin_clear_btn').style.display='inline-block';
     $('#app_main').style.display='none';
     $('#admin_view').style.display='block';
     await loadAdminSearches();
@@ -2550,6 +2622,7 @@ async function verifyPwd(){
 }
 
 $('#u_name').onclick=openPwdModal;
+$('#admin_clear_btn').onclick=clearOldSearches;
 $('#u_badge').onclick=openPwdModal;
 $('#pwd_submit').onclick=verifyPwd;
 $('#pwd_cancel').onclick=()=>{ $('#pwd_modal').style.display='none'; };
