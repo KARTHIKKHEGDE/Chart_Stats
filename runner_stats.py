@@ -35,6 +35,8 @@ RECENT_BARS = 120        # prefer rallies whose high is within the last N bars
 BASE_MIN_DAYS = 3        # a base = >=3 days w/o a new high ...
 BASE_MIN_DEPTH = 0.10    # ... and >=10% pullback from the running high, then a new high
 RALLY_MAX_DAYS = 120     # when you give a start date: look this far for the high
+LEG_PULLBACK_15M = 0.05  # 15min leg detector: >=5% pullback from running high = base boundary
+LEG_MIN_BARS_15M = 3     # minimum 15min bars of pullback to count as a real base
 
 app = Flask(__name__)
 S = requests.Session()
@@ -265,6 +267,103 @@ def bases_legs(R):
     return bases, legs
 
 
+def legs_15min(tkr, start_date, high_date, flt):
+    """
+    Detect legs and bases on the 15-minute timeframe for the rally window.
+    Returns a list of leg dicts, each with:
+      leg_num, low_px, high_px, pct_gain, dollar_gain,
+      vol, dv, float_rot, bars (number of 15min bars in leg)
+    """
+    bars = aggs(tkr, 15, "minute", start_date.isoformat(), high_date.isoformat())
+    if not bars:
+        return []
+
+    # Annotate each bar with IST time and dollar-volume
+    rth_bars = []
+    for b in bars:
+        t = datetime.fromtimestamp(b["t"] / 1000, ET)
+        hm = t.hour * 60 + t.minute
+        # Include premarket (4am-9:30am ET) AND regular hours (9:30am-4pm ET)
+        if 240 <= hm < 960:
+            b["_t"] = t.astimezone(IST)
+            b["_dv"] = b["v"] * (b.get("vw") or (b["h"] + b["l"] + b["c"]) / 3)
+            rth_bars.append(b)
+
+    if not rth_bars:
+        return []
+
+    # Walk bars to detect legs using running-high + pullback method
+    legs = []
+    leg_start_i = 0
+    leg_low_px   = rth_bars[0]["l"]
+    running_hi   = rth_bars[0]["h"]
+    running_hi_i = 0
+    pullback_bars = 0
+    in_base = False
+    base_low_px  = None
+    base_low_i   = None
+
+    for i in range(1, len(rth_bars)):
+        b = rth_bars[i]
+        if b["h"] > running_hi:
+            if in_base and pullback_bars >= LEG_MIN_BARS_15M:
+                # Commit the leg that just ended at running_hi
+                leg_bars = rth_bars[leg_start_i: running_hi_i + 1]
+                vol  = sum(x["v"]   for x in leg_bars)
+                dv   = sum(x["_dv"] for x in leg_bars)
+                legs.append(dict(
+                    leg_num   = len(legs) + 1,
+                    low_px    = leg_low_px,
+                    high_px   = running_hi,
+                    pct_gain  = running_hi / leg_low_px - 1,
+                    dollar_gain = running_hi - leg_low_px,
+                    vol=vol, dv=dv,
+                    float_rot = vol / flt if flt else None,
+                    bars      = len(leg_bars),
+                    start_t   = rth_bars[leg_start_i]["_t"].strftime("%m/%d %H:%M"),
+                    end_t     = rth_bars[running_hi_i]["_t"].strftime("%m/%d %H:%M"),
+                ))
+                # New leg starts from the base low
+                leg_start_i = base_low_i
+                leg_low_px  = base_low_px
+            # New running high
+            running_hi   = b["h"]
+            running_hi_i = i
+            in_base      = False
+            pullback_bars = 0
+            base_low_px  = None
+            base_low_i   = None
+        else:
+            depth = 1 - b["l"] / running_hi
+            if depth >= LEG_PULLBACK_15M:
+                in_base = True
+            if in_base:
+                pullback_bars += 1
+                if base_low_px is None or b["l"] < base_low_px:
+                    base_low_px = b["l"]
+                    base_low_i  = i
+
+    # Final leg (running_hi_i -> end)
+    leg_bars = rth_bars[leg_start_i: running_hi_i + 1]
+    if leg_bars:
+        vol  = sum(x["v"]   for x in leg_bars)
+        dv   = sum(x["_dv"] for x in leg_bars)
+        legs.append(dict(
+            leg_num   = len(legs) + 1,
+            low_px    = leg_low_px,
+            high_px   = running_hi,
+            pct_gain  = running_hi / leg_low_px - 1,
+            dollar_gain = running_hi - leg_low_px,
+            vol=vol, dv=dv,
+            float_rot = vol / flt if flt else None,
+            bars      = len(leg_bars),
+            start_t   = rth_bars[leg_start_i]["_t"].strftime("%m/%d %H:%M"),
+            end_t     = rth_bars[running_hi_i]["_t"].strftime("%m/%d %H:%M"),
+        ))
+
+    return legs
+
+
 def frd_intraday(tkr, d, prev_close):
     bars = aggs(tkr, 1, "minute", d.isoformat(), d.isoformat())
     if not bars:
@@ -408,6 +507,12 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
     # ---- rally totals (start -> high)
     R = D[si:pi + 1]
     bases, legs = bases_legs(R)
+    # ---- 15min leg breakdown
+    legs_15 = []
+    try:
+        legs_15 = legs_15min(tkr, D[si]["d"], D[pi]["d"], flt)
+    except Exception as e:
+        notes.append(f"15min leg detection failed: {e}")
     partial = bool(frd and fi == pi and mb)
     if partial:
         rally_vol = sum(r["v"] for r in D[si:pi]) + mb["pm_vol"] + mb["o2h_vol"]
@@ -498,6 +603,22 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
         ["FRD open -> HOD", rot(div(mb["o2h_vol"], flt)) if mb else "-"],
         ["FRD full day", rot(div(fv_tot, flt))],
     ]])
+    # ---- 15min leg breakdown panel
+    if legs_15:
+        leg_rows = [["#", "Low -> High", "% Gain", "$ Move", "Float Rot", "$ Vol", "Bars (15m)", "Window (IST)"]]
+        for lg in legs_15:
+            leg_rows.append([
+                f"Leg {lg['leg_num']}",
+                f"{px(lg['low_px'])} -> {px(lg['high_px'])}",
+                pct(lg["pct_gain"], 0),
+                f"${lg['dollar_gain']:,.2f}",
+                rot(lg["float_rot"]) if lg["float_rot"] is not None else "-",
+                usd(lg["dv"]),
+                str(lg["bars"]),
+                f"{lg['start_t']} -> {lg['end_t']}",
+            ])
+        p2.append([f"Legs & Bases (15min, {int(LEG_PULLBACK_15M*100)}% pullback threshold)",
+                   [[r[0], "  |  ".join(r[1:])] for r in leg_rows[1:]]])
     if frd:
         p2.append(["First red day detail", [
             ["Date / gap", f"{dstr(frd['d'])}  /  {pct(mb['gap']) if mb else '-'}"],
@@ -571,59 +692,92 @@ def index():
     return Response(PAGE, mimetype="text/html")
 
 
-PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Runner Stats</title>
+PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Runner Stats – Multiday Rally & FRD</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-*{box-sizing:border-box}body{margin:0;background:#0b0e13;color:#d6dbe3;font:13px/1.45 "JetBrains Mono",Menlo,Consolas,monospace;padding:18px}
-.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
-input{background:#121821;border:1px solid #263041;color:#e8edf5;padding:8px 10px;border-radius:6px;font:inherit}
-#t{width:120px;text-transform:uppercase}
-button{background:#1b2a44;border:1px solid #2f4570;color:#cfe0ff;padding:8px 14px;border-radius:6px;font:inherit;cursor:pointer}
-button:hover{background:#243759}
-label{color:#7d889a;font-size:11px}
-h2{margin:18px 0 8px;font-size:12px;letter-spacing:.12em;color:#7aa2ff;text-transform:uppercase}
-.hdr{color:#e8edf5;font-size:15px;margin:6px 0}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px}
-.card{background:#10151d;border:1px solid #1f2836;border-radius:8px;padding:10px 12px}
-.card .k{color:#7d889a;font-size:11px}.card .v{font-size:18px;color:#f1f5fb;margin:2px 0}.card .s{color:#6b7686;font-size:11px;word-break:break-word}
-.sec{background:#10151d;border:1px solid #1f2836;border-radius:8px;padding:10px 12px}
-.sec h3{margin:0 0 6px;font-size:12px;color:#9fc0ff}
-.row{display:flex;justify-content:space-between;gap:12px;padding:3px 0;border-bottom:1px solid #161d29}
-.row:last-child{border:0}.row span:first-child{color:#8793a5}.row span:last-child{color:#e8edf5;text-align:right}
-.g2{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:10px}
-table{border-collapse:collapse;width:100%;font-size:12px}th,td{padding:4px 8px;border-bottom:1px solid #161d29;text-align:right;white-space:nowrap}
-th{color:#7d889a;font-weight:normal}td:first-child,th:first-child,td:last-child{text-align:left}
-.wrap{overflow:auto;background:#10151d;border:1px solid #1f2836;border-radius:8px}
-.note{color:#8f7a4a;font-size:11px;margin-top:4px}.err{color:#ff6b6b}.alt{color:#6b7686;font-size:11px}
+:root{--g:#3ddc84;--r:#ff5a5a;--y:#ffd23f;--b:#6cc4ff;--c:#29a8ff;--w:#e8e8e8;--d:#8a8a8a;--line:#333}
+*{box-sizing:border-box}
+body{margin:0;background:#000;color:var(--w);font:15px/1.45 Consolas,"SF Mono","Roboto Mono",Menlo,monospace}
+.bar{display:flex;gap:10px;padding:20px 34px;flex-wrap:wrap;align-items:center;border-bottom:1px solid var(--line)}
+input[type=text],input[type=number]{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:18px;padding:0 12px;height:48px}
+input[type=date]{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:14px;padding:0 10px;height:48px;color-scheme:dark}
+#t{width:140px;text-transform:uppercase;font-size:20px}
+button{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:16px;padding:0 16px;height:48px;cursor:pointer}
+button:hover{background:#1a1a1a}
+label{color:var(--d);font-size:13px;display:flex;flex-direction:column;gap:3px}
+#out{padding-top:4px}
+.g{color:var(--g)}.r{color:var(--r)}.y{color:var(--y)}.b{color:var(--b)}.c{color:var(--c)}.w{color:var(--w)}.d{color:var(--d)}
+.hdr{font-size:18px;font-weight:bold;color:var(--w);margin:0 0 4px}
+.alt{color:var(--d);font-size:13px;margin-bottom:8px}
+.panel{border:1px solid var(--line);padding:12px 16px;margin-top:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;margin-top:10px}
+.card{border:1px solid var(--line);padding:10px 14px;background:#0d0d0d}
+.card .k{color:var(--d);font-size:12px;margin-bottom:3px}
+.card .v{font-size:20px;font-weight:bold;color:var(--w);margin-bottom:2px}
+.card .s{color:var(--d);font-size:12px;word-break:break-word}
+.g2{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:12px;margin-top:10px}
+.sec{border:1px solid var(--line);padding:10px 14px;background:#0d0d0d}
+.sec h3{margin:0 0 8px;font-size:13px;color:var(--c);text-transform:uppercase;letter-spacing:.08em}
+.row{display:flex;justify-content:space-between;gap:16px;padding:3px 0;border-bottom:1px solid #1a1a1a}
+.row:last-child{border:0}.row span:first-child{color:var(--d)}.row span:last-child{color:var(--w);text-align:right}
+.scroll{overflow-x:auto;margin-top:10px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th{text-align:left;font-weight:normal;color:var(--w);padding:3px 14px 5px 0;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:3px 14px 3px 0;white-space:nowrap;color:var(--d)}
+td:first-child{color:var(--w)}
+tr:hover td{background:#0d0d0d}
+.note{color:#a08840;font-size:12px;margin-top:4px}
+.err{color:var(--r)}
+.status{color:var(--d);font-size:13px;margin-left:4px}
+h2{font-size:13px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;margin:22px 0 0;border-bottom:1px solid var(--line);padding-bottom:4px}
+.back-btn{margin-left:auto;border-color:var(--c);color:var(--c)}
+.back-btn:hover{background:#001a33}
 </style></head><body>
 <div class="bar">
-<input id="t" placeholder="TICKER" autofocus>
-<label>rally start date <input id="s" type="date"></label>
-<label>FRD (optional) <input id="f" type="date"></label>
-<label>float M (optional) <input id="fl" type="number" step="any" style="width:90px"></label>
-<button id="go">Get stats</button><button id="rf">Refresh</button><button id="cp">Copy all</button>
-<span id="st" class="alt"></span></div>
-<div id="out"></div>
+  <input id="t" type="text" placeholder="TICKER" autofocus>
+  <label>Rally start date<input id="s" type="date"></label>
+  <label>FRD (optional)<input id="f" type="date"></label>
+  <label>Float M (optional)<input id="fl" type="number" step="any" style="width:110px"></label>
+  <button id="go">Get stats</button>
+  <button id="rf">Refresh</button>
+  <button id="cp">Copy all</button>
+  <span id="st" class="status"></span>
+  <button class="back-btn" onclick="window.open('http://127.0.0.1:8000','_blank')">← Chart Stats</button>
+</div>
+<div id="out" style="margin:0 34px 40px;padding-top:16px"><span class="d">Enter a ticker and rally start date, then press Get stats.</span></div>
 <script>
 let LAST=null;
 const $=id=>document.getElementById(id);
 async function run(){
-  const t=$('t').value.trim(); if(!t) return;
-  if(!$('s').value){ $('out').innerHTML='<div class="err">Enter the rally start date</div>'; return; }
+  const t=$('t').value.trim().toUpperCase(); if(!t) return;
+  if(!$('s').value){ $('out').innerHTML='<span class="err">Enter the rally start date.</span>'; return; }
   const q=new URLSearchParams({ticker:t,start:$('s').value,frd:$('f').value,float_m:$('fl').value});
-  $('st').textContent='loading...'; $('out').innerHTML='';
+  $('st').textContent='loading\u2026'; $('out').innerHTML='';
   try{
     const r=await fetch('/api/analyze?'+q); const j=await r.json();
-    if(!r.ok){ $('out').innerHTML='<div class="err">'+(j.error||'error')+'</div>'; $('st').textContent=''; return; }
+    if(!r.ok){ $('out').innerHTML='<span class="err">'+(j.error||'error')+'</span>'; $('st').textContent=''; return; }
     LAST=j; render(j); $('st').textContent='';
-  }catch(e){ $('out').innerHTML='<div class="err">'+e+'</div>'; $('st').textContent=''; }
+  }catch(e){ $('out').innerHTML='<span class="err">'+e+'</span>'; $('st').textContent=''; }
 }
 function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 function render(j){
   let h='<div class="hdr">'+esc(j.header)+'</div>';
-  if(j.alts.length) h+='<div class="alt">other rallies found '+j.alts.map(esc).join('  ;  ')+'</div>';
-  h+='<h2>Key stats</h2><div class="grid">'+j.p1.map(c=>'<div class="card"><div class="k">'+esc(c[0])+'</div><div class="v">'+esc(c[1])+'</div><div class="s">'+esc(c[2]||'')+'</div></div>').join('')+'</div>';
-  h+='<h2>Deep stats</h2><div class="g2">'+j.p2.map(s=>'<div class="sec"><h3>'+esc(s[0])+'</h3>'+s[1].map(r=>'<div class="row"><span>'+esc(r[0])+'</span><span>'+esc(r[1])+'</span></div>').join('')+'</div>').join('')+'</div>';
-  h+='<h2>Rally days (start -> FRD)</h2><div class="wrap"><table><tr>'+j.table.cols.map(c=>'<th>'+c+'</th>').join('')+'</tr>'+j.table.rows.map(r=>'<tr>'+r.map(c=>'<td>'+esc(c)+'</td>').join('')+'</tr>').join('')+'</table></div>';
+  if(j.alts&&j.alts.length) h+='<div class="alt">other rallies: '+j.alts.map(esc).join(' \u00b7 ')+'</div>';
+  h+='<h2>Key stats</h2>';
+  h+='<div class="grid">'+j.p1.map(c=>'<div class="card"><div class="k">'+esc(c[0])+'</div><div class="v">'+esc(c[1])+'</div><div class="s">'+esc(c[2]||'')+'</div></div>').join('')+'</div>';
+  h+='<h2>Deep stats</h2>';
+  h+='<div class="g2">'+j.p2.map(s=>'<div class="sec"><h3>'+esc(s[0])+'</h3>'+s[1].map(r=>'<div class="row"><span>'+esc(r[0])+'</span><span>'+esc(r[1])+'</span></div>').join('')+'</div>').join('')+'</div>';
+  h+='<h2>Rally days (start \u2192 FRD)</h2>';
+  h+='<div class="scroll"><table><thead><tr>'+j.table.cols.map(c=>'<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>';
+  j.table.rows.forEach(r=>{
+    const tag=(r[r.length-1]||'').trim();
+    let rc='';
+    if(tag.includes('LOW'))rc='style="color:var(--g)"';
+    else if(tag.includes('HIGH'))rc='style="color:var(--y)"';
+    else if(tag.includes('FRD'))rc='style="color:var(--r)"';
+    h+='<tr '+rc+'>'+r.map(c=>'<td>'+esc(c)+'</td>').join('')+'</tr>';
+  });
+  h+='</tbody></table></div>';
   h+=j.notes.map(n=>'<div class="note">* '+esc(n)+'</div>').join('');
   $('out').innerHTML=h;
 }
