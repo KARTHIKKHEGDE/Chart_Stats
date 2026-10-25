@@ -782,40 +782,41 @@ def index():
 PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Runner Stats – Multiday Rally & FRD</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-:root{--g:#3ddc84;--r:#ff5a5a;--y:#ffd23f;--b:#6cc4ff;--c:#29a8ff;--w:#e8e8e8;--d:#8a8a8a;--line:#333}
+:root{--g:#26d974;--r:#ff4d4d;--y:#ffd23f;--b:#6cc4ff;--c:#29a8ff;--w:#e8e8e8;--d:#8a8a8a;--line:#262626}
 *{box-sizing:border-box}
 body{margin:0;background:#000;color:var(--w);font:15px/1.45 Consolas,"SF Mono",Menlo,monospace}
-.bar{display:flex;gap:10px;padding:20px 34px;flex-wrap:wrap;align-items:center;border-bottom:1px solid var(--line)}
-input[type=text],input[type=number]{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:18px;padding:0 12px;height:48px}
-input[type=date]{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:14px;padding:0 10px;height:48px;color-scheme:dark}
-#t{width:140px;text-transform:uppercase;font-size:20px}
-button{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:16px;padding:0 16px;height:48px;cursor:pointer;transition:all .15s}
+.bar{display:flex;gap:10px;padding:18px 34px;flex-wrap:wrap;align-items:center;border-bottom:1px solid var(--line)}
+input[type=text],input[type=number]{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:17px;padding:0 12px;height:46px}
+input[type=date]{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:14px;padding:0 10px;height:46px;color-scheme:dark}
+#t{width:130px;text-transform:uppercase;font-size:19px;font-weight:bold}
+button{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:15px;padding:0 16px;height:46px;cursor:pointer;transition:all .15s}
 button:hover{background:#1a1a1a}
 label{color:var(--d);font-size:13px;display:flex;flex-direction:column;gap:3px}
-#out{margin:0 34px 40px;border:1px solid #222;padding:20px 22px;background:#000}
+#out{margin:0 34px 40px;border:1px solid #1a1a1a;padding:20px 22px;background:#000}
 .hdr{font-size:18px;font-weight:bold;color:var(--w);margin:0 0 4px}
 .alt{color:var(--d);font-size:13px;margin-bottom:8px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;margin-top:10px}
-.card{border:1px solid var(--line);padding:10px 14px;background:#0d0d0d}
+.card{border:1px solid var(--line);padding:10px 14px;background:#0a0a0c}
 .card .k{color:var(--d);font-size:12px;margin-bottom:3px}
 .card .v{font-size:20px;font-weight:bold;color:var(--w);margin-bottom:2px}
 .card .s{color:var(--d);font-size:12px;word-break:break-word}
 .g2{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px;margin-top:10px}
-.sec{border:1px solid var(--line);padding:10px 14px;background:#0d0d0d}
+.sec{border:1px solid var(--line);padding:10px 14px;background:#0a0a0c}
 .sec h3{margin:0 0 8px;font-size:13px;color:var(--c);text-transform:uppercase;letter-spacing:.08em}
-.row{display:flex;justify-content:space-between;gap:16px;padding:3px 0;border-bottom:1px solid #1a1a1a}
+.row{display:flex;justify-content:space-between;gap:16px;padding:3px 0;border-bottom:1px solid #151518}
 .row:last-child{border:0}.row span:first-child{color:var(--d)}.row span:last-child{color:var(--w);text-align:right}
 .scroll{overflow-x:auto;margin-top:10px}
 table{border-collapse:collapse;width:100%;font-size:13px}
 th{text-align:left;font-weight:normal;color:var(--w);padding:3px 14px 5px 0;border-bottom:1px solid var(--line);white-space:nowrap}
 td{padding:3px 14px 3px 0;white-space:nowrap;color:var(--d)}
-td:first-child{color:var(--w)}tr:hover td{background:#0d0d0d}
+td:first-child{color:var(--w)}tr:hover td{background:#0a0a0c}
 .note{color:#a08840;font-size:12px;margin-top:4px}.err{color:var(--r)}.status{color:var(--d);font-size:13px;margin-left:4px}
 h2{font-size:12px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;margin:22px 0 0;border-bottom:1px solid var(--line);padding-bottom:4px}
 .back-btn{margin-left:auto;border-color:var(--c);color:var(--c)}.back-btn:hover{background:#001a33}
-#c15wrap{overflow-x:auto;border:1px solid var(--line);background:#050505;position:relative;margin-top:10px;user-select:none}
-.btn-tool{font-size:12px;padding:3px 12px;height:30px;line-height:1;border-radius:2px}
+#c15wrap{overflow-x:auto;border:1px solid var(--line);background:#070709;position:relative;margin-top:8px;user-select:none;scrollbar-color:#333 #070709}
+.btn-tool{font-size:12px;padding:2px 10px;height:28px;line-height:1;border-radius:2px;display:inline-flex;align-items:center;gap:4px}
 .btn-tool:hover{filter:brightness(1.2)}
+.leg-pill{border:1px solid #444;padding:4px 10px;font-size:12px;background:#0a0a0c;display:inline-flex;align-items:center;gap:8px;border-radius:2px}
 </style></head><body>
 <div class="bar">
   <input id="t" type="text" placeholder="TICKER" autofocus>
@@ -858,19 +859,24 @@ function render(j){
   h+='<h2>Key stats</h2><div class="grid">'+j.p1.map(c=>'<div class="card" '+(c[0]==='Leg'?'id="legCard"':'')+'><div class="k">'+esc(c[0])+'</div><div class="v">'+esc(c[1])+'</div><div class="s">'+esc(c[2]||'')+'</div></div>').join('')+'</div>';
   
   if(j.chart_15&&j.chart_15.bars&&j.chart_15.bars.length){
-    h+='<div style="display:flex;align-items:center;gap:12px;margin:24px 0 6px;flex-wrap:wrap">'
+    h+='<div style="display:flex;align-items:center;gap:10px;margin:24px 0 6px;flex-wrap:wrap">'
       +'<h2 style="margin:0;border:0;padding:0">15min Structure Chart</h2>'
       +'<span style="color:var(--d);font-size:12px">scroll horizontally if needed</span>'
-      +'<div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
-      +'<button id="btnDraw" class="btn-tool" style="border-color:#ffd23f;color:#ffd23f;background:#241d00;font-weight:bold">✏ Draw Leg (D)</button>'
+      +'<div style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap">'
+      +'<button id="btnDraw" class="btn-tool" style="border-color:#ffd23f;color:#ffd23f;background:#282000;font-weight:bold">✏ Draw Leg (D)</button>'
       +'<button id="btnUndo" class="btn-tool">↶ Undo (Z)</button>'
       +'<button id="btnClear" class="btn-tool">🗑 Clear All</button>'
-      +'<label style="font-size:12px;color:var(--d);cursor:pointer;display:inline-flex;align-items:center;margin:0;flex-direction:row;gap:6px"><input type="checkbox" id="bz15" style="margin:0;vertical-align:middle"> Bone zone (EMA9/20 + BB)</label>'
+      +'<span style="color:#444;font-size:11px">|</span>'
+      +'<button id="btnZoomOut" class="btn-tool" title="Zoom Out (narrow candles)">🔍 -</button>'
+      +'<button id="btnZoomIn" class="btn-tool" title="Zoom In (wider candles)">🔍 +</button>'
+      +'<button id="btnZoomFit" class="btn-tool" title="Fit Entire Chart">Fit</button>'
+      +'<span style="color:#444;font-size:11px">|</span>'
+      +'<button id="btnBadgeMode" class="btn-tool" title="Toggle Compact / Full Badges">🏷 Compact Badges</button>'
+      +'<button id="btnBases" class="btn-tool" title="Toggle Base Lines On/Off">📐 Bases: On</button>'
+      +'<label style="font-size:12px;color:var(--d);cursor:pointer;display:inline-flex;align-items:center;margin:0;flex-direction:row;gap:5px"><input type="checkbox" id="bz15" style="margin:0;vertical-align:middle"> Bone zone</label>'
       +'</div></div>';
-    h+='<div style="display:flex;justify-content:space-between;align-items:center;margin:4px 0 6px;flex-wrap:wrap;gap:8px">'
-      +'<div id="drawStatus" style="color:#ffd23f;font-size:12px;font-family:Consolas,monospace;min-height:18px"></div>'
-      +'<div style="color:var(--d);font-size:11px">Tip: Click LOW bar then HIGH bar (or click & drag). Hotkeys: [D] Draw · [Z] Undo · [Esc] Cancel</div>'
-      +'</div>';
+    h+='<div id="drawStatus" style="color:#ffd23f;font-size:12px;font-family:Consolas,monospace;min-height:18px;margin:4px 0 4px"></div>';
+    h+='<div id="legRibbon" style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap"></div>';
     h+='<div id="c15wrap"></div>';
     h+='<div id="legPanel" style="margin-top:14px"></div>';
   }
@@ -948,50 +954,31 @@ function _updateToolbarUI(){
     btn.style.background = '#0d0d0d';
     btn.textContent = '✏ Draw Leg (D)';
   }
+  const btnB = document.getElementById('btnBadgeMode');
+  if(btnB) btnB.textContent = s.badgeMode === 'compact' ? '🏷 Compact Badges' : '🏷 Full Badges';
+  const btnBase = document.getElementById('btnBases');
+  if(btnBase) btnBase.textContent = s.showBases ? '📐 Bases: On' : '📐 Bases: Off';
 }
 
 function initChart15(data){
   const wrap = $('c15wrap');
   if(!wrap || !data || !data.bars || !data.bars.length) return;
-  wrap.innerHTML = '';
 
-  const bars = data.bars, N = bars.length;
-  const CW = Math.max(3, Math.min(12, Math.floor(880 / N)));
-  const GAP = Math.max(1, Math.ceil(CW * 0.25));
-  const UNIT = CW + GAP;
-  const PL = 72, PR = 16, PT = 24, PBOT = 24, PRICEH = 410, VOLH = 90;
-  const TH = PT + PRICEH + VOLH + PBOT;
-  const TW = Math.max(880, PL + N * UNIT + PR);
-
-  const cv = document.createElement('canvas');
-  cv.width = TW; cv.height = TH;
-  cv.style.cssText = 'display:block;cursor:crosshair;';
-  
-  const tipEl = document.createElement('div');
-  tipEl.style.cssText = 'position:absolute;background:rgba(10,10,10,.95);border:1px solid #444;color:#e0e0e0;font:11px Consolas,monospace;padding:6px 12px;pointer-events:none;display:none;z-index:20;white-space:pre;line-height:1.6;border-radius:3px;box-shadow:0 6px 16px rgba(0,0,0,.85)';
-  
-  wrap.style.position = 'relative';
-  wrap.appendChild(cv);
-  wrap.appendChild(tipEl);
-
-  const ctx = cv.getContext('2d');
-
-  let maxP = Math.max(...bars.map(b => b.h));
-  let minP = Math.min(...bars.map(b => b.l));
-  const pad = (maxP - minP) * 0.10;
-  maxP += pad; minP = Math.max(0, minP - pad * 0.5);
-  const PRNG = maxP - minP || 1;
-  const maxV = Math.max(...bars.map(b => b.v)) || 1;
-
-  const xOf = i => PL + i * UNIT;
-  const xM  = i => PL + i * UNIT + CW / 2;
-  const yP  = p => PT + (maxP - p) / PRNG * PRICEH;
-  const yV  = v => PT + PRICEH + VOLH - (v / maxV) * (VOLH - 4);
+  const N = data.bars.length;
+  // Choose comfortable default candle width so candles have real body!
+  let initialCW = 9;
+  if(N > 400) initialCW = 7;
+  if(N > 800) initialCW = 5;
 
   _chartState = {
-    data, bars, N, CW, UNIT, PL, PR, PT, PRICEH, VOLH, TW, TH, xOf, xM, yP, yV, maxP, minP, PRNG, maxV,
-    cv, ctx, tipEl, wrap,
+    data,
+    bars: data.bars,
+    N,
+    candleWidth: initialCW,
+    gap: Math.max(1, Math.ceil(initialCW * 0.28)),
     drawMode: true,
+    badgeMode: 'compact',  // 'compact' or 'full'
+    showBases: true,
     pending: null,
     hoverI: -1,
     dragStartI: null,
@@ -1000,14 +987,20 @@ function initChart15(data){
     legs: [],
   };
 
+  _setupAndMountCanvas();
   _updateToolbarUI();
-  _setStatus('✏ DRAW MODE ACTIVE: Click LOW bar of Leg 1 (or click & drag to High)');
+  _setStatus('✏ DRAW MODE ACTIVE: Click LOW bar of Leg 1 (or click & drag across to High)');
 
   // Wire buttons
   const btnDraw = document.getElementById('btnDraw');
   const btnUndo = document.getElementById('btnUndo');
   const btnClear = document.getElementById('btnClear');
   const bz = document.getElementById('bz15');
+  const btnZOut = document.getElementById('btnZoomOut');
+  const btnZIn = document.getElementById('btnZoomIn');
+  const btnZFit = document.getElementById('btnZoomFit');
+  const btnBadgeMode = document.getElementById('btnBadgeMode');
+  const btnBases = document.getElementById('btnBases');
 
   if(btnDraw) btnDraw.onclick = () => {
     _chartState.drawMode = !_chartState.drawMode;
@@ -1020,7 +1013,7 @@ function initChart15(data){
   if(btnUndo) btnUndo.onclick = () => {
     if(_chartState.pending != null){
       _chartState.pending = null;
-      _setStatus('Cancelled pending start.');
+      _setStatus('Cancelled pending start point.');
     } else if(_chartState.legs.length){
       _chartState.legs.pop();
       _setStatus(`Undid last leg. ${_chartState.legs.length} leg(s) remaining.`);
@@ -1038,6 +1031,49 @@ function initChart15(data){
   };
 
   if(bz) bz.onchange = () => _renderFrame();
+
+  if(btnZOut) btnZOut.onclick = () => {
+    _chartState.candleWidth = Math.max(3, _chartState.candleWidth - 2);
+    _chartState.gap = Math.max(1, Math.ceil(_chartState.candleWidth * 0.28));
+    _setupAndMountCanvas();
+  };
+
+  if(btnZIn) btnZIn.onclick = () => {
+    _chartState.candleWidth = Math.min(26, _chartState.candleWidth + 2);
+    _chartState.gap = Math.max(1, Math.ceil(_chartState.candleWidth * 0.28));
+    _setupAndMountCanvas();
+  };
+
+  if(btnZFit) btnZFit.onclick = () => {
+    const wrapW = wrap.clientWidth || 900;
+    const cw = Math.max(3, Math.min(14, Math.floor((wrapW - 100) / N) - 1));
+    _chartState.candleWidth = cw;
+    _chartState.gap = Math.max(1, Math.ceil(cw * 0.25));
+    _setupAndMountCanvas();
+  };
+
+  if(btnBadgeMode) btnBadgeMode.onclick = () => {
+    _chartState.badgeMode = _chartState.badgeMode === 'compact' ? 'full' : 'compact';
+    _updateToolbarUI();
+    _renderFrame();
+  };
+
+  if(btnBases) btnBases.onclick = () => {
+    _chartState.showBases = !_chartState.showBases;
+    _updateToolbarUI();
+    _renderFrame();
+  };
+
+  // Mouse wheel zoom
+  wrap.onwheel = (e) => {
+    if(e.ctrlKey || e.altKey){
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 1 : -1;
+      _chartState.candleWidth = Math.max(3, Math.min(26, _chartState.candleWidth + delta));
+      _chartState.gap = Math.max(1, Math.ceil(_chartState.candleWidth * 0.28));
+      _setupAndMountCanvas();
+    }
+  };
 
   // Global key bindings
   window.onkeydown = (e) => {
@@ -1064,21 +1100,76 @@ function initChart15(data){
       _updateToolbarUI();
       _setStatus(_chartState.drawMode ? '✏ Click LOW bar to start leg' : 'Draw mode paused.');
       _renderFrame();
-    } else if(e.key.toLowerCase() === 'c' && (e.ctrlKey || e.metaKey)){
-      _chartState.legs = [];
-      _chartState.pending = null;
-      _renderFrame();
-      _updateLegPanel();
     }
   };
 
-  // Mouse handling on canvas
+  _renderFrame();
+  _updateLegPanel();
+}
+
+function _setupAndMountCanvas(){
+  const s = _chartState;
+  const wrap = $('c15wrap');
+  if(!s || !wrap) return;
+
+  const scrollLeft = wrap.scrollLeft;
+  wrap.innerHTML = '';
+
+  const bars = s.bars, N = s.N;
+  const CW = s.candleWidth;
+  const GAP = s.gap;
+  const UNIT = CW + GAP;
+  // Ample top headroom (PT = 48) so peak labels NEVER overlap candles!
+  const PL = 74, PR = 20, PT = 48, PBOT = 26, PRICEH = 430, VOLH = 86;
+  const TH = PT + PRICEH + VOLH + PBOT;
+  const TW = Math.max(wrap.clientWidth || 900, PL + N * UNIT + PR);
+
+  const cv = document.createElement('canvas');
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.floor(TW * dpr);
+  cv.height = Math.floor(TH * dpr);
+  cv.style.width = TW + 'px';
+  cv.style.height = TH + 'px';
+  cv.style.display = 'block';
+  cv.style.cursor = 'crosshair';
+
+  const tipEl = document.createElement('div');
+  tipEl.style.cssText = 'position:absolute;background:rgba(8,8,10,.95);border:1px solid #444;color:#e8e8e8;font:11px Consolas,monospace;padding:6px 12px;pointer-events:none;display:none;z-index:20;white-space:pre;line-height:1.6;border-radius:3px;box-shadow:0 6px 18px rgba(0,0,0,.9)';
+
+  wrap.style.position = 'relative';
+  wrap.appendChild(cv);
+  wrap.appendChild(tipEl);
+
+  const ctx = cv.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  // Price calculations with generous 28% top headroom!
+  let maxP = Math.max(...bars.map(b => b.h));
+  let minP = Math.min(...bars.map(b => b.l));
+  const rawRng = maxP - minP || 1;
+  const padTop = rawRng * 0.28;  // Clear sky above the peak!
+  const padBot = rawRng * 0.08;
+  maxP += padTop;
+  minP = Math.max(0, minP - padBot);
+  const PRNG = maxP - minP || 1;
+  const maxV = Math.max(...bars.map(b => b.v)) || 1;
+
+  const xOf = i => PL + i * UNIT;
+  const xM  = i => PL + i * UNIT + CW / 2;
+  const yP  = p => PT + (maxP - p) / PRNG * PRICEH;
+  const yV  = v => PT + PRICEH + VOLH - (v / maxV) * (VOLH - 4);
+
+  Object.assign(s, {
+    CW, GAP, UNIT, PL, PR, PT, PRICEH, VOLH, TW, TH, xOf, xM, yP, yV, maxP, minP, PRNG, maxV,
+    cv, ctx, tipEl, wrap, dpr,
+  });
+
+  // Attach mouse listeners
   cv.onmousemove = function(ev){
     const rect = cv.getBoundingClientRect();
-    const scX = cv.width / rect.width;
-    const mx = (ev.clientX - rect.left) * scX;
+    const mx = (ev.clientX - rect.left);
     const i = Math.max(0, Math.min(N - 1, Math.floor((mx - PL) / UNIT)));
-    _chartState.hoverI = i;
+    s.hoverI = i;
 
     // Tooltip
     const b = bars[i];
@@ -1093,61 +1184,57 @@ function initChart15(data){
   };
 
   cv.onmouseleave = function(){
-    _chartState.hoverI = -1;
+    s.hoverI = -1;
     tipEl.style.display = 'none';
     _renderFrame();
   };
 
   cv.onmousedown = function(ev){
-    if(!_chartState.drawMode) return;
+    if(!s.drawMode) return;
     const rect = cv.getBoundingClientRect();
-    const scX = cv.width / rect.width;
-    const mx = (ev.clientX - rect.left) * scX;
+    const mx = (ev.clientX - rect.left);
     const i = Math.max(0, Math.min(N - 1, Math.floor((mx - PL) / UNIT)));
-    _chartState.dragStartI = i;
-    _chartState.dragStartTime = Date.now();
-    _chartState.isDragging = true;
+    s.dragStartI = i;
+    s.dragStartTime = Date.now();
+    s.isDragging = true;
 
-    if(_chartState.pending == null){
-      _chartState.pending = i;
-      _setStatus(`📍 Leg ${_chartState.legs.length + 1} LOW set: ${bars[i].t} (${fmtP(bars[i].l)}) — Now click or drag to the HIGH bar`);
+    if(s.pending == null){
+      s.pending = i;
+      _setStatus(`📍 Leg ${s.legs.length + 1} LOW set: ${bars[i].t} (${fmtP(bars[i].l)}) — Now click or drag to the HIGH bar`);
       _renderFrame();
     }
   };
 
   cv.onmouseup = function(ev){
-    if(!_chartState.drawMode) return;
+    if(!s.drawMode) return;
     const rect = cv.getBoundingClientRect();
-    const scX = cv.width / rect.width;
-    const mx = (ev.clientX - rect.left) * scX;
+    const mx = (ev.clientX - rect.left);
     const i = Math.max(0, Math.min(N - 1, Math.floor((mx - PL) / UNIT)));
-    const duration = Date.now() - (_chartState.dragStartTime || 0);
+    const duration = Date.now() - (s.dragStartTime || 0);
 
-    // If drag released on different bar
-    if(_chartState.isDragging && _chartState.pending != null && i !== _chartState.pending && duration > 160){
-      _confirmLeg(_chartState.pending, i);
-      _chartState.pending = null;
-      _chartState.isDragging = false;
+    if(s.isDragging && s.pending != null && i !== s.pending && duration > 160){
+      _confirmLeg(s.pending, i);
+      s.pending = null;
+      s.isDragging = false;
       return;
     }
-    _chartState.isDragging = false;
+    s.isDragging = false;
   };
 
   cv.onclick = function(ev){
-    if(!_chartState.drawMode) return;
+    if(!s.drawMode) return;
     const rect = cv.getBoundingClientRect();
-    const scX = cv.width / rect.width;
-    const mx = (ev.clientX - rect.left) * scX;
+    const mx = (ev.clientX - rect.left);
     const i = Math.max(0, Math.min(N - 1, Math.floor((mx - PL) / UNIT)));
 
-    if(_chartState.pending != null && i !== _chartState.pending){
-      _confirmLeg(_chartState.pending, i);
-      _chartState.pending = null;
+    if(s.pending != null && i !== s.pending){
+      _confirmLeg(s.pending, i);
+      s.pending = null;
     }
   };
 
+  if(scrollLeft) wrap.scrollLeft = scrollLeft;
   _renderFrame();
-  _updateLegPanel();
 }
 
 function _confirmLeg(i1, i2){
@@ -1168,7 +1255,7 @@ function _renderFrame(){
   const bzChecked = document.getElementById('bz15') && document.getElementById('bz15').checked;
 
   // Background
-  ctx.fillStyle = '#050505';
+  ctx.fillStyle = '#070709';
   ctx.fillRect(0, 0, TW, TH);
 
   // Price grid lines & axis labels
@@ -1176,26 +1263,25 @@ function _renderFrame(){
   let pp = Math.ceil(minP / step) * step;
   while(pp <= maxP){
     const y = yP(pp);
-    ctx.strokeStyle = '#121212';
+    ctx.strokeStyle = '#141418';
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(PL, y); ctx.lineTo(TW - PR, y); ctx.stroke();
-    ctx.fillStyle = '#555';
-    ctx.font = '9px Consolas,monospace';
+    ctx.fillStyle = '#666';
+    ctx.font = '10px Consolas,monospace';
     ctx.textAlign = 'right';
-    ctx.fillText(fmtP(pp), PL - 6, y + 3);
+    ctx.fillText(fmtP(pp), PL - 6, y + 3.5);
     pp = Math.round((pp + step) * 1e5) / 1e5;
   }
 
-  // Bone Zone (under candles)
+  // Bone Zone Cloud & Bands (under candles)
   const BZ = bzChecked ? boneZone15(bars) : null;
   const clipPrice = () => { ctx.save(); ctx.beginPath(); ctx.rect(PL, PT, TW - PL - PR, PRICEH); ctx.clip(); };
 
   if(BZ){
     clipPrice();
-    // Cloud
     for(let i = 1; i < N; i++){
       if(BZ.e9[i] == null || BZ.e20[i] == null) continue;
-      ctx.fillStyle = BZ.e9[i] > BZ.e20[i] ? 'rgba(0,220,100,0.22)' : 'rgba(255,60,60,0.22)';
+      ctx.fillStyle = BZ.e9[i] > BZ.e20[i] ? 'rgba(0,220,100,0.18)' : 'rgba(255,60,60,0.18)';
       ctx.beginPath();
       ctx.moveTo(xM(i - 1), yP(BZ.e9[i - 1]));
       ctx.lineTo(xM(i), yP(BZ.e9[i]));
@@ -1204,9 +1290,8 @@ function _renderFrame(){
       ctx.closePath();
       ctx.fill();
     }
-    // Bollinger Bands
     ['bu', 'bl'].forEach(k => {
-      ctx.strokeStyle = 'rgba(160,160,160,0.45)';
+      ctx.strokeStyle = 'rgba(160,160,160,0.38)';
       ctx.lineWidth = 1;
       ctx.setLineDash([3, 3]);
       ctx.beginPath();
@@ -1222,39 +1307,39 @@ function _renderFrame(){
     ctx.restore();
   }
 
-  // Volume separator
-  ctx.strokeStyle = '#1c1c1c';
+  // Volume Separator
+  ctx.strokeStyle = '#1e1e24';
   ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(PL, PT + PRICEH); ctx.lineTo(TW - PR, PT + PRICEH); ctx.stroke();
-  ctx.fillStyle = '#333';
+  ctx.fillStyle = '#444';
   ctx.font = '9px Consolas,monospace';
   ctx.textAlign = 'left';
   ctx.fillText('VOL', PL + 4, PT + PRICEH + 11);
 
-  // Volume bars
+  // Volume Bars
   bars.forEach((b, i) => {
-    ctx.fillStyle = b.c >= b.o ? 'rgba(61,220,132,.38)' : 'rgba(255,90,90,.38)';
+    ctx.fillStyle = b.c >= b.o ? 'rgba(38,217,116,0.35)' : 'rgba(255,77,77,0.35)';
     const x = xOf(i), yt = yV(b.v), yb = PT + PRICEH + VOLH - 2;
     ctx.fillRect(x, yt, CW, yb - yt);
   });
 
-  // Solid Candles (green & red both filled)
+  // Solid Candles (crisp green & red fill with 1.2px wicks)
   bars.forEach((b, i) => {
     const isGreen = b.c >= b.o;
-    const col = isGreen ? '#3ddc84' : '#ff5a5a';
+    const col = isGreen ? '#26d974' : '#ff4d4d';
     ctx.strokeStyle = col;
     ctx.fillStyle = col;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 1.2;
     const xm = xM(i);
     // Wick
     ctx.beginPath(); ctx.moveTo(xm, yP(b.h)); ctx.lineTo(xm, yP(b.l)); ctx.stroke();
-    // Body (solid filled)
+    // Solid Body
     const bt = yP(Math.max(b.o, b.c));
-    const bh = Math.max(1, yP(Math.min(b.o, b.c)) - bt);
+    const bh = Math.max(1.5, yP(Math.min(b.o, b.c)) - bt);
     ctx.fillRect(xOf(i), bt, CW, bh);
   });
 
-  // Bone Zone EMA lines (on top of candles)
+  // Bone Zone EMA Lines (on top of candles)
   if(BZ){
     clipPrice();
     [['e9', 'rgb(215,255,110)'], ['e20', 'rgb(255,165,0)']].forEach(([k, col]) => {
@@ -1271,8 +1356,8 @@ function _renderFrame(){
     ctx.restore();
   }
 
-  // Confirmed Drawn Legs
-  const BC = ['#3ddc84', '#29a8ff', '#ffd23f', '#ff7850', '#b464ff', '#00e5ff'];
+  // Confirmed Legs
+  const BC = ['#26d974', '#29a8ff', '#ffd23f', '#ff7850', '#b464ff', '#00e5ff'];
   const flt = s.data.float_val;
 
   s.legs.forEach((lg, li) => {
@@ -1280,20 +1365,20 @@ function _renderFrame(){
     const x1 = xM(lg.loI), x2 = xM(lg.hiI);
     const y1 = yP(lg.loPx), y2 = yP(lg.hiPx);
 
-    // Shaded vertical region
-    ctx.fillStyle = col + '18';
+    // Subtle soft shaded region (does NOT drown candles)
+    ctx.fillStyle = col + '0c';
     ctx.fillRect(Math.min(x1, x2) - CW / 2, PT, Math.abs(x2 - x1) + CW, PRICEH);
 
-    // Dashed vertical boundary markers
-    ctx.strokeStyle = col; ctx.lineWidth = 1.2; ctx.setLineDash([4, 3]);
+    // Subtle boundary guidelines
+    ctx.strokeStyle = col + '55'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
     ctx.beginPath(); ctx.moveTo(x1, PT); ctx.lineTo(x1, PT + PRICEH); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(x2, PT); ctx.lineTo(x2, PT + PRICEH); ctx.stroke();
     ctx.setLineDash([]);
 
-    // Arrow line Low -> High
+    // Solid Connecting Arrow Low -> High
     _drawArrow(ctx, x1, y1, x2, y2, col, 10);
 
-    // Annotation Box
+    // Leg Stats & Badge
     const pctG = (lg.hiPx / lg.loPx - 1) * 100;
     const dolG = lg.hiPx - lg.loPx;
     const lo = Math.min(lg.loI, lg.hiI), hi = Math.max(lg.loI, lg.hiI);
@@ -1301,64 +1386,88 @@ function _renderFrame(){
     const dv  = bars.slice(lo, hi + 1).reduce((a, b) => a + (b.v * (b.c || b.h)), 0);
     const barsCount = hi - lo + 1;
 
-    const lines = [
-      'L' + (li + 1) + '  +' + pctG.toFixed(0) + '%  (+$' + dolG.toFixed(2) + ')',
-      'Vol: ' + fmtV(vol) + '  |  $Vol: ' + fmtDv(dv),
-      'Float rot: ' + fmtRot(vol, flt),
-      bars[lg.loI].t + ' → ' + bars[lg.hiI].t + ' (' + barsCount + ' bars)',
-    ];
+    let lines = [];
+    if(s.badgeMode === 'compact'){
+      lines = [
+        `L${li + 1}  +${pctG.toFixed(0)}%  (+$${dolG.toFixed(2)})`,
+        `${fmtV(vol)} vol · ${fmtRot(vol, flt)}`,
+      ];
+    } else {
+      lines = [
+        `L${li + 1}  +${pctG.toFixed(0)}%  (+$${dolG.toFixed(2)})`,
+        `Vol: ${fmtV(vol)} | $Vol: ${fmtDv(dv)}`,
+        `Float rot: ${fmtRot(vol, flt)}`,
+        `${bars[lg.loI].t} → ${bars[lg.hiI].t} (${barsCount}b)`,
+      ];
+    }
 
     ctx.font = 'bold 11px Consolas,monospace';
-    const BW = Math.max(...lines.map(l => ctx.measureText(l).width)) + 18;
-    const LH = 15, BH = lines.length * LH + 14;
+    const BW = Math.max(...lines.map(l => ctx.measureText(l).width)) + 16;
+    const LH = 15, BH = lines.length * LH + 12;
     let bx = x2 - BW / 2;
     bx = Math.max(PL + 4, Math.min(TW - PR - BW - 4, bx));
-    let by = Math.min(y1, y2) - BH - 16;
-    if(by < PT + 4) by = Math.max(y1, y2) + 16;
 
-    ctx.fillStyle = 'rgba(6,6,6,.94)';
+    // KEY CLARITY FIX: Anchor badge in the clear sky ABOVE the peak!
+    // NEVER push downward over the candles!
+    let by = y2 - BH - 12;
+    if(by < PT + 2) by = PT + 2;
+
+    // Sleek glassmorphic badge
+    ctx.fillStyle = 'rgba(8,8,12,0.88)';
     ctx.fillRect(bx, by, BW, BH);
     ctx.strokeStyle = col;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 1.3;
     ctx.strokeRect(bx, by, BW, BH);
 
     lines.forEach((line, i2) => {
       ctx.fillStyle = i2 === 0 ? col : '#aaa';
       ctx.font = i2 === 0 ? 'bold 11px Consolas,monospace' : '10px Consolas,monospace';
       ctx.textAlign = 'left';
-      ctx.fillText(line, bx + 9, by + 13 + i2 * LH);
+      ctx.fillText(line, bx + 8, by + 12 + i2 * LH);
     });
 
-    // Base between legs
-    if(li > 0){
+    // Horizontal Base Support Level (Clean, no diagonal slashing through candles!)
+    if(s.showBases && li > 0){
       const prev = s.legs[li - 1];
       if(prev.hiI <= lg.loI){
         const baseBars = bars.slice(prev.hiI, lg.loI + 1);
         const minL = Math.min(...baseBars.map(b => b.l));
         const depth = ((prev.hiPx - minL) / prev.hiPx * 100).toFixed(0);
         const baseCount = lg.loI - prev.hiI;
-        const bx1 = xM(prev.hiI), by1 = yP(prev.hiPx);
-        const bx2 = xM(lg.loI), by2 = yP(minL);
+        const bx1 = xM(prev.hiI);
+        const bx2 = xM(lg.loI);
+        const byFloor = yP(minL);
 
-        ctx.strokeStyle = 'rgba(255,210,63,0.55)';
+        // Horizontal dashed support line at the base floor
+        ctx.strokeStyle = 'rgba(255,210,63,0.6)';
         ctx.lineWidth = 1.2;
         ctx.setLineDash([3, 3]);
         ctx.beginPath();
-        ctx.moveTo(bx1, by1);
-        ctx.lineTo(bx2, by2);
+        ctx.moveTo(bx1, byFloor);
+        ctx.lineTo(bx2, byFloor);
+        ctx.stroke();
+
+        // Vertical drop marker from previous peak to base floor
+        ctx.strokeStyle = 'rgba(255,210,63,0.3)';
+        ctx.beginPath();
+        ctx.moveTo(bx1, yP(prev.hiPx));
+        ctx.lineTo(bx1, byFloor);
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // Base label
-        const baseTxt = 'Base: -' + depth + '% (' + baseCount + 'b)';
+        // Clean base support label sitting right on the base line
+        const baseTxt = `Base: -${depth}% (${baseCount}b)`;
         ctx.font = '10px Consolas,monospace';
         const btw = ctx.measureText(baseTxt).width + 8;
-        const bmidX = (bx1 + bx2) / 2, bmidY = (by1 + by2) / 2;
-        ctx.fillStyle = 'rgba(10,10,10,.85)';
-        ctx.fillRect(bmidX - btw / 2, bmidY - 8, btw, 16);
+        const bmidX = (bx1 + bx2) / 2;
+        ctx.fillStyle = 'rgba(10,10,14,0.9)';
+        ctx.fillRect(bmidX - btw / 2, byFloor - 9, btw, 17);
+        ctx.strokeStyle = 'rgba(255,210,63,0.5)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(bmidX - btw / 2, byFloor - 9, btw, 17);
         ctx.fillStyle = '#ffd23f';
         ctx.textAlign = 'center';
-        ctx.fillText(baseTxt, bmidX, bmidY + 4);
+        ctx.fillText(baseTxt, bmidX, byFloor + 3.5);
       }
     }
   });
@@ -1371,9 +1480,9 @@ function _renderFrame(){
     ctx.setLineDash([]);
     ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#ffd23f'; ctx.font = 'bold 10px Consolas,monospace'; ctx.textAlign = 'center';
-    ctx.fillText('START LOW', px, py - 10);
+    ctx.fillText('LOW', px, py - 10);
 
-    // Live Rubber-band arrow line & floating badge to hovered bar
+    // Live Rubber-band arrow line & floating badge
     if(s.hoverI >= 0){
       const curX = xM(s.hoverI), curY = yP(bars[s.hoverI].h);
       ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = 2; ctx.setLineDash([4, 4]);
@@ -1388,7 +1497,7 @@ function _renderFrame(){
       const dol = (pHi - pLo).toFixed(2);
       const vol = bars.slice(lo, hi + 1).reduce((a, b) => a + b.v, 0);
       const tag = `L${s.legs.length + 1}: +${pct}% (+$${dol})  |  ${fmtV(vol)}  |  ${fmtRot(vol, flt)}`;
-      
+
       ctx.font = 'bold 11px Consolas,monospace';
       const tw = ctx.measureText(tag).width + 16;
       let pillX = curX + 14;
@@ -1415,22 +1524,22 @@ function _renderFrame(){
     ctx.setLineDash([]);
   }
 
-  // X axis time labels
-  const lev = Math.max(1, Math.ceil(N / 24));
+  // X Axis Time Labels
+  const lev = Math.max(1, Math.ceil(N / Math.max(10, Math.floor(TW / 70))));
   bars.forEach((b, i) => {
     if(i % lev === 0){
-      ctx.fillStyle = '#444';
-      ctx.font = '9px Consolas,monospace';
+      ctx.fillStyle = '#555';
+      ctx.font = '9.5px Consolas,monospace';
       ctx.textAlign = 'center';
       ctx.fillText(b.t.substring(0, 5), xM(i), PT + PRICEH + VOLH + 16);
-      ctx.strokeStyle = '#0e0e0e';
+      ctx.strokeStyle = '#121216';
       ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(xM(i), PT); ctx.lineTo(xM(i), PT + PRICEH); ctx.stroke();
     }
   });
 
   // Left axis border
-  ctx.strokeStyle = '#222';
+  ctx.strokeStyle = '#26262c';
   ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(PL, PT); ctx.lineTo(PL, PT + PRICEH + VOLH); ctx.stroke();
 }
@@ -1461,9 +1570,33 @@ function _updateLegPanel(){
   const s = _chartState;
   if(!s) return;
   const bars = s.data.bars, flt = s.data.float_val, shares = s.data.shares_out;
-  const BC = ['#3ddc84', '#29a8ff', '#ffd23f', '#ff7850', '#b464ff', '#00e5ff'];
+  const BC = ['#26d974', '#29a8ff', '#ffd23f', '#ff7850', '#b464ff', '#00e5ff'];
 
-  // 1. Dynamic update of Panel 1 "Leg" card
+  // 1. Update Ribbon directly above chart
+  const ribbonEl = document.getElementById('legRibbon');
+  if(ribbonEl){
+    if(!s.legs.length){
+      ribbonEl.innerHTML = '';
+    } else {
+      let rh = '';
+      s.legs.forEach((lg, li) => {
+        const col = BC[li % BC.length];
+        const pctG = ((lg.hiPx / lg.loPx - 1) * 100).toFixed(0);
+        const dolG = (lg.hiPx - lg.loPx).toFixed(2);
+        const lo = Math.min(lg.loI, lg.hiI), hi = Math.max(lg.loI, lg.hiI);
+        const vol = bars.slice(lo, hi + 1).reduce((a, b) => a + b.v, 0);
+        rh += `<div class="leg-pill" style="border-color:${col}">`
+            + `<span style="color:${col};font-weight:bold">Leg ${li + 1}</span>`
+            + `<span style="color:#fff">+${pctG}% (+$${dolG})</span>`
+            + `<span style="color:var(--d)">Vol: ${fmtV(vol)} · Rot: ${fmtRot(vol, flt)}</span>`
+            + `<button onclick="_deleteLeg(${li})" style="background:transparent;border:0;color:#ff5a5a;cursor:pointer;padding:0 2px;font-size:12px">×</button>`
+            + `</div>`;
+      });
+      ribbonEl.innerHTML = rh;
+    }
+  }
+
+  // 2. Dynamic update of Panel 1 "Leg" card
   const legCard = document.getElementById('legCard');
   if(legCard){
     const vEl = legCard.querySelector('.v');
@@ -1490,7 +1623,7 @@ function _updateLegPanel(){
     }
   }
 
-  // 2. Dedicated #legPanel below chart
+  // 3. Dedicated #legPanel below chart
   const el = document.getElementById('legPanel');
   if(!el) return;
   if(!s.legs.length){
