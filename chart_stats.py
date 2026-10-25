@@ -2431,35 +2431,51 @@ function renderAdminView(){
   }
 
   if(activeViewMode === 'user'){
-    const users = ['KARTHIK', 'LOCKE', 'GUNSHOW'];
+    // Collect all users from data (not just the fixed 3)
+    const allUsersSet = new Set(['KARTHIK', 'LOCKE', 'GUNSHOW']);
     const counts = {};
     const uniqueSymbols = {};
+    const lastSeen = {};
     adminRows.forEach(s => {
       const usr = (s.user || 'UNKNOWN').toUpperCase();
+      allUsersSet.add(usr);
       counts[usr] = (counts[usr] || 0) + 1;
       if(!uniqueSymbols[usr]) uniqueSymbols[usr] = new Set();
       if(s.ticker) uniqueSymbols[usr].add(s.ticker.toUpperCase());
+      if(!lastSeen[usr] || s.time > lastSeen[usr]) lastSeen[usr] = s.time;
     });
+    const allUsers = Array.from(allUsersSet).sort((a,b) => (counts[b]||0) - (counts[a]||0));
 
-    let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px">`+
-      `<div style="font-size:13px;color:#8a8a8a">Select a user to view what symbols they have searched:</div>`+
-      `<div style="font-size:12px;background:#141414;border:1px solid #333;padding:4px 10px;border-radius:3px;color:#29a8ff">Total searches logged: <b>${adminRows.length}</b></div>`+
+    // Build header with search
+    let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">` +
+      `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">` +
+      `<div style="font-size:13px;color:#8a8a8a">Click a user to view their search history:</div>` +
+      `<input id="user_search_q" placeholder="Search user..." autocomplete="off" value="" style="height:32px;width:160px;font-size:13px;padding:0 10px;background:#000;border:1px solid #444;color:#fff;border-radius:3px">` +
+      `</div>` +
+      `<div style="font-size:12px;background:#141414;border:1px solid #333;padding:4px 10px;border-radius:3px;color:#29a8ff">Total searches logged: <b>${adminRows.length}</b></div>` +
       `</div>`;
-    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:12px;margin-bottom:26px">';
 
-    for(const u of users){
+    // Vertical user card list
+    html += `<div id="user_card_list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:26px">`;
+
+    for(const u of allUsers){
       const c = counts[u] || 0;
       const uniq = uniqueSymbols[u] ? uniqueSymbols[u].size : 0;
-      const countLabel = c ? `${c} search${c===1?'':'es'} • ${uniq} ticker${uniq===1?'':'s'}` : '0 searches';
-      html += `<div onclick="openUserPopup('${esc(u)}')" style="background:#0e0e0e;border:1px solid #282828;padding:18px 20px;border-radius:4px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;transition:background 0.15s, border-color 0.15s;user-select:none" onmouseover="this.style.background='#161616';this.style.borderColor='#444'" onmouseout="this.style.background='#0e0e0e';this.style.borderColor='#282828'">`+
-        `<div><div style="font-size:16px;font-weight:bold;color:#f0f0f0">${esc(u)}</div>`+
-        `<div style="font-size:12px;color:${c ? '#3ddc84' : '#666'};margin-top:4px">${countLabel}</div></div>`+
-        `<span style="font-size:12px;color:#888">View →</span>`+
-      `</div>`;
+      const countLabel = c ? `${c} search${c===1?'':'es'} &nbsp;·&nbsp; ${uniq} unique ticker${uniq===1?'':'s'}` : '0 searches';
+      const lastLabel = lastSeen[u] ? `<span style="font-size:11px;color:#555;margin-left:10px">last: ${esc(lastSeen[u])}</span>` : '';
+      html += `<div class="user_card_row" data-uname="${esc(u)}" onclick="openUserPopup('${esc(u)}')" style="background:#0e0e0e;border:1px solid #222;padding:14px 18px;border-radius:4px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;transition:background 0.12s,border-color 0.12s;user-select:none" onmouseover="this.style.background='#161616';this.style.borderColor='#29a8ff'" onmouseout="this.style.background='#0e0e0e';this.style.borderColor='#222'">` +
+        `<div style="display:flex;align-items:center;gap:14px">` +
+        `<div style="width:36px;height:36px;border-radius:50%;background:#181818;border:1px solid #333;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:bold;color:#29a8ff">${esc(u[0])}</div>` +
+        `<div>` +
+        `<div style="font-size:15px;font-weight:bold;color:#f0f0f0">${esc(u)}</div>` +
+        `<div style="font-size:12px;color:${c ? '#3ddc84' : '#555'};margin-top:2px">${countLabel}${lastLabel}</div>` +
+        `</div></div>` +
+        `<span style="font-size:12px;color:#555">View →</span>` +
+        `</div>`;
     }
-    html += '</div>';
+    html += `</div>`;
 
-    // Full chronological log below with clean neutral colors
+    // Full chronological log below
     html += `<div class="panel"><div class="ttl" style="margin-bottom:10px">All Searches Chronological Log</div>`+
       `<div class="scroll"><table><thead><tr><th style="width:50px">#</th><th style="width:190px">Time (IST)</th><th style="width:140px">User</th><th>Ticker</th></tr></thead><tbody>`+
       adminRows.map((s, idx)=>{
@@ -2468,6 +2484,20 @@ function renderAdminView(){
       `</tbody></table></div></div>`;
 
     container.innerHTML = html;
+
+    // Wire up the search filter
+    const searchInput = document.getElementById('user_search_q');
+    if(searchInput){
+      searchInput.oninput = () => {
+        const q = (searchInput.value || '').trim().toUpperCase();
+        document.querySelectorAll('.user_card_row').forEach(row => {
+          const name = (row.getAttribute('data-uname') || '').toUpperCase();
+          row.style.display = (!q || name.includes(q)) ? 'flex' : 'none';
+        });
+      };
+      searchInput.focus();
+    }
+
 
   } else {
     // Ticker-wise view: tickers sorted by recent-wise searched
