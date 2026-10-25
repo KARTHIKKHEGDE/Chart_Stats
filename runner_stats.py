@@ -214,9 +214,13 @@ def div(a, b):
 
 
 # ---------------- data shaping ----------------
-def load_daily(tkr):
+def load_daily(tkr, start_date=None):
     today = datetime.now(ET).date()
-    frm = (today - timedelta(days=LOOKBACK_DAYS + 60)).isoformat()
+    if start_date:
+        frm_date = min(start_date - timedelta(days=60), today - timedelta(days=LOOKBACK_DAYS + 60))
+    else:
+        frm_date = today - timedelta(days=LOOKBACK_DAYS + 60)
+    frm = frm_date.isoformat()
     rows = []
     for b in aggs(tkr, 1, "day", frm, today.isoformat()):
         d = datetime.fromtimestamp(b["t"] / 1000 + 6 * 3600, timezone.utc).date()
@@ -490,16 +494,16 @@ def frd_intraday(tkr, d, prev_close):
 
 # ---------------- main analysis ----------------
 def analyze(tkr, start_s=None, frd_s=None, float_m=None):
-    D = load_daily(tkr)
+    if not start_s:
+        raise RuntimeError("Enter the rally start date")
+    sd = datetime.strptime(start_s, "%Y-%m-%d").date()
+    D = load_daily(tkr, start_date=sd)
     if len(D) < 30:
         raise RuntimeError("Not enough daily data for " + tkr)
     n = len(D)
     notes, alts_txt = [], []
 
     # ---- rally window
-    if not start_s:
-        raise RuntimeError("Enter the rally start date")
-    sd = datetime.strptime(start_s, "%Y-%m-%d").date()
     si = next((i for i, r in enumerate(D) if r["d"] >= sd), None)
     if si is None:
         raise RuntimeError("Start date is after the last bar")
@@ -619,19 +623,8 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
     green = sum(1 for r in R if r["c"] > r["o"])
 
     # ================= PANEL 1 =================
-    leg_txt = "  |  ".join(f"L{i + 1} {pct(p, 0)} / {d}d" for i, (p, d) in enumerate(legs))
-    if legs_15:
-        m_bases = sum(1 for lg in legs_15 if lg.get("base"))
-        leg_summary_15 = "  |  ".join(
-            f"L{lg['leg_num']} {pct(lg['pct_gain'], 0)} (${lg['dollar_gain']:.2f}, {rot(lg['float_rot']) if lg.get('float_rot') else '-'})"
-            for lg in legs_15
-        )
-        p1_leg = ["Leg", f"{len(legs_15)} legs  ({pct(rally_run, 0)})", leg_summary_15]
-    else:
-        p1_leg = ["Leg", f"{len(legs)} legs  ({pct(rally_run, 0)})", leg_txt]
-
     p1 = [
-        p1_leg,
+        ["Leg", "0 legs drawn", "Draw legs on 15min chart below (click or drag)"],
         ["Float (before rally)", big(flt), flt_src],
         ["Market cap (before rally)", usd(mcap_before), f"{dstr(pre['d'])} close {px(pre['c'])}"],
         ["Float rotation (start -> high)", rot(div(rally_vol, flt)), f"{big(rally_vol)} sh over {ndays}d"],
@@ -657,11 +650,6 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
         ["Days start -> high", f"{ndays}  ({green} green)"],
         ["Biggest day move", f"{pct(big_move_pct, 0)} on {dstr(D[big_move]['d'])}"],
     ]
-    if legs_15:
-        p2_prof.append(["15m Legs before falling", f"{len(legs_15)} legs ({m_bases} bases)"])
-        p2_prof.append(["15m Leg breakdown", leg_summary_15])
-    else:
-        p2_prof.append(["Legs", leg_txt])
     p2.append(["Rally profile", p2_prof])
     p2.append(["Volume", [
         ["Total rally volume", big(rally_vol)],
@@ -704,34 +692,7 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
         ["FRD open -> HOD", rot(div(mb["o2h_vol"], flt)) if mb else "-"],
         ["FRD full day", rot(div(fv_tot, flt))],
     ]])
-    # ---- one panel per 15min leg ----
-    for lg in legs_15:
-        base = lg.get("base")
-        rows = [
-            ["Price range",      f"{px(lg['low_px'])} → {px(lg['high_px'])}"],
-            ["% gain",           pct(lg["pct_gain"], 0)],
-            ["$ move / share",   f"${lg['dollar_gain']:,.2f}"],
-            ["Float rotation",   rot(lg["float_rot"]) if lg["float_rot"] is not None else "-"],
-            ["$ volume",         usd(lg["dv"])],
-            ["Volume (shares)",  big(lg["vol"])],
-            ["Duration (15m bars)", str(lg["bars"])],
-            ["Time window (IST)", f"{lg['start_t']} → {lg['end_t']}"],
-        ]
-        if base:
-            rows += [
-                ["-" * 20, ""],
-                ["Base after leg",      ""],
-                ["  Base low",          px(base["low_px"])],
-                ["  Pullback depth",    pct(base["depth"], 0)],
-                ["  Base duration (15m)", str(base["bars"]) + " bars"],
-                ["  Base window (IST)", f"{base['start_t']} → {base['end_t']}"],
-            ]
-        else:
-            rows += [
-                ["-" * 20, ""],
-                ["Status", "Final leg before rally peak / fall"],
-            ]
-        p2.append([f"Leg {lg['leg_num']} (15min pivot structure)", rows])
+# (legs are manually drawn by user on the interactive chart)
     if frd:
         p2.append(["First red day detail", [
             ["Date / gap", f"{dstr(frd['d'])}  /  {pct(mb['gap']) if mb else '-'}"],
@@ -784,22 +745,10 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
             "bars": bars_15,
             "pivot_highs": ph_15,
             "pivot_lows": pl_15,
-            "legs": [{
-                "leg_num":      lg["leg_num"],
-                "lo_bar_i":     lg["lo_bar_i"],
-                "hi_bar_i":     lg["hi_bar_i"],
-                "base_lo_bar_i": lg.get("base_lo_bar_i"),
-                "low_px":       lg["low_px"],
-                "high_px":      lg["high_px"],
-                "pct_txt":      pct(lg["pct_gain"], 0),
-                "dollar_txt":   "$" + f"{lg['dollar_gain']:,.2f}",
-                "rot_txt":      rot(lg["float_rot"]) if lg.get("float_rot") is not None else "-",
-                "dv_txt":       usd(lg["dv"]),
-                "vol_txt":      big(lg["vol"]),
-                "base_depth_txt": pct(lg["base"]["depth"], 0) if lg.get("base") else None,
-                "base_bars_txt":  str(lg["base"]["bars"]) + " bars" if lg.get("base") else None,
-                "base_lo_px":     lg["base"]["low_px"] if lg.get("base") else None,
-            } for lg in legs_15],
+            "float_val": flt,
+            "shares_out": shares,
+            "mcap_before": mcap_before,
+            "legs": [],
         }
 
     return dict(
@@ -840,7 +789,7 @@ body{margin:0;background:#000;color:var(--w);font:15px/1.45 Consolas,"SF Mono",M
 input[type=text],input[type=number]{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:18px;padding:0 12px;height:48px}
 input[type=date]{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:14px;padding:0 10px;height:48px;color-scheme:dark}
 #t{width:140px;text-transform:uppercase;font-size:20px}
-button{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:16px;padding:0 16px;height:48px;cursor:pointer}
+button{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:16px;padding:0 16px;height:48px;cursor:pointer;transition:all .15s}
 button:hover{background:#1a1a1a}
 label{color:var(--d);font-size:13px;display:flex;flex-direction:column;gap:3px}
 #out{margin:0 34px 40px;border:1px solid #222;padding:20px 22px;background:#000}
@@ -864,7 +813,9 @@ td:first-child{color:var(--w)}tr:hover td{background:#0d0d0d}
 .note{color:#a08840;font-size:12px;margin-top:4px}.err{color:var(--r)}.status{color:var(--d);font-size:13px;margin-left:4px}
 h2{font-size:12px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;margin:22px 0 0;border-bottom:1px solid var(--line);padding-bottom:4px}
 .back-btn{margin-left:auto;border-color:var(--c);color:var(--c)}.back-btn:hover{background:#001a33}
-#c15wrap{overflow-x:auto;border:1px solid var(--line);background:#050505;position:relative;margin-top:10px}
+#c15wrap{overflow-x:auto;border:1px solid var(--line);background:#050505;position:relative;margin-top:10px;user-select:none}
+.btn-tool{font-size:12px;padding:3px 12px;height:30px;line-height:1;border-radius:2px}
+.btn-tool:hover{filter:brightness(1.2)}
 </style></head><body>
 <div class="bar">
   <input id="t" type="text" placeholder="TICKER" autofocus>
@@ -882,9 +833,7 @@ h2{font-size:12px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;ma
 let LAST=null, API_BASE='/api';
 const $=id=>document.getElementById(id);
 
-// detect if served from /runner route (chart_stats integration)
 if(location.pathname.startsWith('/runner')) API_BASE='/api/runner';
-
 document.getElementById('backbtn').onclick=()=>{
   window.location.href = location.pathname.startsWith('/runner') ? '/' : 'javascript:history.back()';
 };
@@ -893,7 +842,7 @@ async function run(){
   const t=$('t').value.trim().toUpperCase(); if(!t) return;
   if(!$('s').value){$('out').innerHTML='<span class="err">Enter the rally start date.</span>';return;}
   const q=new URLSearchParams({ticker:t,start:$('s').value,frd:$('f').value,float_m:$('fl').value});
-  $('st').textContent='loading\u2026';$('out').innerHTML='';
+  $('st').textContent='loading…';$('out').innerHTML='';
   try{
     const r=await fetch(API_BASE+'/analyze?'+q);const j=await r.json();
     if(!r.ok){$('out').innerHTML='<span class="err">'+(j.error||'error')+'</span>';$('st').textContent='';return;}
@@ -905,14 +854,29 @@ function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>
 
 function render(j){
   let h='<div class="hdr">'+esc(j.header)+'</div>';
-  if(j.alts&&j.alts.length)h+='<div class="alt">other rallies: '+j.alts.map(esc).join(' \u00b7 ')+'</div>';
-  h+='<h2>Key stats</h2><div class="grid">'+j.p1.map(c=>'<div class="card"><div class="k">'+esc(c[0])+'</div><div class="v">'+esc(c[1])+'</div><div class="s">'+esc(c[2]||'')+'</div></div>').join('')+'</div>';
+  if(j.alts&&j.alts.length)h+='<div class="alt">other rallies: '+j.alts.map(esc).join(' · ')+'</div>';
+  h+='<h2>Key stats</h2><div class="grid">'+j.p1.map(c=>'<div class="card" '+(c[0]==='Leg'?'id="legCard"':'')+'><div class="k">'+esc(c[0])+'</div><div class="v">'+esc(c[1])+'</div><div class="s">'+esc(c[2]||'')+'</div></div>').join('')+'</div>';
+  
   if(j.chart_15&&j.chart_15.bars&&j.chart_15.bars.length){
-    h+='<h2>15min Structure Chart <span style="color:var(--d);font-weight:normal;text-transform:none;letter-spacing:0;font-size:11px">  pivot-swing legs \u2014 scroll horizontally if needed</span><label style="float:right;font-size:11px;color:var(--d);font-weight:normal;text-transform:none;letter-spacing:0;cursor:pointer"><input type="checkbox" id="bz15" style="vertical-align:middle;margin-right:4px"> Bone zone (EMA9/20 + BB)</label></h2>';
+    h+='<div style="display:flex;align-items:center;gap:12px;margin:24px 0 6px;flex-wrap:wrap">'
+      +'<h2 style="margin:0;border:0;padding:0">15min Structure Chart</h2>'
+      +'<span style="color:var(--d);font-size:12px">scroll horizontally if needed</span>'
+      +'<div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+      +'<button id="btnDraw" class="btn-tool" style="border-color:#ffd23f;color:#ffd23f;background:#241d00;font-weight:bold">✏ Draw Leg (D)</button>'
+      +'<button id="btnUndo" class="btn-tool">↶ Undo (Z)</button>'
+      +'<button id="btnClear" class="btn-tool">🗑 Clear All</button>'
+      +'<label style="font-size:12px;color:var(--d);cursor:pointer;display:inline-flex;align-items:center;margin:0;flex-direction:row;gap:6px"><input type="checkbox" id="bz15" style="margin:0;vertical-align:middle"> Bone zone (EMA9/20 + BB)</label>'
+      +'</div></div>';
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;margin:4px 0 6px;flex-wrap:wrap;gap:8px">'
+      +'<div id="drawStatus" style="color:#ffd23f;font-size:12px;font-family:Consolas,monospace;min-height:18px"></div>'
+      +'<div style="color:var(--d);font-size:11px">Tip: Click LOW bar then HIGH bar (or click & drag). Hotkeys: [D] Draw · [Z] Undo · [Esc] Cancel</div>'
+      +'</div>';
     h+='<div id="c15wrap"></div>';
+    h+='<div id="legPanel" style="margin-top:14px"></div>';
   }
+  
   h+='<h2>Deep stats</h2><div class="g2">'+j.p2.map(s=>'<div class="sec"><h3>'+esc(s[0])+'</h3>'+s[1].map(r=>'<div class="row"><span>'+esc(r[0])+'</span><span>'+esc(r[1])+'</span></div>').join('')+'</div>').join('')+'</div>';
-  h+='<h2>Rally days (start \u2192 FRD)</h2><div class="scroll"><table><thead><tr>'+j.table.cols.map(c=>'<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>';
+  h+='<h2>Rally days (start → FRD)</h2><div class="scroll"><table><thead><tr>'+j.table.cols.map(c=>'<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>';
   j.table.rows.forEach(r=>{
     const tag=(r[r.length-1]||'').trim();
     let rc='';
@@ -924,8 +888,9 @@ function render(j){
   h+='</tbody></table></div>';
   h+=j.notes.map(n=>'<div class="note">* '+esc(n)+'</div>').join('');
   $('out').innerHTML=h;
+  
   if(j.chart_15&&j.chart_15.bars&&j.chart_15.bars.length){
-    setTimeout(()=>{drawChart15(j.chart_15);const bz=document.getElementById('bz15');if(bz)bz.onchange=()=>drawChart15(j.chart_15);},20);
+    setTimeout(()=>initChart15(j.chart_15),20);
   }
 }
 
@@ -938,12 +903,13 @@ function copyAll(){
 $('go').onclick=run;$('rf').onclick=run;$('cp').onclick=copyAll;
 $('t').addEventListener('keydown',e=>{if(e.key==='Enter')run()});
 
-// ================= CANVAS CHART =================
-function fmtP(v){return v<1?'$'+v.toFixed(4):v<100?'$'+v.toFixed(2):'$'+v.toFixed(0);}
-function fmtV(v){return v>=1e6?(v/1e6).toFixed(1)+'M':v>=1e3?(v/1e3).toFixed(0)+'K':String(v);}
+// ================= CANVAS CHART & INTERACTIVE DRAWING =================
+function fmtP(v){if(v==null)return '-';return v<1?'$'+v.toFixed(4):v<100?'$'+v.toFixed(2):'$'+v.toFixed(0);}
+function fmtV(v){if(!v)return '0';return v>=1e6?(v/1e6).toFixed(1)+'M':v>=1e3?(v/1e3).toFixed(0)+'K':String(v);}
+function fmtDv(v){if(!v)return '$0';return v>=1e9?'$'+(v/1e9).toFixed(2)+'B':v>=1e6?'$'+(v/1e6).toFixed(2)+'M':v>=1e3?'$'+(v/1e3).toFixed(0)+'K':'$'+v.toFixed(0);}
+function fmtRot(v,flt){if(!flt||!v)return '-';const x=v/flt;return (x*100).toFixed(0)+'% ('+x.toFixed(2)+'x)';}
 function niceNum(v){const p=Math.pow(10,Math.floor(Math.log10(v)));const f=v/p;return(f<1.5?1:f<3?2:f<7?5:10)*p;}
 
-// Bone zone: EMA9, EMA20, Bollinger Bands (20,2) on 15-min closes
 function boneZone15(bars){
   const n=bars.length,a9=2/10,a20=2/21;
   const e9=[],e20=[],bu=[],bl=[];
@@ -960,226 +926,643 @@ function boneZone15(bars){
   return {e9,e20,bu,bl};
 }
 
-function drawChart15(data){
-  const bzChecked=document.getElementById('bz15')&&document.getElementById('bz15').checked;
-  const wrap=$('c15wrap');
-  if(!wrap||!data||!data.bars||!data.bars.length)return;
-  wrap.innerHTML='';
+let _chartState = null;
 
-  const bars=data.bars,legs=data.legs||[],N=bars.length;
-  const pivH=new Set(data.pivot_highs||[]),pivL=new Set(data.pivot_lows||[]);
+function _setStatus(msg){
+  const el=document.getElementById('drawStatus');
+  if(el) el.textContent = msg || '';
+}
 
-  const CW=Math.max(3,Math.min(12,Math.floor(880/N)));
-  const GAP=Math.max(1,Math.ceil(CW*0.25));
-  const UNIT=CW+GAP;
-  const PL=72,PR=8,PT=18,PBOT=22,PRICEH=390,VOLH=90;
-  const TH=PT+PRICEH+VOLH+PBOT;
-  const TW=Math.max(800,PL+N*UNIT+PR);
+function _updateToolbarUI(){
+  const s = _chartState;
+  const btn = document.getElementById('btnDraw');
+  if(!btn || !s) return;
+  if(s.drawMode){
+    btn.style.borderColor = '#ffd23f';
+    btn.style.color = '#ffd23f';
+    btn.style.background = '#282000';
+    btn.textContent = '✏ Drawing Active (D)';
+  } else {
+    btn.style.borderColor = '#3ddc84';
+    btn.style.color = '#3ddc84';
+    btn.style.background = '#0d0d0d';
+    btn.textContent = '✏ Draw Leg (D)';
+  }
+}
 
-  const cv=document.createElement('canvas');
-  cv.width=TW;cv.height=TH;cv.style.cssText='display:block;cursor:crosshair';
-  const tipEl=document.createElement('div');
-  tipEl.style.cssText='position:absolute;background:#0d0d0d;border:1px solid #444;color:#e0e0e0;font:11px Consolas;padding:5px 10px;pointer-events:none;display:none;z-index:10;white-space:pre;line-height:1.6;border-radius:2px;box-shadow:0 4px 12px rgba(0,0,0,.8)';
-  wrap.style.position='relative';
-  wrap.appendChild(cv);wrap.appendChild(tipEl);
-  const ctx=cv.getContext('2d');
+function initChart15(data){
+  const wrap = $('c15wrap');
+  if(!wrap || !data || !data.bars || !data.bars.length) return;
+  wrap.innerHTML = '';
 
-  let maxP=Math.max(...bars.map(b=>b.h));
-  let minP=Math.min(...bars.map(b=>b.l));
-  const pad=(maxP-minP)*0.09;maxP+=pad;minP=Math.max(0,minP-pad*0.5);
-  const PRNG=maxP-minP;
-  const maxV=Math.max(...bars.map(b=>b.v));
+  const bars = data.bars, N = bars.length;
+  const CW = Math.max(3, Math.min(12, Math.floor(880 / N)));
+  const GAP = Math.max(1, Math.ceil(CW * 0.25));
+  const UNIT = CW + GAP;
+  const PL = 72, PR = 16, PT = 24, PBOT = 24, PRICEH = 410, VOLH = 90;
+  const TH = PT + PRICEH + VOLH + PBOT;
+  const TW = Math.max(880, PL + N * UNIT + PR);
 
-  const xOf=i=>PL+i*UNIT;
-  const xM=i=>PL+i*UNIT+CW/2;
-  const yP=p=>PT+(maxP-p)/PRNG*PRICEH;
-  const yV=v=>PT+PRICEH+VOLH-(v/maxV)*(VOLH-4);
+  const cv = document.createElement('canvas');
+  cv.width = TW; cv.height = TH;
+  cv.style.cssText = 'display:block;cursor:crosshair;';
+  
+  const tipEl = document.createElement('div');
+  tipEl.style.cssText = 'position:absolute;background:rgba(10,10,10,.95);border:1px solid #444;color:#e0e0e0;font:11px Consolas,monospace;padding:6px 12px;pointer-events:none;display:none;z-index:20;white-space:pre;line-height:1.6;border-radius:3px;box-shadow:0 6px 16px rgba(0,0,0,.85)';
+  
+  wrap.style.position = 'relative';
+  wrap.appendChild(cv);
+  wrap.appendChild(tipEl);
+
+  const ctx = cv.getContext('2d');
+
+  let maxP = Math.max(...bars.map(b => b.h));
+  let minP = Math.min(...bars.map(b => b.l));
+  const pad = (maxP - minP) * 0.10;
+  maxP += pad; minP = Math.max(0, minP - pad * 0.5);
+  const PRNG = maxP - minP || 1;
+  const maxV = Math.max(...bars.map(b => b.v)) || 1;
+
+  const xOf = i => PL + i * UNIT;
+  const xM  = i => PL + i * UNIT + CW / 2;
+  const yP  = p => PT + (maxP - p) / PRNG * PRICEH;
+  const yV  = v => PT + PRICEH + VOLH - (v / maxV) * (VOLH - 4);
+
+  _chartState = {
+    data, bars, N, CW, UNIT, PL, PR, PT, PRICEH, VOLH, TW, TH, xOf, xM, yP, yV, maxP, minP, PRNG, maxV,
+    cv, ctx, tipEl, wrap,
+    drawMode: true,
+    pending: null,
+    hoverI: -1,
+    dragStartI: null,
+    dragStartTime: 0,
+    isDragging: false,
+    legs: [],
+  };
+
+  _updateToolbarUI();
+  _setStatus('✏ DRAW MODE ACTIVE: Click LOW bar of Leg 1 (or click & drag to High)');
+
+  // Wire buttons
+  const btnDraw = document.getElementById('btnDraw');
+  const btnUndo = document.getElementById('btnUndo');
+  const btnClear = document.getElementById('btnClear');
+  const bz = document.getElementById('bz15');
+
+  if(btnDraw) btnDraw.onclick = () => {
+    _chartState.drawMode = !_chartState.drawMode;
+    _chartState.pending = null;
+    _updateToolbarUI();
+    _setStatus(_chartState.drawMode ? '✏ Click LOW bar of the leg' : 'Draw mode paused. Press "Draw Leg" to resume.');
+    _renderFrame();
+  };
+
+  if(btnUndo) btnUndo.onclick = () => {
+    if(_chartState.pending != null){
+      _chartState.pending = null;
+      _setStatus('Cancelled pending start.');
+    } else if(_chartState.legs.length){
+      _chartState.legs.pop();
+      _setStatus(`Undid last leg. ${_chartState.legs.length} leg(s) remaining.`);
+    }
+    _renderFrame();
+    _updateLegPanel();
+  };
+
+  if(btnClear) btnClear.onclick = () => {
+    _chartState.legs = [];
+    _chartState.pending = null;
+    _setStatus('Cleared all legs.');
+    _renderFrame();
+    _updateLegPanel();
+  };
+
+  if(bz) bz.onchange = () => _renderFrame();
+
+  // Global key bindings
+  window.onkeydown = (e) => {
+    if(e.target.tagName === 'INPUT') return;
+    if(e.key === 'Escape'){
+      if(_chartState.pending != null){
+        _chartState.pending = null;
+        _setStatus('Cancelled pending start point.');
+        _renderFrame();
+      }
+    } else if(e.key.toLowerCase() === 'z'){
+      if(_chartState.pending != null){
+        _chartState.pending = null;
+        _setStatus('Cancelled pending start.');
+      } else if(_chartState.legs.length){
+        _chartState.legs.pop();
+        _setStatus(`Undid last leg. ${_chartState.legs.length} remaining.`);
+      }
+      _renderFrame();
+      _updateLegPanel();
+    } else if(e.key.toLowerCase() === 'd' || e.key.toLowerCase() === 'l'){
+      _chartState.drawMode = !_chartState.drawMode;
+      _chartState.pending = null;
+      _updateToolbarUI();
+      _setStatus(_chartState.drawMode ? '✏ Click LOW bar to start leg' : 'Draw mode paused.');
+      _renderFrame();
+    } else if(e.key.toLowerCase() === 'c' && (e.ctrlKey || e.metaKey)){
+      _chartState.legs = [];
+      _chartState.pending = null;
+      _renderFrame();
+      _updateLegPanel();
+    }
+  };
+
+  // Mouse handling on canvas
+  cv.onmousemove = function(ev){
+    const rect = cv.getBoundingClientRect();
+    const scX = cv.width / rect.width;
+    const mx = (ev.clientX - rect.left) * scX;
+    const i = Math.max(0, Math.min(N - 1, Math.floor((mx - PL) / UNIT)));
+    _chartState.hoverI = i;
+
+    // Tooltip
+    const b = bars[i];
+    const chg = i > 0 ? ((b.c / bars[i - 1].c - 1) * 100).toFixed(2) + '%' : '-';
+    tipEl.innerHTML = b.t + '\nO ' + fmtP(b.o) + '  H ' + fmtP(b.h) + '  L ' + fmtP(b.l) + '  C ' + fmtP(b.c) + '\nVol ' + fmtV(b.v) + '  Chg ' + chg;
+    const offX = Math.min(ev.offsetX + 14, wrap.offsetWidth - 220);
+    tipEl.style.left = Math.max(10, offX) + 'px';
+    tipEl.style.top = Math.max(8, ev.offsetY - 70) + 'px';
+    tipEl.style.display = 'block';
+
+    _renderFrame();
+  };
+
+  cv.onmouseleave = function(){
+    _chartState.hoverI = -1;
+    tipEl.style.display = 'none';
+    _renderFrame();
+  };
+
+  cv.onmousedown = function(ev){
+    if(!_chartState.drawMode) return;
+    const rect = cv.getBoundingClientRect();
+    const scX = cv.width / rect.width;
+    const mx = (ev.clientX - rect.left) * scX;
+    const i = Math.max(0, Math.min(N - 1, Math.floor((mx - PL) / UNIT)));
+    _chartState.dragStartI = i;
+    _chartState.dragStartTime = Date.now();
+    _chartState.isDragging = true;
+
+    if(_chartState.pending == null){
+      _chartState.pending = i;
+      _setStatus(`📍 Leg ${_chartState.legs.length + 1} LOW set: ${bars[i].t} (${fmtP(bars[i].l)}) — Now click or drag to the HIGH bar`);
+      _renderFrame();
+    }
+  };
+
+  cv.onmouseup = function(ev){
+    if(!_chartState.drawMode) return;
+    const rect = cv.getBoundingClientRect();
+    const scX = cv.width / rect.width;
+    const mx = (ev.clientX - rect.left) * scX;
+    const i = Math.max(0, Math.min(N - 1, Math.floor((mx - PL) / UNIT)));
+    const duration = Date.now() - (_chartState.dragStartTime || 0);
+
+    // If drag released on different bar
+    if(_chartState.isDragging && _chartState.pending != null && i !== _chartState.pending && duration > 160){
+      _confirmLeg(_chartState.pending, i);
+      _chartState.pending = null;
+      _chartState.isDragging = false;
+      return;
+    }
+    _chartState.isDragging = false;
+  };
+
+  cv.onclick = function(ev){
+    if(!_chartState.drawMode) return;
+    const rect = cv.getBoundingClientRect();
+    const scX = cv.width / rect.width;
+    const mx = (ev.clientX - rect.left) * scX;
+    const i = Math.max(0, Math.min(N - 1, Math.floor((mx - PL) / UNIT)));
+
+    if(_chartState.pending != null && i !== _chartState.pending){
+      _confirmLeg(_chartState.pending, i);
+      _chartState.pending = null;
+    }
+  };
+
+  _renderFrame();
+  _updateLegPanel();
+}
+
+function _confirmLeg(i1, i2){
+  const s = _chartState;
+  const loI = Math.min(i1, i2), hiI = Math.max(i1, i2);
+  const loPx = s.bars[loI].l, hiPx = s.bars[hiI].h;
+  s.legs.push({loI, hiI, loPx, hiPx});
+  const pctG = ((hiPx / loPx - 1) * 100).toFixed(0);
+  _setStatus(`✅ Leg ${s.legs.length} saved (+${pctG}%). Click next bar to start Leg ${s.legs.length + 1}, or click Undo.`);
+  _renderFrame();
+  _updateLegPanel();
+}
+
+function _renderFrame(){
+  const s = _chartState;
+  if(!s) return;
+  const {ctx, bars, N, CW, UNIT, PL, PR, PT, PRICEH, VOLH, TW, TH, xOf, xM, yP, yV, maxP, minP, PRNG, maxV} = s;
+  const bzChecked = document.getElementById('bz15') && document.getElementById('bz15').checked;
 
   // Background
-  ctx.fillStyle='#050505';ctx.fillRect(0,0,TW,TH);
+  ctx.fillStyle = '#050505';
+  ctx.fillRect(0, 0, TW, TH);
 
-  // Price grid
-  const step=niceNum(PRNG/6);
-  let pp=Math.ceil(minP/step)*step;
-  while(pp<=maxP){
-    const y=yP(pp);
-    ctx.strokeStyle='#111';ctx.lineWidth=1;
-    ctx.beginPath();ctx.moveTo(PL,y);ctx.lineTo(TW-PR,y);ctx.stroke();
-    ctx.fillStyle='#555';ctx.font='9px Consolas';ctx.textAlign='right';
-    ctx.fillText(fmtP(pp),PL-4,y+3);
-    pp=Math.round((pp+step)*1e5)/1e5;
+  // Price grid lines & axis labels
+  const step = niceNum(PRNG / 6);
+  let pp = Math.ceil(minP / step) * step;
+  while(pp <= maxP){
+    const y = yP(pp);
+    ctx.strokeStyle = '#121212';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(PL, y); ctx.lineTo(TW - PR, y); ctx.stroke();
+    ctx.fillStyle = '#555';
+    ctx.font = '9px Consolas,monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(fmtP(pp), PL - 6, y + 3);
+    pp = Math.round((pp + step) * 1e5) / 1e5;
   }
 
-  // Bone zone (EMA9/EMA20 cloud + Bollinger Bands)
-  const BZ=bzChecked?boneZone15(bars):null;
-  const clipPrice=()=>{ctx.save();ctx.beginPath();ctx.rect(PL,PT,TW-PL-PR,PRICEH);ctx.clip();};
+  // Bone Zone (under candles)
+  const BZ = bzChecked ? boneZone15(bars) : null;
+  const clipPrice = () => { ctx.save(); ctx.beginPath(); ctx.rect(PL, PT, TW - PL - PR, PRICEH); ctx.clip(); };
 
-  // Leg colored bands
-  const LC=['rgba(61,220,132,.09)','rgba(41,168,255,.09)','rgba(255,210,63,.09)','rgba(255,120,90,.09)','rgba(180,100,255,.09)'];
-  legs.forEach((lg,li)=>{
-    ctx.fillStyle=LC[li%LC.length];
-    const x1=xOf(lg.lo_bar_i),x2=xOf(lg.hi_bar_i)+CW;
-    ctx.fillRect(x1,PT,x2-x1,PRICEH+VOLH);
-  });
-  // Base bands (gray)
-  legs.forEach(lg=>{
-    if(lg.base_lo_bar_i!=null){
-      ctx.fillStyle='rgba(80,80,80,.09)';
-      const x1=xOf(lg.hi_bar_i)+CW,x2=xOf(lg.base_lo_bar_i)+CW;
-      if(x2>x1)ctx.fillRect(x1,PT,x2-x1,PRICEH);
-    }
-  });
-
-  // Draw bone zone cloud BEFORE candles (below them)
   if(BZ){
     clipPrice();
-    for(let i=1;i<N;i++){
-      if(BZ.e9[i]==null||BZ.e20[i]==null)continue;
-      ctx.fillStyle=BZ.e9[i]>BZ.e20[i]?'rgba(0,220,100,0.22)':'rgba(255,60,60,0.22)';
+    // Cloud
+    for(let i = 1; i < N; i++){
+      if(BZ.e9[i] == null || BZ.e20[i] == null) continue;
+      ctx.fillStyle = BZ.e9[i] > BZ.e20[i] ? 'rgba(0,220,100,0.22)' : 'rgba(255,60,60,0.22)';
       ctx.beginPath();
-      ctx.moveTo(xM(i-1),yP(BZ.e9[i-1]));
-      ctx.lineTo(xM(i),yP(BZ.e9[i]));
-      ctx.lineTo(xM(i),yP(BZ.e20[i]));
-      ctx.lineTo(xM(i-1),yP(BZ.e20[i-1]));
-      ctx.closePath();ctx.fill();
+      ctx.moveTo(xM(i - 1), yP(BZ.e9[i - 1]));
+      ctx.lineTo(xM(i), yP(BZ.e9[i]));
+      ctx.lineTo(xM(i), yP(BZ.e20[i]));
+      ctx.lineTo(xM(i - 1), yP(BZ.e20[i - 1]));
+      ctx.closePath();
+      ctx.fill();
     }
     // Bollinger Bands
-    ['bu','bl'].forEach(k=>{
-      ctx.strokeStyle='rgba(160,160,160,0.45)';ctx.lineWidth=1;ctx.setLineDash([3,3]);
-      ctx.beginPath();let on=false;
-      for(let i=0;i<N;i++){
-        if(BZ[k][i]==null){on=false;continue;}
-        const y=yP(BZ[k][i]);
-        if(!on){ctx.moveTo(xM(i),y);on=true;}else ctx.lineTo(xM(i),y);
+    ['bu', 'bl'].forEach(k => {
+      ctx.strokeStyle = 'rgba(160,160,160,0.45)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      let on = false;
+      for(let i = 0; i < N; i++){
+        if(BZ[k][i] == null){ on = false; continue; }
+        const y = yP(BZ[k][i]);
+        if(!on){ ctx.moveTo(xM(i), y); on = true; } else ctx.lineTo(xM(i), y);
       }
-      ctx.stroke();ctx.setLineDash([]);
+      ctx.stroke();
+      ctx.setLineDash([]);
     });
     ctx.restore();
   }
 
-  // Volume separator line
-  ctx.strokeStyle='#1c1c1c';ctx.lineWidth=1;
-  ctx.beginPath();ctx.moveTo(PL,PT+PRICEH);ctx.lineTo(TW-PR,PT+PRICEH);ctx.stroke();
-  ctx.fillStyle='#333';ctx.font='9px Consolas';ctx.textAlign='left';
-  ctx.fillText('VOL',PL+4,PT+PRICEH+11);
+  // Volume separator
+  ctx.strokeStyle = '#1c1c1c';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(PL, PT + PRICEH); ctx.lineTo(TW - PR, PT + PRICEH); ctx.stroke();
+  ctx.fillStyle = '#333';
+  ctx.font = '9px Consolas,monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('VOL', PL + 4, PT + PRICEH + 11);
 
   // Volume bars
-  bars.forEach((b,i)=>{
-    ctx.fillStyle=b.c>=b.o?'rgba(61,220,132,.4)':'rgba(255,90,90,.4)';
-    const x=xOf(i),yt=yV(b.v),yb=PT+PRICEH+VOLH-2;
-    ctx.fillRect(x,yt,CW,yb-yt);
+  bars.forEach((b, i) => {
+    ctx.fillStyle = b.c >= b.o ? 'rgba(61,220,132,.38)' : 'rgba(255,90,90,.38)';
+    const x = xOf(i), yt = yV(b.v), yb = PT + PRICEH + VOLH - 2;
+    ctx.fillRect(x, yt, CW, yb - yt);
   });
 
-  // Candlesticks
-  bars.forEach((b,i)=>{
-    const isG=b.c>=b.o;
-    const col=isG?'#3ddc84':'#ff5a5a';
-    ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=1;
-    const xm=xM(i);
+  // Solid Candles (green & red both filled)
+  bars.forEach((b, i) => {
+    const isGreen = b.c >= b.o;
+    const col = isGreen ? '#3ddc84' : '#ff5a5a';
+    ctx.strokeStyle = col;
+    ctx.fillStyle = col;
+    ctx.lineWidth = 1;
+    const xm = xM(i);
     // Wick
-    ctx.beginPath();ctx.moveTo(xm,yP(b.h));ctx.lineTo(xm,yP(b.l));ctx.stroke();
-    // Body — both green and red are solid filled
-    const bt=yP(Math.max(b.o,b.c)),bb=yP(Math.min(b.o,b.c));
-    const bh=Math.max(1,bb-bt);
-    ctx.fillRect(xOf(i),bt,CW,bh);
+    ctx.beginPath(); ctx.moveTo(xm, yP(b.h)); ctx.lineTo(xm, yP(b.l)); ctx.stroke();
+    // Body (solid filled)
+    const bt = yP(Math.max(b.o, b.c));
+    const bh = Math.max(1, yP(Math.min(b.o, b.c)) - bt);
+    ctx.fillRect(xOf(i), bt, CW, bh);
   });
 
-  // Draw EMA9/EMA20 lines on top of candles
+  // Bone Zone EMA lines (on top of candles)
   if(BZ){
     clipPrice();
-    [['e9','rgb(215,255,110)'],['e20','rgb(255,165,0)']].forEach(([k,col])=>{
-      ctx.strokeStyle=col;ctx.lineWidth=1.5;ctx.beginPath();let on=false;
-      for(let i=0;i<N;i++){
-        const y=yP(BZ[k][i]);
-        if(!on){ctx.moveTo(xM(i),y);on=true;}else ctx.lineTo(xM(i),y);
+    [['e9', 'rgb(215,255,110)'], ['e20', 'rgb(255,165,0)']].forEach(([k, col]) => {
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      let on = false;
+      for(let i = 0; i < N; i++){
+        const y = yP(BZ[k][i]);
+        if(!on){ ctx.moveTo(xM(i), y); on = true; } else ctx.lineTo(xM(i), y);
       }
       ctx.stroke();
     });
-    ctx.lineWidth=1;
     ctx.restore();
   }
 
-  // Pivot markers — ▲ at lows (green), ▼ at highs (red)
-  const tri=(x,y,up,col)=>{
-    ctx.fillStyle=col;ctx.beginPath();
-    if(up){ctx.moveTo(x,y-6);ctx.lineTo(x+4,y);ctx.lineTo(x-4,y);}
-    else{ctx.moveTo(x,y+6);ctx.lineTo(x+4,y);ctx.lineTo(x-4,y);}
-    ctx.closePath();ctx.fill();
-  };
-  pivL.forEach(i=>{if(i>=0&&i<N)tri(xM(i),yP(bars[i].l)+9,true,'#3ddc84');});
-  pivH.forEach(i=>{if(i>=0&&i<N)tri(xM(i),yP(bars[i].h)-9,false,'#ff5a5a');});
+  // Confirmed Drawn Legs
+  const BC = ['#3ddc84', '#29a8ff', '#ffd23f', '#ff7850', '#b464ff', '#00e5ff'];
+  const flt = s.data.float_val;
 
-  // Leg annotation boxes at each leg high
-  const BC=['#3ddc84','#29a8ff','#ffd23f','#ff7850','#b464ff'];
-  legs.forEach((lg,li)=>{
-    const bcolor=BC[li%BC.length];
-    const hx=xM(lg.hi_bar_i),hy=yP(lg.high_px);
-    const lines=[
-      'Leg '+lg.leg_num+'  '+lg.pct_txt+'  '+lg.dollar_txt,
-      'Float rot: '+lg.rot_txt,
-      '$ vol: '+lg.dv_txt,
-      ...(lg.base_depth_txt?['Base: '+lg.base_depth_txt+' / '+lg.base_bars_txt]:['(last leg \u2014 no base)']),
-    ];
-    ctx.font='bold 11px Consolas';
-    const BW=Math.max(...lines.map(l=>ctx.measureText(l).width))+18;
-    const LH=15,BH=lines.length*LH+14;
-    let bx=hx-BW/2;
-    bx=Math.max(PL+2,Math.min(TW-PR-BW-2,bx));
-    let by=hy-BH-14;if(by<PT+2)by=hy+14;
+  s.legs.forEach((lg, li) => {
+    const col = BC[li % BC.length];
+    const x1 = xM(lg.loI), x2 = xM(lg.hiI);
+    const y1 = yP(lg.loPx), y2 = yP(lg.hiPx);
 
-    ctx.fillStyle='rgba(6,6,6,.95)';
-    ctx.fillRect(bx,by,BW,BH);
-    ctx.strokeStyle=bcolor;ctx.lineWidth=1.5;
-    ctx.strokeRect(bx,by,BW,BH);
+    // Shaded vertical region
+    ctx.fillStyle = col + '18';
+    ctx.fillRect(Math.min(x1, x2) - CW / 2, PT, Math.abs(x2 - x1) + CW, PRICEH);
 
-    lines.forEach((line,i2)=>{
-      ctx.fillStyle=i2===0?bcolor:'#aaa';
-      ctx.font=i2===0?'bold 11px Consolas':'10px Consolas';
-      ctx.textAlign='left';
-      ctx.fillText(line,bx+7,by+13+i2*LH);
-    });
-    // Dashed line: box → pivot high dot
-    ctx.strokeStyle=bcolor;ctx.lineWidth=1;ctx.setLineDash([3,3]);
-    const ly1=by<hy?by+BH:by;
-    ctx.beginPath();ctx.moveTo(hx,ly1);ctx.lineTo(hx,hy);ctx.stroke();
+    // Dashed vertical boundary markers
+    ctx.strokeStyle = col; ctx.lineWidth = 1.2; ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(x1, PT); ctx.lineTo(x1, PT + PRICEH); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x2, PT); ctx.lineTo(x2, PT + PRICEH); ctx.stroke();
     ctx.setLineDash([]);
-    // Dot
-    ctx.fillStyle=bcolor;ctx.beginPath();ctx.arc(hx,hy,3,0,Math.PI*2);ctx.fill();
+
+    // Arrow line Low -> High
+    _drawArrow(ctx, x1, y1, x2, y2, col, 10);
+
+    // Annotation Box
+    const pctG = (lg.hiPx / lg.loPx - 1) * 100;
+    const dolG = lg.hiPx - lg.loPx;
+    const lo = Math.min(lg.loI, lg.hiI), hi = Math.max(lg.loI, lg.hiI);
+    const vol = bars.slice(lo, hi + 1).reduce((a, b) => a + b.v, 0);
+    const dv  = bars.slice(lo, hi + 1).reduce((a, b) => a + (b.v * (b.c || b.h)), 0);
+    const barsCount = hi - lo + 1;
+
+    const lines = [
+      'L' + (li + 1) + '  +' + pctG.toFixed(0) + '%  (+$' + dolG.toFixed(2) + ')',
+      'Vol: ' + fmtV(vol) + '  |  $Vol: ' + fmtDv(dv),
+      'Float rot: ' + fmtRot(vol, flt),
+      bars[lg.loI].t + ' → ' + bars[lg.hiI].t + ' (' + barsCount + ' bars)',
+    ];
+
+    ctx.font = 'bold 11px Consolas,monospace';
+    const BW = Math.max(...lines.map(l => ctx.measureText(l).width)) + 18;
+    const LH = 15, BH = lines.length * LH + 14;
+    let bx = x2 - BW / 2;
+    bx = Math.max(PL + 4, Math.min(TW - PR - BW - 4, bx));
+    let by = Math.min(y1, y2) - BH - 16;
+    if(by < PT + 4) by = Math.max(y1, y2) + 16;
+
+    ctx.fillStyle = 'rgba(6,6,6,.94)';
+    ctx.fillRect(bx, by, BW, BH);
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(bx, by, BW, BH);
+
+    lines.forEach((line, i2) => {
+      ctx.fillStyle = i2 === 0 ? col : '#aaa';
+      ctx.font = i2 === 0 ? 'bold 11px Consolas,monospace' : '10px Consolas,monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(line, bx + 9, by + 13 + i2 * LH);
+    });
+
+    // Base between legs
+    if(li > 0){
+      const prev = s.legs[li - 1];
+      if(prev.hiI <= lg.loI){
+        const baseBars = bars.slice(prev.hiI, lg.loI + 1);
+        const minL = Math.min(...baseBars.map(b => b.l));
+        const depth = ((prev.hiPx - minL) / prev.hiPx * 100).toFixed(0);
+        const baseCount = lg.loI - prev.hiI;
+        const bx1 = xM(prev.hiI), by1 = yP(prev.hiPx);
+        const bx2 = xM(lg.loI), by2 = yP(minL);
+
+        ctx.strokeStyle = 'rgba(255,210,63,0.55)';
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(bx1, by1);
+        ctx.lineTo(bx2, by2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Base label
+        const baseTxt = 'Base: -' + depth + '% (' + baseCount + 'b)';
+        ctx.font = '10px Consolas,monospace';
+        const btw = ctx.measureText(baseTxt).width + 8;
+        const bmidX = (bx1 + bx2) / 2, bmidY = (by1 + by2) / 2;
+        ctx.fillStyle = 'rgba(10,10,10,.85)';
+        ctx.fillRect(bmidX - btw / 2, bmidY - 8, btw, 16);
+        ctx.fillStyle = '#ffd23f';
+        ctx.textAlign = 'center';
+        ctx.fillText(baseTxt, bmidX, bmidY + 4);
+      }
+    }
   });
 
-  // X axis time labels + vertical ticks
-  const lev=Math.max(1,Math.ceil(N/22));
-  bars.forEach((b,i)=>{
-    if(i%lev===0){
-      ctx.fillStyle='#444';ctx.font='9px Consolas';ctx.textAlign='center';
-      ctx.fillText(b.t.substring(0,5),xM(i),PT+PRICEH+VOLH+14);
-      ctx.strokeStyle='#0d0d0d';ctx.lineWidth=1;
-      ctx.beginPath();ctx.moveTo(xM(i),PT);ctx.lineTo(xM(i),PT+PRICEH);ctx.stroke();
+  // Active Pending Start Point
+  if(s.pending != null){
+    const px = xM(s.pending), py = yP(bars[s.pending].l);
+    ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(px, PT); ctx.lineTo(px, PT + PRICEH); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffd23f'; ctx.font = 'bold 10px Consolas,monospace'; ctx.textAlign = 'center';
+    ctx.fillText('START LOW', px, py - 10);
+
+    // Live Rubber-band arrow line & floating badge to hovered bar
+    if(s.hoverI >= 0){
+      const curX = xM(s.hoverI), curY = yP(bars[s.hoverI].h);
+      ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = 2; ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(curX, curY); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.arc(curX, curY, 5, 0, Math.PI * 2); ctx.fill();
+
+      // Live metric pill
+      const lo = Math.min(s.pending, s.hoverI), hi = Math.max(s.pending, s.hoverI);
+      const pLo = bars[lo].l, pHi = bars[hi].h;
+      const pct = ((pHi / pLo - 1) * 100).toFixed(0);
+      const dol = (pHi - pLo).toFixed(2);
+      const vol = bars.slice(lo, hi + 1).reduce((a, b) => a + b.v, 0);
+      const tag = `L${s.legs.length + 1}: +${pct}% (+$${dol})  |  ${fmtV(vol)}  |  ${fmtRot(vol, flt)}`;
+      
+      ctx.font = 'bold 11px Consolas,monospace';
+      const tw = ctx.measureText(tag).width + 16;
+      let pillX = curX + 14;
+      if(pillX + tw > TW - PR) pillX = curX - tw - 14;
+      let pillY = curY - 14;
+      if(pillY < PT + 14) pillY = curY + 22;
+
+      ctx.fillStyle = 'rgba(20, 16, 0, 0.95)';
+      ctx.fillRect(pillX, pillY - 12, tw, 22);
+      ctx.strokeStyle = '#ffd23f';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(pillX, pillY - 12, tw, 22);
+      ctx.fillStyle = '#ffd23f';
+      ctx.textAlign = 'left';
+      ctx.fillText(tag, pillX + 8, pillY + 3);
+    }
+  } else if(s.drawMode && s.hoverI >= 0){
+    // Hover snap indicator
+    const px = xM(s.hoverI), py = yP(bars[s.hoverI].l);
+    ctx.strokeStyle = 'rgba(255,210,63,0.7)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 2]);
+    ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // X axis time labels
+  const lev = Math.max(1, Math.ceil(N / 24));
+  bars.forEach((b, i) => {
+    if(i % lev === 0){
+      ctx.fillStyle = '#444';
+      ctx.font = '9px Consolas,monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(b.t.substring(0, 5), xM(i), PT + PRICEH + VOLH + 16);
+      ctx.strokeStyle = '#0e0e0e';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(xM(i), PT); ctx.lineTo(xM(i), PT + PRICEH); ctx.stroke();
     }
   });
 
   // Left axis border
-  ctx.strokeStyle='#222';ctx.lineWidth=1;
-  ctx.beginPath();ctx.moveTo(PL,PT);ctx.lineTo(PL,PT+PRICEH+VOLH);ctx.stroke();
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(PL, PT); ctx.lineTo(PL, PT + PRICEH + VOLH); ctx.stroke();
+}
 
-  // Hover tooltip + crosshair
-  let lastI=-1;
-  cv.onmousemove=function(ev){
-    const rect=cv.getBoundingClientRect();
-    const scX=cv.width/rect.width,scY=cv.height/rect.height;
-    const mx=(ev.clientX-rect.left)*scX,my=(ev.clientY-rect.top)*scY;
-    const i=Math.floor((mx-PL)/UNIT);
-    if(i<0||i>=N){tipEl.style.display='none';lastI=-1;return;}
-    if(i===lastI)return;lastI=i;
-    const b=bars[i];
-    const chg=i>0?((b.c/bars[i-1].c-1)*100).toFixed(2)+'%':'-';
-    tipEl.innerHTML=b.t+'\nO '+fmtP(b.o)+'  H '+fmtP(b.h)+'  L '+fmtP(b.l)+'  C '+fmtP(b.c)+'\nVol '+fmtV(b.v)+'  Chg '+chg;
-    const offX=Math.min(ev.offsetX+14,wrap.offsetWidth-200);
-    tipEl.style.left=offX+'px';
-    tipEl.style.top=Math.max(8,ev.offsetY-70)+'px';
-    tipEl.style.display='block';
-  };
-  cv.onmouseleave=()=>{tipEl.style.display='none';lastI=-1;};
+function _drawArrow(ctx, x1, y1, x2, y2, color, headLen=10){
+  const angle = Math.atan2(y2 - y1, x2 - x1);
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  // Start circle
+  ctx.beginPath();
+  ctx.arc(x1, y1, 4.5, 0, Math.PI * 2);
+  ctx.fill();
+  // Arrow head
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(x2 - headLen * Math.cos(angle - Math.PI / 6), y2 - headLen * Math.sin(angle - Math.PI / 6));
+  ctx.lineTo(x2 - headLen * Math.cos(angle + Math.PI / 6), y2 - headLen * Math.sin(angle + Math.PI / 6));
+  ctx.closePath();
+  ctx.fill();
+}
+
+function _updateLegPanel(){
+  const s = _chartState;
+  if(!s) return;
+  const bars = s.data.bars, flt = s.data.float_val, shares = s.data.shares_out;
+  const BC = ['#3ddc84', '#29a8ff', '#ffd23f', '#ff7850', '#b464ff', '#00e5ff'];
+
+  // 1. Dynamic update of Panel 1 "Leg" card
+  const legCard = document.getElementById('legCard');
+  if(legCard){
+    const vEl = legCard.querySelector('.v');
+    const sEl = legCard.querySelector('.s');
+    if(!s.legs.length){
+      if(vEl) vEl.textContent = '0 legs drawn';
+      if(sEl) sEl.textContent = 'Draw legs on 15min chart below (click or drag)';
+    } else {
+      const firstLo = s.legs[0].loPx;
+      const lastHi = Math.max(...s.legs.map(l => l.hiPx));
+      const totRun = ((lastHi / firstLo - 1) * 100);
+      if(vEl) vEl.textContent = `${s.legs.length} leg${s.legs.length > 1 ? 's' : ''} (+${totRun.toFixed(0)}%)`;
+      if(sEl){
+        const summaries = s.legs.map((lg, idx) => {
+          const g = ((lg.hiPx / lg.loPx - 1) * 100).toFixed(0);
+          const d = (lg.hiPx - lg.loPx).toFixed(2);
+          const lo = Math.min(lg.loI, lg.hiI), hi = Math.max(lg.loI, lg.hiI);
+          const vol = bars.slice(lo, hi + 1).reduce((a, b) => a + b.v, 0);
+          const rotStr = fmtRot(vol, flt);
+          return `L${idx + 1} +${g}% ($${d}, ${rotStr})`;
+        });
+        sEl.textContent = summaries.join('  |  ');
+      }
+    }
+  }
+
+  // 2. Dedicated #legPanel below chart
+  const el = document.getElementById('legPanel');
+  if(!el) return;
+  if(!s.legs.length){
+    el.innerHTML = '<div style="color:var(--d);font-size:12px;padding:12px;text-align:center;border:1px dashed #222;background:#050505">No legs drawn yet. Click "Draw Leg" above and mark the LOW and HIGH bars on the chart.</div>';
+    return;
+  }
+
+  let h = '<h3 style="margin:14px 0 8px;font-size:13px;color:var(--c);text-transform:uppercase;letter-spacing:.08em">Manually Drawn Legs (' + s.legs.length + ')</h3>';
+  h += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">';
+
+  s.legs.forEach((lg, li) => {
+    const col = BC[li % BC.length];
+    const pctG = ((lg.hiPx / lg.loPx - 1) * 100);
+    const dolG = lg.hiPx - lg.loPx;
+    const lo = Math.min(lg.loI, lg.hiI), hi = Math.max(lg.loI, lg.hiI);
+    const vol = bars.slice(lo, hi + 1).reduce((a, b) => a + b.v, 0);
+    const dv  = bars.slice(lo, hi + 1).reduce((a, b) => a + (b.v * (b.c || b.h)), 0);
+    const barsCount = hi - lo + 1;
+    const mcapMult = (lg.hiPx / lg.loPx).toFixed(1) + 'x';
+    const mcapPeak = shares ? (shares * lg.hiPx) : null;
+
+    let baseStr = '-';
+    if(li + 1 < s.legs.length){
+      const nextLg = s.legs[li + 1];
+      if(nextLg.loI >= lg.hiI){
+        const baseBars = bars.slice(lg.hiI, nextLg.loI + 1);
+        const minL = Math.min(...baseBars.map(b => b.l));
+        const depth = ((lg.hiPx - minL) / lg.hiPx * 100).toFixed(0);
+        baseStr = `-${depth}% pullback over ${baseBars.length} bars (${fmtP(minL)})`;
+      }
+    }
+
+    const rows = [
+      ['Price range', fmtP(lg.loPx) + ' → ' + fmtP(lg.hiPx)],
+      ['% gain', '<strong style="color:' + col + '">+' + pctG.toFixed(0) + '%</strong>'],
+      ['$ move / share', '+$' + dolG.toFixed(2)],
+      ['Volume', fmtV(vol)],
+      ['$ volume', fmtDv(dv)],
+      ['Float rotation', fmtRot(vol, flt)],
+      ['Market cap multiple', mcapMult + (mcapPeak ? ' (' + fmtDv(mcapPeak) + ')' : '')],
+      ['Duration', barsCount + ' bars (15min)'],
+      ['Time window (IST)', bars[lo].t + ' → ' + bars[hi].t],
+    ];
+    if(baseStr !== '-'){
+      rows.push(['Base after leg', '<span style="color:#ffd23f">' + baseStr + '</span>']);
+    }
+
+    h += '<div style="border:1px solid ' + col + ';padding:12px 14px;background:#0d0d0d;position:relative">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
+    h += '  <span style="color:' + col + ';font-size:14px;font-weight:bold">Leg ' + (li + 1) + '</span>';
+    h += '  <button onclick="_deleteLeg(' + li + ')" style="background:transparent;border:1px solid #444;color:#ff5a5a;font-size:11px;padding:2px 8px;height:22px;cursor:pointer">× Delete</button>';
+    h += '</div>';
+
+    rows.forEach(([k, v]) => {
+      h += '<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #1a1a1a"><span style="color:#8a8a8a;font-size:12px">' + k + '</span><span style="color:#e8e8e8;font-size:12px;text-align:right">' + v + '</span></div>';
+    });
+
+    h += '</div>';
+  });
+
+  h += '</div>';
+  el.innerHTML = h;
+}
+
+function _deleteLeg(index){
+  const s = _chartState;
+  if(!s || !s.legs) return;
+  s.legs.splice(index, 1);
+  s.pending = null;
+  _setStatus(`Deleted Leg ${index + 1}.`);
+  _renderFrame();
+  _updateLegPanel();
 }
 </script></body></html>"""
 
