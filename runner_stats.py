@@ -815,7 +815,7 @@ td{padding:3px 14px 3px 0;white-space:nowrap;color:var(--d)}
 td:first-child{color:var(--w)}tr:hover td{background:#0a0a0c}
 .note{color:#a08840;font-size:12px;margin-top:4px}.err{color:var(--r)}.status{color:var(--d);font-size:13px;margin-left:4px}
 h2{font-size:12px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;margin:22px 0 0;border-bottom:1px solid var(--line);padding-bottom:4px}
-.back-btn{margin-left:auto;border-color:var(--c);color:var(--c)}.back-btn:hover{background:#001a33}
+.back-btn{margin-left:auto;border-color:var(--c);color:var(--c);font-size:13px;height:40px;padding:0 16px}.back-btn:hover{background:#001a33}
 #c15wrap{overflow-x:auto;border:1px solid var(--line);background:#070709;position:relative;margin-top:8px;user-select:none;scrollbar-color:#333 #070709}
 .btn-tool{font-size:12px;padding:2px 10px;height:28px;line-height:1;border-radius:2px;display:inline-flex;align-items:center;gap:4px}
 .btn-tool:hover{filter:brightness(1.2)}
@@ -838,7 +838,7 @@ h2{font-size:12px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;ma
   <button id="rf">Refresh</button>
   <button id="cp">Copy all</button>
   <span id="st" class="status"></span>
-  <button class="back-btn" id="backbtn">← Chart Stats</button>
+  <button class="back-btn" id="backbtn">← Back to Chart Stats</button>
 </div>
 <div id="out"><span class="d">Enter a ticker and rally start date, then press Get stats.</span></div>
 <script>
@@ -847,7 +847,14 @@ const $=id=>document.getElementById(id);
 
 if(location.pathname.startsWith('/runner')) API_BASE='/api/runner';
 document.getElementById('backbtn').onclick=()=>{
-  window.location.href = location.pathname.startsWith('/runner') ? '/' : 'javascript:history.back()';
+  // If opened as a new tab (opener exists), close this tab to return to parent
+  if(window.opener && !window.opener.closed){
+    window.close();
+  } else if(document.referrer && document.referrer !== window.location.href){
+    window.location.href = document.referrer;
+  } else {
+    window.location.href = '/';
+  }
 };
 
 async function run(){

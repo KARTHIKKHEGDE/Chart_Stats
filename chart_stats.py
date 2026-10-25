@@ -1664,8 +1664,8 @@ canvas{display:block;width:100%}
     <!-- Main Screen View Switcher -->
     <button id="nav_intraday_btn" style="height:48px;padding:0 16px;border:2px solid #29a8ff;background:#002244;color:#29a8ff;font-weight:bold;cursor:pointer;border-radius:4px;font-size:14px" title="Intraday Gap Fade & Historical Setup Analysis">📈 Intraday Gap Notes</button>
     <div style="margin-left:auto;display:flex;align-items:center;gap:10px;font-size:13px;color:#8a8a8a">
-      <span>User: <span id="u_name" style="color:#29a8ff;font-weight:bold"></span><span id="u_badge"></span></span>
       <button id="nav_multiday_btn" style="height:36px;padding:0 14px;border:2px solid #00c9a7;background:#002b24;color:#00c9a7;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Multi-day Rally & First Red Day (FRD) Structure Tool">📊 Runner Stats</button>
+      <span>User: <span id="u_name" style="color:#29a8ff;font-weight:bold"></span><span id="u_badge"></span></span>
       <button id="logout_btn" style="height:34px;font-size:12px;padding:0 12px;border-color:#444">Exit</button>
     </div>
   </div>
@@ -2895,7 +2895,7 @@ function switchMainView(mode){
   }
 }
 if($('#nav_intraday_btn')) $('#nav_intraday_btn').onclick = () => switchMainView('intraday');
-if($('#nav_multiday_btn')) $('#nav_multiday_btn').onclick = () => switchMainView('multiday');
+if($('#nav_multiday_btn')) $('#nav_multiday_btn').onclick = () => window.open('/runner', '_blank');
 if($('#open_multiday_newtab')) $('#open_multiday_newtab').onclick = () => window.open('/runner', '_blank');
 if($('#multiday_stats_btn')) $('#multiday_stats_btn').onclick = () => {
   $('#admin_view').style.display = 'none';
