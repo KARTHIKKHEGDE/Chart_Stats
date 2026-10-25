@@ -50,7 +50,7 @@ def _load_env_file():
                     if line and not line.startswith("#") and "=" in line:
                         k, v = line.split("=", 1)
                         k, v = k.strip(), v.strip().strip("'\"")
-                        if k and k not in os.environ:
+                        if k and not os.environ.get(k):
                             os.environ[k] = v
         except Exception:
             pass
@@ -62,6 +62,31 @@ ET = ZoneInfo("America/New_York")
 IST = ZoneInfo("Asia/Kolkata")
 POLY_KEY = os.getenv("POLYGON_API_KEY", "")
 POLY_RPM = float(os.getenv("POLYGON_RPM", "5"))
+
+# ----------------------------------------------------------------------------- multi-key pool
+# Loaded after env is ready (see _init_key_pool())
+_key_pool: list = []          # list of API-key strings
+_key_last: dict  = {}         # key -> last-call timestamp
+_key_lock = threading.Lock()
+
+
+def _init_key_pool():
+    """Build / refresh the key pool from POLYGON_API_KEYS (comma-sep) or POLYGON_API_KEY."""
+    global _key_pool, _key_last
+    raw = os.getenv("POLYGON_API_KEYS", "") or os.getenv("POLYGON_API_KEY", "")
+    keys = [k.strip() for k in raw.split(",") if k.strip()]
+    # Deduplicate while preserving order
+    seen, unique = set(), []
+    for k in keys:
+        if k not in seen:
+            seen.add(k)
+            unique.append(k)
+    _key_pool = unique
+    for k in _key_pool:
+        _key_last.setdefault(k, 0.0)
+
+_init_key_pool()   # bootstrap pool at module load (env already loaded above)
+
 SEC_UA = os.getenv("SEC_USER_AGENT", "GapFadeAnalyzer admin@example.com")
 GAP_MIN = float(os.getenv("GAP_MIN", "0.30"))
 LOOKBACK_DAYS = 365
@@ -105,38 +130,57 @@ def cput(key, val):
         pass
 
 
-_rl_lock = threading.Lock()
-_last_call = [0.0]
+def _pick_key(rpm: float) -> tuple:
+    """Return (key, wait_seconds) for the key whose slot opens soonest."""
+    gap = 60.0 / rpm
+    now = time.time()
+    best_key, best_wait = None, float("inf")
+    for k in _key_pool:
+        w = max(0.0, _key_last[k] + gap - now)
+        if w < best_wait:
+            best_wait, best_key = w, k
+    return best_key, best_wait
 
 
 def poly_get(path, params=None):
-    global POLY_KEY
-    key = POLY_KEY or os.getenv("POLYGON_API_KEY", "")
-    if not key:
+    if not _key_pool:
         _load_env_file()
-        key = os.getenv("POLYGON_API_KEY", "")
-        POLY_KEY = key
-    if not key:
+        _init_key_pool()
+    if not _key_pool:
         raise RuntimeError("POLYGON_API_KEY is not set. Set it and restart the app.")
-    params = dict(params or {})
-    params["apiKey"] = key
+
     rpm = float(os.getenv("POLYGON_RPM", str(POLY_RPM)))
-    gap = 60.0 / rpm
-    for _ in range(5):
-        with _rl_lock:
-            wait = _last_call[0] + gap - time.time()
+    params = dict(params or {})
+
+    max_attempts = len(_key_pool) * 3   # try every key up to 3 times
+    for attempt in range(max_attempts):
+        with _key_lock:
+            key, wait = _pick_key(rpm)
             if wait > 0:
                 time.sleep(wait)
-            _last_call[0] = time.time()
-        r = requests.get("https://api.polygon.io" + path, params=params, timeout=40)
-        if r.status_code == 429:
-            time.sleep(20)
+            _key_last[key] = time.time()
+
+        params["apiKey"] = key
+        try:
+            r = requests.get("https://api.polygon.io" + path, params=params, timeout=30)
+        except requests.RequestException:
+            time.sleep(1)
             continue
+
+        if r.status_code == 429:
+            # Penalise this key: push its next-allowed time 65s into the future
+            with _key_lock:
+                _key_last[key] = time.time() + 65.0
+            # Don't sleep — just rotate to next key immediately
+            continue
+
         if r.status_code in (401, 403):
-            raise RuntimeError(f"Polygon rejected the request ({r.status_code}): {r.text[:150]}")
+            raise RuntimeError(f"Polygon rejected key …{key[-6:]} ({r.status_code}): {r.text[:150]}")
+
         r.raise_for_status()
         return r.json()
-    raise RuntimeError("Polygon rate limit hit repeatedly")
+
+    raise RuntimeError("All Polygon keys exhausted / rate-limited. Try again in a moment.")
 
 
 def load_daily(t, force=False):
