@@ -35,8 +35,7 @@ RECENT_BARS = 120        # prefer rallies whose high is within the last N bars
 BASE_MIN_DAYS = 3        # a base = >=3 days w/o a new high ...
 BASE_MIN_DEPTH = 0.10    # ... and >=10% pullback from the running high, then a new high
 RALLY_MAX_DAYS = 120     # when you give a start date: look this far for the high
-LEG_RETRACEMENT  = 0.25  # 15min leg detector: pullback >= 25% of current leg's gain = base boundary
-LEG_MIN_BARS_15M = 3     # minimum 15min bars of pullback to count as a real base
+PIVOT_N = 3              # 15min swing detection: bars required on each side of a pivot high/low
 
 app = Flask(__name__)
 S = requests.Session()
@@ -269,99 +268,112 @@ def bases_legs(R):
 
 def legs_15min(tkr, start_date, high_date, flt):
     """
-    Detect legs and bases on the 15-minute timeframe for the rally window.
-    Returns a list of leg dicts, each with:
-      leg_num, low_px, high_px, pct_gain, dollar_gain,
-      vol, dv, float_rot, bars (number of 15min bars in leg)
+    Detect rally legs on the 15min chart using structural swing pivot analysis.
+    A swing low is a bar whose low is the lowest of PIVOT_N bars on each side.
+    A swing high is a bar whose high is the highest of PIVOT_N bars on each side.
+    We build an alternating Low->High->Low->High sequence; each L->H pair = one leg.
+    Returns a list of leg dicts with full stats.
     """
-    bars = aggs(tkr, 15, "minute", start_date.isoformat(), high_date.isoformat())
-    if not bars:
+    raw = aggs(tkr, 15, "minute", start_date.isoformat(), high_date.isoformat())
+    if not raw:
         return []
 
-    # Annotate each bar with IST time and dollar-volume
-    rth_bars = []
-    for b in bars:
+    # Keep only trading hours: premarket 4am-9:30am ET + RTH 9:30am-4pm ET
+    bars = []
+    for b in raw:
         t = datetime.fromtimestamp(b["t"] / 1000, ET)
         hm = t.hour * 60 + t.minute
-        # Include premarket (4am-9:30am ET) AND regular hours (9:30am-4pm ET)
         if 240 <= hm < 960:
             b["_t"] = t.astimezone(IST)
             b["_dv"] = b["v"] * (b.get("vw") or (b["h"] + b["l"] + b["c"]) / 3)
-            rth_bars.append(b)
+            bars.append(b)
 
-    if not rth_bars:
+    n = len(bars)
+    if n < PIVOT_N * 2 + 2:
         return []
 
-    # Walk bars to detect legs using running-high + pullback method
-    legs = []
-    leg_start_i = 0
-    leg_low_px   = rth_bars[0]["l"]
-    running_hi   = rth_bars[0]["h"]
-    running_hi_i = 0
-    pullback_bars = 0
-    in_base = False
-    base_low_px  = None
-    base_low_i   = None
+    # ---- Find pivot highs and pivot lows ----
+    # Pivot high: bar[i].high > bar[i±1..N].high
+    # Pivot low : bar[i].low  < bar[i±1..N].low
+    pivots = []   # list of (bar_index, price, "H" or "L")
+    for i in range(PIVOT_N, n - PIVOT_N):
+        window = range(i - PIVOT_N, i + PIVOT_N + 1)
+        is_ph = all(bars[j]["h"] <= bars[i]["h"] for j in window if j != i)
+        is_pl = all(bars[j]["l"] >= bars[i]["l"] for j in window if j != i)
+        if is_ph and not is_pl:
+            pivots.append((i, bars[i]["h"], "H"))
+        elif is_pl and not is_ph:
+            pivots.append((i, bars[i]["l"], "L"))
 
-    for i in range(1, len(rth_bars)):
-        b = rth_bars[i]
-        if b["h"] > running_hi:
-            if in_base and pullback_bars >= LEG_MIN_BARS_15M:
-                # Commit the leg that just ended at running_hi
-                leg_bars = rth_bars[leg_start_i: running_hi_i + 1]
-                vol  = sum(x["v"]   for x in leg_bars)
-                dv   = sum(x["_dv"] for x in leg_bars)
-                legs.append(dict(
-                    leg_num   = len(legs) + 1,
-                    low_px    = leg_low_px,
-                    high_px   = running_hi,
-                    pct_gain  = running_hi / leg_low_px - 1,
-                    dollar_gain = running_hi - leg_low_px,
-                    vol=vol, dv=dv,
-                    float_rot = vol / flt if flt else None,
-                    bars      = len(leg_bars),
-                    start_t   = rth_bars[leg_start_i]["_t"].strftime("%m/%d %H:%M"),
-                    end_t     = rth_bars[running_hi_i]["_t"].strftime("%m/%d %H:%M"),
-                ))
-                # New leg starts from the base low
-                leg_start_i = base_low_i
-                leg_low_px  = base_low_px
-            # New running high
-            running_hi   = b["h"]
-            running_hi_i = i
-            in_base      = False
-            pullback_bars = 0
-            base_low_px  = None
-            base_low_i   = None
+    if not pivots:
+        return []
+
+    # ---- Build clean alternating L->H->L->H sequence ----
+    # Start from first low, enforce alternation, keep extreme when two same types in a row
+    seq = []
+    for p in pivots:
+        if not seq:
+            if p[2] == "L":
+                seq.append(p)
         else:
-            leg_gain = running_hi - leg_low_px           # dollar gain of current leg so far
-            pullback  = running_hi - b["l"]              # dollar pullback from running high
-            retracement = pullback / leg_gain if leg_gain > 0 else 0
-            if retracement >= LEG_RETRACEMENT:
-                in_base = True
-            if in_base:
-                pullback_bars += 1
-                if base_low_px is None or b["l"] < base_low_px:
-                    base_low_px = b["l"]
-                    base_low_i  = i
+            prev_type = seq[-1][2]
+            if p[2] != prev_type:
+                seq.append(p)
+            else:
+                # Keep more extreme: highest high, lowest low
+                if p[2] == "H" and p[1] > seq[-1][1]:
+                    seq[-1] = p
+                elif p[2] == "L" and p[1] < seq[-1][1]:
+                    seq[-1] = p
 
-    # Final leg (running_hi_i -> end)
-    leg_bars = rth_bars[leg_start_i: running_hi_i + 1]
-    if leg_bars:
-        vol  = sum(x["v"]   for x in leg_bars)
-        dv   = sum(x["_dv"] for x in leg_bars)
+    # ---- Extract legs (each L->H pair) ----
+    legs = []
+    i = 0
+    while i + 1 < len(seq):
+        lo_pivot  = seq[i]
+        hi_pivot  = seq[i + 1]
+        if lo_pivot[2] != "L" or hi_pivot[2] != "H":
+            i += 1
+            continue
+        lo_i, lo_px = lo_pivot[0], lo_pivot[1]
+        hi_i, hi_px = hi_pivot[0], hi_pivot[1]
+
+        # --- leg bars: from the pivot low bar to the pivot high bar
+        leg_bars = bars[lo_i: hi_i + 1]
+        vol = sum(x["v"]   for x in leg_bars)
+        dv  = sum(x["_dv"] for x in leg_bars)
+
+        # --- base (consolidation after this leg, before next leg)
+        base_info = None
+        if i + 2 < len(seq) and seq[i + 2][2] == "L":
+            bl_pivot   = seq[i + 2]
+            bl_i, bl_px = bl_pivot[0], bl_pivot[1]
+            base_bars  = bars[hi_i: bl_i + 1]
+            base_depth = (hi_px - bl_px) / hi_px   # % pullback from leg high
+            base_dur   = len(base_bars)
+            base_info  = dict(
+                low_px   = bl_px,
+                depth    = base_depth,
+                bars     = base_dur,
+                start_t  = bars[hi_i]["_t"].strftime("%m/%d %H:%M"),
+                end_t    = bars[bl_i]["_t"].strftime("%m/%d %H:%M"),
+            )
+
         legs.append(dict(
-            leg_num   = len(legs) + 1,
-            low_px    = leg_low_px,
-            high_px   = running_hi,
-            pct_gain  = running_hi / leg_low_px - 1,
-            dollar_gain = running_hi - leg_low_px,
-            vol=vol, dv=dv,
-            float_rot = vol / flt if flt else None,
-            bars      = len(leg_bars),
-            start_t   = rth_bars[leg_start_i]["_t"].strftime("%m/%d %H:%M"),
-            end_t     = rth_bars[running_hi_i]["_t"].strftime("%m/%d %H:%M"),
+            leg_num     = len(legs) + 1,
+            low_px      = lo_px,
+            high_px     = hi_px,
+            pct_gain    = hi_px / lo_px - 1,
+            dollar_gain = hi_px - lo_px,
+            vol         = vol,
+            dv          = dv,
+            float_rot   = vol / flt if flt else None,
+            bars        = len(leg_bars),
+            start_t     = bars[lo_i]["_t"].strftime("%m/%d %H:%M"),
+            end_t       = bars[hi_i]["_t"].strftime("%m/%d %H:%M"),
+            base        = base_info,
         ))
+        i += 2
 
     return legs
 
@@ -605,22 +617,29 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
         ["FRD open -> HOD", rot(div(mb["o2h_vol"], flt)) if mb else "-"],
         ["FRD full day", rot(div(fv_tot, flt))],
     ]])
-    # ---- 15min leg breakdown panel
-    if legs_15:
-        leg_rows = [["#", "Low -> High", "% Gain", "$ Move", "Float Rot", "$ Vol", "Bars (15m)", "Window (IST)"]]
-        for lg in legs_15:
-            leg_rows.append([
-                f"Leg {lg['leg_num']}",
-                f"{px(lg['low_px'])} -> {px(lg['high_px'])}",
-                pct(lg["pct_gain"], 0),
-                f"${lg['dollar_gain']:,.2f}",
-                rot(lg["float_rot"]) if lg["float_rot"] is not None else "-",
-                usd(lg["dv"]),
-                str(lg["bars"]),
-                f"{lg['start_t']} -> {lg['end_t']}",
-            ])
-        p2.append([f"Legs & Bases (15min, {int(LEG_RETRACEMENT*100)}% retracement of leg = base boundary)",
-                   [[r[0], "  |  ".join(r[1:])] for r in leg_rows[1:]]])
+    # ---- one panel per 15min leg ----
+    for lg in legs_15:
+        base = lg.get("base")
+        rows = [
+            ["Price range",      f"{px(lg['low_px'])} → {px(lg['high_px'])}"],
+            ["% gain",           pct(lg["pct_gain"], 0)],
+            ["$ move / share",   f"${lg['dollar_gain']:,.2f}"],
+            ["Float rotation",   rot(lg["float_rot"]) if lg["float_rot"] is not None else "-"],
+            ["$ volume",         usd(lg["dv"])],
+            ["Volume (shares)",  big(lg["vol"])],
+            ["Duration (15m bars)", str(lg["bars"])],
+            ["Time window (IST)", f"{lg['start_t']} → {lg['end_t']}"],
+        ]
+        if base:
+            rows += [
+                ["-" * 20, ""],
+                ["Base after leg",      ""],
+                ["  Base low",          px(base["low_px"])],
+                ["  Pullback depth",    pct(base["depth"], 0)],
+                ["  Base duration (15m)", str(base["bars"]) + " bars"],
+                ["  Base window (IST)", f"{base['start_t']} → {base['end_t']}"],
+            ]
+        p2.append([f"Leg {lg['leg_num']} (15min pivot structure)", rows])
     if frd:
         p2.append(["First red day detail", [
             ["Date / gap", f"{dstr(frd['d'])}  /  {pct(mb['gap']) if mb else '-'}"],
