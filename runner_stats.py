@@ -35,7 +35,7 @@ RECENT_BARS = 120        # prefer rallies whose high is within the last N bars
 BASE_MIN_DAYS = 3        # a base = >=3 days w/o a new high ...
 BASE_MIN_DEPTH = 0.10    # ... and >=10% pullback from the running high, then a new high
 RALLY_MAX_DAYS = 120     # when you give a start date: look this far for the high
-LEG_PULLBACK_15M = 0.05  # 15min leg detector: >=5% pullback from running high = base boundary
+LEG_RETRACEMENT  = 0.25  # 15min leg detector: pullback >= 25% of current leg's gain = base boundary
 LEG_MIN_BARS_15M = 3     # minimum 15min bars of pullback to count as a real base
 
 app = Flask(__name__)
@@ -334,8 +334,10 @@ def legs_15min(tkr, start_date, high_date, flt):
             base_low_px  = None
             base_low_i   = None
         else:
-            depth = 1 - b["l"] / running_hi
-            if depth >= LEG_PULLBACK_15M:
+            leg_gain = running_hi - leg_low_px           # dollar gain of current leg so far
+            pullback  = running_hi - b["l"]              # dollar pullback from running high
+            retracement = pullback / leg_gain if leg_gain > 0 else 0
+            if retracement >= LEG_RETRACEMENT:
                 in_base = True
             if in_base:
                 pullback_bars += 1
@@ -617,7 +619,7 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
                 str(lg["bars"]),
                 f"{lg['start_t']} -> {lg['end_t']}",
             ])
-        p2.append([f"Legs & Bases (15min, {int(LEG_PULLBACK_15M*100)}% pullback threshold)",
+        p2.append([f"Legs & Bases (15min, {int(LEG_RETRACEMENT*100)}% retracement of leg = base boundary)",
                    [[r[0], "  |  ".join(r[1:])] for r in leg_rows[1:]]])
     if frd:
         p2.append(["First red day detail", [
