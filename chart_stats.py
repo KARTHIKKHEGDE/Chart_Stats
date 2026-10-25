@@ -1651,6 +1651,7 @@ canvas{display:block;width:100%}
       </div>
       <button id="admin_rf_btn" style="height:36px;font-size:13px;padding:0 14px">Refresh</button>
       <button id="admin_clear_btn" style="height:36px;font-size:13px;padding:0 14px;background:#1a0808;border:1px solid #ff5a5a;color:#ff5a5a;cursor:pointer;border-radius:3px;font-weight:bold;display:none" title="Delete all search logs older than 2 weeks">🗑 Clear data &gt; 2 weeks</button>
+      <button id="multiday_stats_btn" style="height:36px;font-size:13px;padding:0 18px;background:#0a1a2a;border:1px solid #00c9a7;color:#00c9a7;cursor:pointer;border-radius:3px;font-weight:bold" title="Open Multi-day Rally &amp; FRD stats tool">📊 Multiday Stats</button>
       <button id="admin_back_btn" style="height:36px;font-size:13px;padding:0 14px;border-color:#29a8ff;color:#29a8ff">Back to Terminal</button>
     </div>
   </div>
@@ -2701,6 +2702,7 @@ $('#admin_back_btn').onclick=()=>{
   $('#t').focus();
 };
 $('#admin_rf_btn').onclick=loadAdminSearches;
+$('#multiday_stats_btn').onclick=()=>{ window.open('http://127.0.0.1:5055','_blank'); };
 $('#admin_view_mode').onchange=(e)=>{
   activeViewMode = e.target.value;
   renderAdminView();
