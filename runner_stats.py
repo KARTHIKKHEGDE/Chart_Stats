@@ -522,9 +522,9 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
     R = D[si:pi + 1]
     bases, legs = bases_legs(R)
     # ---- 15min leg breakdown
-    legs_15 = []
+    legs_15, bars_15, ph_15, pl_15 = [], [], [], []
     try:
-        legs_15 = legs_15min(tkr, D[si]["d"], D[pi]["d"], flt)
+        bars_15, legs_15, ph_15, pl_15 = legs_15min(tkr, D[si]["d"], D[pi]["d"], flt)
     except Exception as e:
         notes.append(f"15min leg detection failed: {e}")
     partial = bool(frd and fi == pi and mb)
