@@ -272,11 +272,11 @@ def legs_15min(tkr, start_date, high_date, flt):
     A swing low is a bar whose low is the lowest of PIVOT_N bars on each side.
     A swing high is a bar whose high is the highest of PIVOT_N bars on each side.
     We build an alternating Low->High->Low->High sequence; each L->H pair = one leg.
-    Returns a list of leg dicts with full stats.
+    Returns (chart_bars, legs, pivot_high_indices, pivot_low_indices).
     """
     raw = aggs(tkr, 15, "minute", start_date.isoformat(), high_date.isoformat())
     if not raw:
-        return []
+        return [], [], [], []
 
     # Keep only trading hours: premarket 4am-9:30am ET + RTH 9:30am-4pm ET
     bars = []
@@ -290,28 +290,47 @@ def legs_15min(tkr, start_date, high_date, flt):
 
     n = len(bars)
     if n < PIVOT_N * 2 + 2:
-        return []
+        return [], [], [], []
+
+    # ---- Find rally peak high bar ----
+    # The rally peak is the highest high bar before the stock starts falling
+    peak_bar_i = max(range(n), key=lambda k: bars[k]["h"])
 
     # ---- Find pivot highs and pivot lows ----
     # Pivot high: bar[i].high > bar[i±1..N].high
     # Pivot low : bar[i].low  < bar[i±1..N].low
     pivots = []   # list of (bar_index, price, "H" or "L")
+    ph_indices = []
+    pl_indices = []
     for i in range(PIVOT_N, n - PIVOT_N):
         window = range(i - PIVOT_N, i + PIVOT_N + 1)
         is_ph = all(bars[j]["h"] <= bars[i]["h"] for j in window if j != i)
         is_pl = all(bars[j]["l"] >= bars[i]["l"] for j in window if j != i)
         if is_ph and not is_pl:
             pivots.append((i, bars[i]["h"], "H"))
+            ph_indices.append(i)
         elif is_pl and not is_ph:
             pivots.append((i, bars[i]["l"], "L"))
+            pl_indices.append(i)
 
-    if not pivots:
-        return []
+    # Ensure peak_bar_i is registered as a pivot high so the final leg hits the top
+    if peak_bar_i not in ph_indices:
+        pivots.append((peak_bar_i, bars[peak_bar_i]["h"], "H"))
+        ph_indices.append(peak_bar_i)
+        pivots.sort(key=lambda x: x[0])
+
+    # Filter pivots to only those up to the rally peak (legs before the stock started falling)
+    pivots_to_peak = [p for p in pivots if p[0] <= peak_bar_i]
+    if not pivots_to_peak:
+        pivots_to_peak = pivots
+
+    if not pivots_to_peak:
+        return [], [], [], []
 
     # ---- Build clean alternating L->H->L->H sequence ----
     # Start from first low, enforce alternation, keep extreme when two same types in a row
     seq = []
-    for p in pivots:
+    for p in pivots_to_peak:
         if not seq:
             if p[2] == "L":
                 seq.append(p)
@@ -325,6 +344,13 @@ def legs_15min(tkr, start_date, high_date, flt):
                     seq[-1] = p
                 elif p[2] == "L" and p[1] < seq[-1][1]:
                     seq[-1] = p
+
+    # Ensure sequence terminates cleanly at the peak high bar
+    if seq and (seq[-1][2] != "H" or seq[-1][0] != peak_bar_i):
+        if seq[-1][2] == "H":
+            seq[-1] = (peak_bar_i, bars[peak_bar_i]["h"], "H")
+        else:
+            seq.append((peak_bar_i, bars[peak_bar_i]["h"], "H"))
 
     # ---- Extract legs (each L->H pair) ----
     legs = []
@@ -345,12 +371,14 @@ def legs_15min(tkr, start_date, high_date, flt):
 
         # --- base (consolidation after this leg, before next leg)
         base_info = None
+        base_lo_bar_i = None
         if i + 2 < len(seq) and seq[i + 2][2] == "L":
             bl_pivot   = seq[i + 2]
             bl_i, bl_px = bl_pivot[0], bl_pivot[1]
             base_bars  = bars[hi_i: bl_i + 1]
             base_depth = (hi_px - bl_px) / hi_px   # % pullback from leg high
             base_dur   = len(base_bars)
+            base_lo_bar_i = bl_i
             base_info  = dict(
                 low_px   = bl_px,
                 depth    = base_depth,
@@ -360,22 +388,38 @@ def legs_15min(tkr, start_date, high_date, flt):
             )
 
         legs.append(dict(
-            leg_num     = len(legs) + 1,
-            low_px      = lo_px,
-            high_px     = hi_px,
-            pct_gain    = hi_px / lo_px - 1,
-            dollar_gain = hi_px - lo_px,
-            vol         = vol,
-            dv          = dv,
-            float_rot   = vol / flt if flt else None,
-            bars        = len(leg_bars),
-            start_t     = bars[lo_i]["_t"].strftime("%m/%d %H:%M"),
-            end_t       = bars[hi_i]["_t"].strftime("%m/%d %H:%M"),
-            base        = base_info,
+            leg_num       = len(legs) + 1,
+            lo_bar_i      = lo_i,
+            hi_bar_i      = hi_i,
+            base_lo_bar_i = base_lo_bar_i,
+            low_px        = lo_px,
+            high_px       = hi_px,
+            pct_gain      = hi_px / lo_px - 1,
+            dollar_gain   = hi_px - lo_px,
+            vol           = vol,
+            dv            = dv,
+            float_rot     = vol / flt if flt else None,
+            bars          = len(leg_bars),
+            start_t       = bars[lo_i]["_t"].strftime("%m/%d %H:%M"),
+            end_t         = bars[hi_i]["_t"].strftime("%m/%d %H:%M"),
+            base          = base_info,
         ))
         i += 2
 
-    return legs
+    # ---- Serialize bars for the chart (drop internal _ keys) ----
+    chart_bars = [
+        {
+            "t": b["_t"].strftime("%m/%d %H:%M"),
+            "o": round(b["o"], 4),
+            "h": round(b["h"], 4),
+            "l": round(b["l"], 4),
+            "c": round(b["c"], 4),
+            "v": int(b["v"]),
+        }
+        for b in bars
+    ]
+
+    return chart_bars, legs, ph_indices, pl_indices
 
 
 def frd_intraday(tkr, d, prev_close):
@@ -548,9 +592,21 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
 
     # ================= PANEL 1 =================
     leg_txt = "  |  ".join(f"L{i + 1} {pct(p, 0)} / {d}d" for i, (p, d) in enumerate(legs))
+    if legs_15:
+        m_bases = sum(1 for lg in legs_15 if lg.get("base"))
+        leg_summary_15 = "  |  ".join(
+            f"L{lg['leg_num']} {pct(lg['pct_gain'], 0)} (${lg['dollar_gain']:.2f}, {rot(lg['float_rot']) if lg.get('float_rot') else '-'})"
+            for lg in legs_15
+        )
+        p1_bases = ["15m Legs & Bases", f"{len(legs_15)} legs / {m_bases} bases", f"{len(legs_15)} legs before falling (15m structural pivot analysis)"]
+        p1_leg = ["15m Legs Breakdown", pct(rally_run, 0), f"low {px(D[si]['l'])} -> high {px(D[pi]['h'])} in {ndays}d  |  {leg_summary_15}"]
+    else:
+        p1_bases = ["Bases", str(bases), f"{len(legs)} legs  (base = >={BASE_MIN_DAYS}d, >={int(BASE_MIN_DEPTH * 100)}% pullback, then new high)"]
+        p1_leg = ["Leg", pct(rally_run, 0), f"low {px(D[si]['l'])} -> high {px(D[pi]['h'])} in {ndays}d  |  {leg_txt}"]
+
     p1 = [
-        ["Bases", str(bases), f"{len(legs)} legs  (base = >={BASE_MIN_DAYS}d, >={int(BASE_MIN_DEPTH * 100)}% pullback, then new high)"],
-        ["Leg", pct(rally_run, 0), f"low {px(D[si]['l'])} -> high {px(D[pi]['h'])} in {ndays}d  |  {leg_txt}"],
+        p1_bases,
+        p1_leg,
         ["Float", big(flt), flt_src],
         ["Market cap (before rally)", usd(mcap_before), f"{dstr(pre['d'])} close {px(pre['c'])}"],
         ["Float rotation (start -> high)", rot(div(rally_vol, flt)), f"{big(rally_vol)} sh over {ndays}d"],
@@ -569,13 +625,18 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
 
     # ================= PANEL 2 =================
     p2 = []
-    p2.append(["Rally profile", [
+    p2_prof = [
         ["Rally start (low)", f"{dstr(D[si]['d'])}  {px(D[si]['l'])}"],
         ["Rally high", f"{dstr(D[pi]['d'])}  {px(D[pi]['h'])}"],
         ["Days start -> high", f"{ndays}  ({green} green)"],
         ["Biggest day move", f"{pct(big_move_pct, 0)} on {dstr(D[big_move]['d'])}"],
-        ["Legs", leg_txt],
-    ]])
+    ]
+    if legs_15:
+        p2_prof.append(["15m Legs before falling", f"{len(legs_15)} legs ({m_bases} bases)"])
+        p2_prof.append(["15m Leg breakdown", leg_summary_15])
+    else:
+        p2_prof.append(["Legs", leg_txt])
+    p2.append(["Rally profile", p2_prof])
     p2.append(["Volume", [
         ["Total rally volume", big(rally_vol)],
         ["Avg daily vol (rally)", big(rally_vol / ndays)],
@@ -638,6 +699,11 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
                 ["  Pullback depth",    pct(base["depth"], 0)],
                 ["  Base duration (15m)", str(base["bars"]) + " bars"],
                 ["  Base window (IST)", f"{base['start_t']} → {base['end_t']}"],
+            ]
+        else:
+            rows += [
+                ["-" * 20, ""],
+                ["Status", "Final leg before rally peak / fall"],
             ]
         p2.append([f"Leg {lg['leg_num']} (15min pivot structure)", rows])
     if frd:
@@ -751,7 +817,7 @@ input[type=date]{background:#0d0d0d;border:1px solid var(--line);color:#fff;font
 button{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:16px;padding:0 16px;height:48px;cursor:pointer}
 button:hover{background:#1a1a1a}
 label{color:var(--d);font-size:13px;display:flex;flex-direction:column;gap:3px}
-#out{padding-top:4px}
+#out{margin:0 34px 40px;border:1px solid #222;padding:20px 22px;background:#000}
 .hdr{font-size:18px;font-weight:bold;color:var(--w);margin:0 0 4px}
 .alt{color:var(--d);font-size:13px;margin-bottom:8px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;margin-top:10px}
@@ -785,7 +851,7 @@ h2{font-size:12px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;ma
   <span id="st" class="status"></span>
   <button class="back-btn" id="backbtn">← Chart Stats</button>
 </div>
-<div id="out" style="margin:0 34px 40px;padding-top:16px"><span class="d">Enter a ticker and rally start date, then press Get stats.</span></div>
+<div id="out"><span class="d">Enter a ticker and rally start date, then press Get stats.</span></div>
 <script>
 let LAST=null, API_BASE='/api';
 const $=id=>document.getElementById(id);
