@@ -2702,7 +2702,7 @@ $('#admin_back_btn').onclick=()=>{
   $('#t').focus();
 };
 $('#admin_rf_btn').onclick=loadAdminSearches;
-$('#multiday_stats_btn').onclick=()=>{ window.open('http://127.0.0.1:5055','_blank'); };
+$('#multiday_stats_btn').onclick=()=>{ window.open('/runner','_blank'); };
 $('#admin_view_mode').onchange=(e)=>{
   activeViewMode = e.target.value;
   renderAdminView();
@@ -2726,6 +2726,50 @@ window.addEventListener('keydown', e => {
 
 checkAuth();
 </script></body></html>"""
+
+# ----------------------------------------------------------------------------- runner_stats integration
+# Load runner_stats.py from the same directory so Multiday Stats runs inside
+# this process — no separate server on port 5055 needed.
+_rs = None
+try:
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location(
+        "runner_stats",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "runner_stats.py")
+    )
+    _rs = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_rs)
+except Exception as _rs_err:
+    print(f"[runner_stats] Could not load: {_rs_err}")
+
+
+@app.route("/runner")
+def runner_index():
+    if _rs is None:
+        return "runner_stats.py not found next to chart_stats.py", 404
+    # Rewrite API base so fetch calls hit our namespaced endpoint
+    page = _rs.PAGE.replace("'/api/analyze", "'/api/runner/analyze") \
+                   .replace('"/api/analyze', '"/api/runner/analyze')
+    from flask import Response as _FR
+    return _FR(page, mimetype="text/html")
+
+
+@app.route("/api/runner/analyze")
+def runner_analyze():
+    if _rs is None:
+        return jsonify({"error": "runner_stats not available"}), 404
+    t = (request.args.get("ticker") or "").strip().upper()
+    if not t:
+        return jsonify({"error": "ticker required"}), 400
+    try:
+        return jsonify(_rs.analyze(
+            t,
+            request.args.get("start") or None,
+            request.args.get("frd") or None,
+            request.args.get("float_m") or None,
+        ))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
