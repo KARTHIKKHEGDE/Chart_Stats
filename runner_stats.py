@@ -288,12 +288,12 @@ def legs_15min(tkr, start_date, high_date, flt, chart_end_date=None):
     if not raw:
         return [], [], [], []
 
-    # Keep only trading hours: premarket 4am-9:30am ET + RTH 9:30am-4pm ET
+    # Keep full extended trading hours: premarket (4am-9:30am) + RTH (9:30am-4pm) + after-hours (4pm-8pm ET)
     bars = []
     for b in raw:
         t_et = datetime.fromtimestamp(b["t"] / 1000, ET)
         hm = t_et.hour * 60 + t_et.minute
-        if 240 <= hm < 960:
+        if 240 <= hm < 1200:
             b_copy = dict(b)
             b_copy["_t"] = t_et.astimezone(IST)
             b_copy["_et"] = t_et
