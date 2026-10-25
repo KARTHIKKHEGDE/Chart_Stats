@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 runner_stats.py  -  Rally + First Red Day (FRD) stats, single file, runs like a website.
 
@@ -35,10 +35,12 @@ RECENT_BARS = 120        # prefer rallies whose high is within the last N bars
 BASE_MIN_DAYS = 3        # a base = >=3 days w/o a new high ...
 BASE_MIN_DEPTH = 0.10    # ... and >=10% pullback from the running high, then a new high
 RALLY_MAX_DAYS = 120     # when you give a start date: look this far for the high
-PIVOT_N = 3              # 15min swing detection: bars required on each side of a pivot high/low
+PIVOT_N = 6              # 15min swing detection: bars required on each side of a pivot high
+MIN_LEG_PCT = 0.60       # minimum % gain per structural leg (smaller wiggles get merged forward)
 
 app = Flask(__name__)
 S = requests.Session()
+_aggs_cache = {}
 
 
 # ---------------- polygon helpers ----------------
@@ -61,9 +63,14 @@ def pg(path, params=None, tries=4):
 
 
 def aggs(tkr, mult, span, frm, to):
+    k = (tkr, mult, span, str(frm), str(to))
+    if k in _aggs_cache:
+        return _aggs_cache[k]
     j = pg(f"/v2/aggs/ticker/{tkr}/range/{mult}/{span}/{frm}/{to}",
            {"adjusted": "true", "sort": "asc", "limit": 50000})
-    return (j or {}).get("results") or []
+    res = (j or {}).get("results") or []
+    _aggs_cache[k] = res
+    return res
 
 
 def details(tkr, date=None):
@@ -266,117 +273,123 @@ def bases_legs(R):
     return bases, legs
 
 
-def legs_15min(tkr, start_date, high_date, flt):
+def legs_15min(tkr, start_date, high_date, flt, chart_end_date=None):
     """
     Detect rally legs on the 15min chart using structural swing pivot analysis.
-    A swing low is a bar whose low is the lowest of PIVOT_N bars on each side.
     A swing high is a bar whose high is the highest of PIVOT_N bars on each side.
-    We build an alternating Low->High->Low->High sequence; each L->H pair = one leg.
+    Each major impulse leg sets a new high of the rally so far.
+    Legs smaller than MIN_LEG_PCT merge into the next leg so small ripples don't create false legs.
+    chart_end_date: if provided, bars are fetched through this date (e.g. FRD+1)
+                    but legs are only detected up to the peak within [start, high_date].
     Returns (chart_bars, legs, pivot_high_indices, pivot_low_indices).
     """
-    raw = aggs(tkr, 15, "minute", start_date.isoformat(), high_date.isoformat())
+    fetch_end = chart_end_date if chart_end_date else high_date
+    raw = aggs(tkr, 15, "minute", start_date.isoformat(), fetch_end.isoformat())
     if not raw:
         return [], [], [], []
 
     # Keep only trading hours: premarket 4am-9:30am ET + RTH 9:30am-4pm ET
     bars = []
     for b in raw:
-        t = datetime.fromtimestamp(b["t"] / 1000, ET)
-        hm = t.hour * 60 + t.minute
+        t_et = datetime.fromtimestamp(b["t"] / 1000, ET)
+        hm = t_et.hour * 60 + t_et.minute
         if 240 <= hm < 960:
-            b["_t"] = t.astimezone(IST)
-            b["_dv"] = b["v"] * (b.get("vw") or (b["h"] + b["l"] + b["c"]) / 3)
-            bars.append(b)
+            b_copy = dict(b)
+            b_copy["_t"] = t_et.astimezone(IST)
+            b_copy["_et"] = t_et
+            b_copy["_dv"] = b["v"] * (b.get("vw") or (b["h"] + b["l"] + b["c"]) / 3)
+            bars.append(b_copy)
 
     n = len(bars)
     if n < PIVOT_N * 2 + 2:
         return [], [], [], []
 
-    # ---- Find rally peak high bar ----
-    # The rally peak is the highest high bar before the stock starts falling
-    peak_bar_i = max(range(n), key=lambda k: bars[k]["h"])
+    # Leg detection is ONLY performed on bars up to high_date peak (using US ET date).
+    # Remaining bars (high_date+1 ...) appear on the chart for context only.
+    analysis_n = n
+    if chart_end_date and chart_end_date > high_date:
+        analysis_n = max(
+            (k + 1 for k, b in enumerate(bars) if b["_et"].date() <= high_date),
+            default=n
+        )
+        analysis_n = max(analysis_n, PIVOT_N * 2 + 2)
 
-    # ---- Find pivot highs and pivot lows ----
-    # Pivot high: bar[i].high > bar[i±1..N].high
-    # Pivot low : bar[i].low  < bar[i±1..N].low
-    pivots = []   # list of (bar_index, price, "H" or "L")
-    ph_indices = []
-    pl_indices = []
-    for i in range(PIVOT_N, n - PIVOT_N):
-        window = range(i - PIVOT_N, i + PIVOT_N + 1)
-        is_ph = all(bars[j]["h"] <= bars[i]["h"] for j in window if j != i)
-        is_pl = all(bars[j]["l"] >= bars[i]["l"] for j in window if j != i)
-        if is_ph and not is_pl:
-            pivots.append((i, bars[i]["h"], "H"))
-            ph_indices.append(i)
-        elif is_pl and not is_ph:
-            pivots.append((i, bars[i]["l"], "L"))
-            pl_indices.append(i)
+    peak_bar_i = max(range(analysis_n), key=lambda k: bars[k]["h"])
 
-    # Ensure peak_bar_i is registered as a pivot high so the final leg hits the top
-    if peak_bar_i not in ph_indices:
-        pivots.append((peak_bar_i, bars[peak_bar_i]["h"], "H"))
-        ph_indices.append(peak_bar_i)
-        pivots.sort(key=lambda x: x[0])
+    # Detect pivot highs within analysis window
+    piv_h = []
+    for i in range(PIVOT_N, analysis_n - PIVOT_N):
+        hi = bars[i]["h"]
+        if all(bars[i - k]["h"] <= hi for k in range(1, PIVOT_N + 1)) and \
+           all(bars[i + k]["h"] <= hi for k in range(1, PIVOT_N + 1)):
+            piv_h.append(i)
 
-    # Filter pivots to only those up to the rally peak (legs before the stock started falling)
-    pivots_to_peak = [p for p in pivots if p[0] <= peak_bar_i]
-    if not pivots_to_peak:
-        pivots_to_peak = pivots
+    if peak_bar_i not in piv_h:
+        piv_h.append(peak_bar_i)
+    piv_h = sorted(list(set(piv_h)))
 
-    if not pivots_to_peak:
-        return [], [], [], []
+    # Track progressive new-high pivots (major structural impulse wave peaks)
+    major_highs = []
+    running_max = 0
+    for h_i in piv_h:
+        px = bars[h_i]["h"]
+        if px > running_max:
+            major_highs.append(h_i)
+            running_max = px
 
-    # ---- Build clean alternating L->H->L->H sequence ----
-    # Start from first low, enforce alternation, keep extreme when two same types in a row
-    seq = []
-    for p in pivots_to_peak:
-        if not seq:
-            if p[2] == "L":
-                seq.append(p)
+    # Construct legs between highs:
+    raw_legs = []
+    prev_h_i = 0
+    for h_i in major_highs:
+        abs_lo_i = min(range(prev_h_i, h_i + 1), key=lambda k: bars[k]["l"])
+        abs_lo_px = bars[abs_lo_i]["l"]
+        # Find the impulse launch low right before the breakout ascent into h_i
+        k = h_i
+        while k > abs_lo_i and bars[k]["l"] >= bars[k - 1]["l"] * 0.99:
+            k -= 1
+        lo_i = k if (bars[k]["l"] <= abs_lo_px * 1.05 and h_i - k >= 3) else abs_lo_i
+        lo_px = bars[lo_i]["l"]
+        hi_px = bars[h_i]["h"]
+        pct = hi_px / lo_px - 1
+        raw_legs.append((lo_i, h_i, lo_px, hi_px, pct))
+        prev_h_i = h_i
+
+    # Merge legs that gained less than MIN_LEG_PCT into next leg
+    merged = []
+    j = 0
+    while j < len(raw_legs):
+        lo_i, hi_i, lo_px, hi_px, pct = raw_legs[j]
+        if pct >= MIN_LEG_PCT or j == len(raw_legs) - 1:
+            merged.append((lo_i, hi_i, lo_px, hi_px, pct))
+            j += 1
         else:
-            prev_type = seq[-1][2]
-            if p[2] != prev_type:
-                seq.append(p)
+            if j + 1 < len(raw_legs):
+                nlo_i, nhi_i, nlo_px, nhi_px, _ = raw_legs[j + 1]
+                if lo_px < nlo_px:
+                    nlo_i, nlo_px = lo_i, lo_px
+                new_pct = nhi_px / nlo_px - 1
+                raw_legs[j + 1] = (nlo_i, nhi_i, nlo_px, nhi_px, new_pct)
             else:
-                # Keep more extreme: highest high, lowest low
-                if p[2] == "H" and p[1] > seq[-1][1]:
-                    seq[-1] = p
-                elif p[2] == "L" and p[1] < seq[-1][1]:
-                    seq[-1] = p
+                merged.append((lo_i, hi_i, lo_px, hi_px, pct))
+            j += 1
+    raw_legs = merged
 
-    # Ensure sequence terminates cleanly at the peak high bar
-    if seq and (seq[-1][2] != "H" or seq[-1][0] != peak_bar_i):
-        if seq[-1][2] == "H":
-            seq[-1] = (peak_bar_i, bars[peak_bar_i]["h"], "H")
-        else:
-            seq.append((peak_bar_i, bars[peak_bar_i]["h"], "H"))
-
-    # ---- Extract legs (each L->H pair) ----
+    # Build final leg dicts with base detection
     legs = []
-    i = 0
-    while i + 1 < len(seq):
-        lo_pivot  = seq[i]
-        hi_pivot  = seq[i + 1]
-        if lo_pivot[2] != "L" or hi_pivot[2] != "H":
-            i += 1
-            continue
-        lo_i, lo_px = lo_pivot[0], lo_pivot[1]
-        hi_i, hi_px = hi_pivot[0], hi_pivot[1]
-
-        # --- leg bars: from the pivot low bar to the pivot high bar
+    for li, (lo_i, hi_i, lo_px, hi_px, _) in enumerate(raw_legs):
         leg_bars = bars[lo_i: hi_i + 1]
         vol = sum(x["v"]   for x in leg_bars)
         dv  = sum(x["_dv"] for x in leg_bars)
 
-        # --- base (consolidation after this leg, before next leg)
+        # Base: from this leg's high to the next leg's low
         base_info = None
         base_lo_bar_i = None
-        if i + 2 < len(seq) and seq[i + 2][2] == "L":
-            bl_pivot   = seq[i + 2]
-            bl_i, bl_px = bl_pivot[0], bl_pivot[1]
-            base_bars  = bars[hi_i: bl_i + 1]
-            base_depth = (hi_px - bl_px) / hi_px   # % pullback from leg high
+        if li + 1 < len(raw_legs):
+            nlo_i, nhi_i, nlo_px, _, _ = raw_legs[li + 1]
+            bl_i = min(range(hi_i, nlo_i + 1), key=lambda k: bars[k]["l"])
+            bl_px = bars[bl_i]["l"]
+            base_bars  = bars[hi_i: nlo_i + 1]
+            base_depth = (hi_px - bl_px) / hi_px
             base_dur   = len(base_bars)
             base_lo_bar_i = bl_i
             base_info  = dict(
@@ -384,7 +397,7 @@ def legs_15min(tkr, start_date, high_date, flt):
                 depth    = base_depth,
                 bars     = base_dur,
                 start_t  = bars[hi_i]["_t"].strftime("%m/%d %H:%M"),
-                end_t    = bars[bl_i]["_t"].strftime("%m/%d %H:%M"),
+                end_t    = bars[nlo_i]["_t"].strftime("%m/%d %H:%M"),
             )
 
         legs.append(dict(
@@ -404,9 +417,17 @@ def legs_15min(tkr, start_date, high_date, flt):
             end_t         = bars[hi_i]["_t"].strftime("%m/%d %H:%M"),
             base          = base_info,
         ))
-        i += 2
 
-    # ---- Serialize bars for the chart (drop internal _ keys) ----
+    # Pivot high and low markers for chart annotations
+    ph_indices = [lg["hi_bar_i"] for lg in legs]
+    pl_indices = [lg["lo_bar_i"] for lg in legs]
+    for lg in legs:
+        if lg.get("base_lo_bar_i") is not None and lg["base_lo_bar_i"] not in pl_indices:
+            pl_indices.append(lg["base_lo_bar_i"])
+    ph_indices.sort()
+    pl_indices.sort()
+
+    # Serialize ALL fetched bars for the chart (includes post-peak context through FRD+1)
     chart_bars = [
         {
             "t": b["_t"].strftime("%m/%d %H:%M"),
@@ -568,7 +589,14 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
     # ---- 15min leg breakdown
     legs_15, bars_15, ph_15, pl_15 = [], [], [], []
     try:
-        bars_15, legs_15, ph_15, pl_15 = legs_15min(tkr, D[si]["d"], D[pi]["d"], flt)
+        # Chart extends to FRD+1 trading day for context; legs detected only up to rally high
+        if fi is not None:
+            chart_end = D[fi + 1]["d"] if (fi + 1 < len(D)) else D[fi]["d"]
+        elif pi is not None and pi + 1 < len(D):
+            chart_end = D[pi + 1]["d"]
+        else:
+            chart_end = D[pi]["d"]
+        bars_15, legs_15, ph_15, pl_15 = legs_15min(tkr, D[si]["d"], D[pi]["d"], flt, chart_end_date=chart_end)
     except Exception as e:
         notes.append(f"15min leg detection failed: {e}")
     partial = bool(frd and fi == pi and mb)
