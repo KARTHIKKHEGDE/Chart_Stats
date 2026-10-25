@@ -2405,10 +2405,10 @@ window.openUserPopup = function(u){
       ).join('') +
       '</div>' +
       '<div style="font-size:12px;color:#8a8a8a;margin-bottom:8px">Query History (Recent first):</div>' +
-      '<div class="scroll" style="max-height:260px;background:#050505;border:1px solid #222;border-radius:3px">' +
-      '<table style="margin:0"><thead><tr><th style="width:40px">#</th><th style="width:180px">Time (IST)</th><th>Ticker</th></tr></thead><tbody>' +
+      '<div class="scroll" style="max-height:260px;background:#050505;border:1px solid #222;border-radius:3px;padding:0 6px">' +
+      '<table style="margin:0"><thead><tr><th style="width:50px;padding-left:10px">#</th><th style="width:180px;padding-left:8px">Time (IST)</th><th style="padding-left:8px">Ticker</th></tr></thead><tbody>' +
       obj.history.map((h, i) =>
-        `<tr><td class="d">${i+1}</td><td class="w">${esc(h.time)}</td><td class="big c" style="font-weight:bold">${esc(h.ticker)}</td></tr>`
+        `<tr><td class="d" style="padding-left:10px">${i+1}</td><td class="w" style="padding-left:8px">${esc(h.time)}</td><td class="big c" style="font-weight:bold;padding-left:8px">${esc(h.ticker)}</td></tr>`
       ).join('') +
       '</tbody></table></div>';
   }
