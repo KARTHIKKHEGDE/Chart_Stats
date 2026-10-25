@@ -1331,7 +1331,7 @@ function _renderFrame(){
   ctx.fillRect(0, 0, TW, TH);
 
   // 2. PREMARKET LIGHT GREY BACKGROUND!
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.065)'; // light grey tint
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.09)'; // distinct light grey tint
   for(let i = 0; i < N; i++){
     if(bars[i].pm || bars[i].sess === 'pm'){
       ctx.fillRect(xOf(i), PT, UNIT, PRICEH + VOLH);

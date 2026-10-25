@@ -1456,8 +1456,8 @@ def log_search(user, ticker):
 @app.route("/api/start")
 def start():
     u = (request.args.get("user") or "").strip().lower()
-    if u not in ALLOWED_USERS:
-        return jsonify({"error": "Access denied"}), 401
+    if not u:
+        return jsonify({"error": "User name required"}), 400
     t = (request.args.get("ticker") or "").strip().upper()
     if not re.fullmatch(r"[A-Z.\-]{1,10}", t):
         return jsonify({"error": "Invalid ticker"}), 400
@@ -1622,7 +1622,11 @@ canvas{display:block;width:100%}
     <button id="go">Get notes</button>
     <button id="rf">Refresh</button>
     <button id="cp">Copy all</button>
-    <button id="main_multiday_btn" style="border-color:#00c9a7;color:#00c9a7;height:48px;padding:0 16px;cursor:pointer;font-weight:bold" title="Open Multi-day Rally & FRD stats tool">📊 Multiday Stats</button>
+    <!-- Main Screen View Switcher -->
+    <div style="display:flex;background:#111;padding:3px;border-radius:4px;border:1px solid #333;gap:4px">
+      <button id="nav_intraday_btn" style="height:42px;padding:0 14px;border:0;background:#29a8ff;color:#000;font-weight:bold;cursor:pointer;border-radius:3px;font-size:14px" title="Intraday Gap Fade & Historical Setup Analysis">📈 Intraday Gap Notes</button>
+      <button id="nav_multiday_btn" style="height:42px;padding:0 14px;border:0;background:transparent;color:#00c9a7;font-weight:bold;cursor:pointer;border-radius:3px;font-size:14px" title="Multi-day Rally & First Red Day (FRD) Structure Tool">📊 Multiday Runner Stats</button>
+    </div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px;font-size:13px;color:#8a8a8a">
       <span>User: <span id="u_name" style="color:#29a8ff;font-weight:bold"></span><span id="u_badge"></span></span>
       <button id="logout_btn" style="height:34px;font-size:12px;padding:0 12px;border-color:#444">Exit</button>
@@ -1632,6 +1636,17 @@ canvas{display:block;width:100%}
   <div id="tab_bar" style="display:none;padding:8px 24px 0;background:#050505;border-bottom:1px solid #222;gap:6px;overflow-x:auto;align-items:center;flex-wrap:nowrap"></div>
   <div id="tabs_view">
     <div id="out" style="padding:24px 34px"><span class="d">Enter a ticker that is gapping up 30%+ and press Get notes.</span></div>
+  </div>
+  <!-- Multiday Runner Stats Embedded View on Main Screen -->
+  <div id="multiday_view" style="display:none;width:100%;background:#000;position:relative">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 34px;background:#08080a;border-bottom:1px solid #222">
+      <div style="font-size:14px;color:#00c9a7;font-weight:bold;display:flex;align-items:center;gap:8px">
+        <span>📊 Multiday Rally & First Red Day (FRD) Stats</span>
+        <span style="color:#888;font-weight:normal;font-size:12px">— 15min Interactive Structure & Leg Drawing</span>
+      </div>
+      <button id="open_multiday_newtab" style="height:30px;font-size:12px;padding:0 12px;border:1px solid #444;background:#111;color:#ccc;cursor:pointer;border-radius:2px" title="Open in separate browser window">⛶ Open in New Tab</button>
+    </div>
+    <iframe id="runner_iframe" src="/runner" style="width:100%;height:calc(100vh - 120px);border:0;background:#000;display:block"></iframe>
   </div>
 </div>
 
@@ -1775,13 +1790,13 @@ const PWD_USERS = ['karthik', 'locke'];
 let currentUser = localStorage.getItem('gap_user') || '';
 
 function checkAuth(){
-  const cur = (currentUser || '').toLowerCase();
-  if(currentUser && ALLOWED.includes(cur)){
+  if(currentUser && currentUser.trim()){
     $('#gate').style.display='none';
     $('#admin_view').style.display='none';
     $('#app_main').style.display='block';
     $('#u_name').textContent=currentUser.toUpperCase();
-    if(PWD_USERS.includes(cur)){
+    const cur = currentUser.toLowerCase();
+    if(['karthik', 'locke'].includes(cur)){
       $('#u_name').style.cursor='pointer';
       $('#u_name').style.textDecoration='underline dotted';
     } else {
@@ -1799,9 +1814,9 @@ function checkAuth(){
 }
 
 function submitGate(){
-  const val = ($('#gate_name').value||'').trim().toLowerCase();
-  if(!ALLOWED.includes(val)){
-    $('#gate_err').textContent='Access denied.';
+  const val = ($('#gate_name').value||'').trim();
+  if(!val){
+    $('#gate_err').textContent='Please enter your name.';
     $('#gate_err').style.display='block';
     return;
   }
@@ -2105,8 +2120,12 @@ function drawEv(cv, c, sel, bzChecked, targetH){
   lo -= pad;
   hi += pad;
   const X = m => L + pw * (m - 240) / 720, Y = v => T + ph * (1 - (v - lo) / (hi - lo));
-  x.fillStyle = 'rgba(255,255,255,0.04)';
+  // Premarket light grey background
+  x.fillStyle = 'rgba(255, 255, 255, 0.085)';
   x.fillRect(X(240), T, X(570) - X(240), ph + 6 + VH);
+  x.fillStyle = '#8e8e9e';
+  x.font = 'bold 10px Consolas,monospace';
+  x.fillText('PRE-MARKET', X(240) + 6, T + 13);
   x.lineWidth = 1;
   x.strokeStyle = '#1f1f1f';
   x.fillStyle = '#8a8a8a';
@@ -2342,6 +2361,13 @@ function drawChart(ch, cvElement){
   let lo=Math.max(Math.min(...vs),-0.95), hi=Math.min(Math.max(...vs),10);
   if(hi-lo<0.1){hi+=0.05;lo-=0.05}
   const X=i=>L+pw*i/(n-1), Y=v=>T+ph*(1-(Math.max(lo,Math.min(hi,v))-lo)/(hi-lo));
+  // Premarket light grey background on path chart
+  if(ch.open_k != null && ch.open_k > 0){
+    x.fillStyle = 'rgba(255, 255, 255, 0.085)';
+    x.fillRect(L, T, X(ch.open_k) - L, ph);
+    x.fillStyle = '#8e8e9e';
+    x.fillText('PRE-MARKET', L + 6, T + 13);
+  }
   x.strokeStyle='#222'; x.fillStyle='#8a8a8a'; x.lineWidth=1;
   for(let k=0;k<=5;k++){const v=lo+(hi-lo)*k/5, y=Y(v); x.beginPath();x.moveTo(L,y);x.lineTo(W-R,y);x.stroke(); x.fillText((v*100).toFixed(0)+'%',4,y+4);}
   for(let i=0;i<n;i+=6){const xx=X(i); x.beginPath();x.moveTo(xx,T);x.lineTo(xx,T+ph);x.stroke(); x.fillText(ch.labels[i],xx-14,H-8);}
@@ -2705,9 +2731,45 @@ $('#admin_back_btn').onclick=()=>{
   $('#t').focus();
 };
 $('#admin_rf_btn').onclick=loadAdminSearches;
-const openMultiday = () => { window.open('/runner', '_blank'); };
-if ($('#multiday_stats_btn')) $('#multiday_stats_btn').onclick = openMultiday;
-if ($('#main_multiday_btn')) $('#main_multiday_btn').onclick = openMultiday;
+function switchMainView(mode){
+  const intraBtn = $('#nav_intraday_btn');
+  const multiBtn = $('#nav_multiday_btn');
+  const tabsView = $('#tabs_view');
+  const tabBar = $('#tab_bar');
+  const multiView = $('#multiday_view');
+  const iframe = $('#runner_iframe');
+  
+  if(mode === 'multiday'){
+    if(intraBtn){ intraBtn.style.background = 'transparent'; intraBtn.style.color = '#29a8ff'; }
+    if(multiBtn){ multiBtn.style.background = '#00c9a7'; multiBtn.style.color = '#000'; }
+    if(tabsView) tabsView.style.display = 'none';
+    if(tabBar) tabBar.style.display = 'none';
+    if(multiView) multiView.style.display = 'block';
+    const curTicker = ($('#t').value || '').trim().toUpperCase();
+    if(curTicker && iframe && (!iframe.src.includes('ticker=' + curTicker))){
+      try {
+        const doc = iframe.contentDocument || iframe.contentWindow.document;
+        if(doc && doc.getElementById('t')){
+          doc.getElementById('t').value = curTicker;
+        }
+      } catch(e){}
+    }
+  } else {
+    if(intraBtn){ intraBtn.style.background = '#29a8ff'; intraBtn.style.color = '#000'; }
+    if(multiBtn){ multiBtn.style.background = 'transparent'; multiBtn.style.color = '#00c9a7'; }
+    if(tabsView) tabsView.style.display = 'block';
+    if(tabBar && typeof openTabsOrder !== 'undefined' && openTabsOrder.length > 1) tabBar.style.display = 'flex';
+    if(multiView) multiView.style.display = 'none';
+  }
+}
+if($('#nav_intraday_btn')) $('#nav_intraday_btn').onclick = () => switchMainView('intraday');
+if($('#nav_multiday_btn')) $('#nav_multiday_btn').onclick = () => switchMainView('multiday');
+if($('#open_multiday_newtab')) $('#open_multiday_newtab').onclick = () => window.open('/runner', '_blank');
+if($('#multiday_stats_btn')) $('#multiday_stats_btn').onclick = () => {
+  $('#admin_view').style.display = 'none';
+  $('#app_main').style.display = 'block';
+  switchMainView('multiday');
+};
 $('#admin_view_mode').onchange=(e)=>{
   activeViewMode = e.target.value;
   renderAdminView();
