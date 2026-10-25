@@ -1541,7 +1541,10 @@ tr.dim td{opacity:.4}
 .foot{color:var(--d);font-size:12px;margin-top:6px}
 canvas{display:block;width:100%}
 .evgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.evc{border:1px solid #222;padding:6px 8px;min-width:0}
+.evc{border:1px solid #222;padding:6px 8px;min-width:0;position:relative;cursor:pointer;transition:border-color 0.15s, background 0.15s}
+.evc:hover{border-color:#29a8ff;background:#0d0d0d}
+.ev_zoom_hint{position:absolute;top:6px;right:8px;background:rgba(18,18,18,0.92);border:1px solid #29a8ff;color:#29a8ff;font-size:11px;padding:2px 7px;border-radius:3px;opacity:0;transition:opacity 0.15s;pointer-events:none;z-index:2}
+.evc:hover .ev_zoom_hint{opacity:1}
 .evt{font-size:13px;margin-bottom:2px}
 .tag{border:1px solid var(--y);color:var(--y);padding:0 6px;font-size:11px;margin-left:8px}
 @media(max-width:1100px){.three{grid-template-columns:1fr}.two{grid-template-columns:1fr}.two>div+div{border-left:0;padding-left:14px}.evgrid{grid-template-columns:1fr}}
@@ -1629,6 +1632,53 @@ canvas{display:block;width:100%}
     <div id="up_content" style="padding:20px;overflow-y:auto;flex:1"></div>
     <div style="padding:12px 20px;border-top:1px solid #222;display:flex;justify-content:flex-end;background:#141414">
       <button onclick="closeUserPopup()" style="height:34px;padding:0 18px;font-size:13px;background:#202020;border:1px solid #444;color:#ddd;cursor:pointer">Close</button>
+    </div>
+  </div>
+
+<!-- Big Chart Zoom Modal -->
+<div id="chart_modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:99999;display:none;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px)" onclick="if(event.target===this)closeChartModal()">
+  <div style="background:#0c0c0c;border:1px solid #333;width:96vw;max-width:1440px;height:92vh;max-height:860px;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.95);border-radius:6px;overflow:hidden">
+    <!-- Header -->
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 18px;border-bottom:1px solid #222;background:#131313;flex-wrap:wrap;gap:10px">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <span id="cm_title" style="font-size:16px;font-weight:bold;color:#29a8ff"></span>
+        <span id="cm_badge" style="font-size:12px"></span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <button id="cm_prev" onclick="prevModalChart()" style="height:32px;font-size:13px;padding:0 12px;background:#1a1a1a;border:1px solid #444;color:#ddd;cursor:pointer;border-radius:3px" title="Previous chart (Left Arrow)">← Prev</button>
+        <span id="cm_counter" style="font-size:12px;color:#888;min-width:70px;text-align:center"></span>
+        <button id="cm_next" onclick="nextModalChart()" style="height:32px;font-size:13px;padding:0 12px;background:#1a1a1a;border:1px solid #444;color:#ddd;cursor:pointer;border-radius:3px" title="Next chart (Right Arrow)">Next →</button>
+
+        <div style="width:1px;height:20px;background:#333;margin:0 4px"></div>
+
+        <select id="cm_sig" style="height:32px;font-size:12px;padding:0 8px;background:#181818;border:1px solid #444;color:#fff;margin:0">
+          <option value="none">No signals</option>
+          <option value="all">All entry models</option>
+        </select>
+        <label style="font-size:12px;color:#ddd;display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none">
+          <input type="checkbox" id="cm_bz" style="width:14px;height:14px;margin:0"> Bone zone
+        </label>
+
+        <div style="width:1px;height:20px;background:#333;margin:0 4px"></div>
+
+        <button onclick="closeChartModal()" style="height:32px;width:34px;display:flex;align-items:center;justify-content:center;font-size:18px;background:#202020;border:1px solid #444;color:#aaa;cursor:pointer;border-radius:3px;padding:0" title="Close (Esc)">✕</button>
+      </div>
+    </div>
+
+    <!-- Canvas Body -->
+    <div id="cm_body" style="flex:1;padding:12px 16px;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#050505">
+      <canvas id="cm_canvas" style="display:block;width:100%;height:100%"></canvas>
+    </div>
+
+    <!-- Footer with Legend -->
+    <div style="padding:10px 18px;border-top:1px solid #222;background:#0d0d0d;font-size:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <div class="foot" style="margin:0">
+        <span class="c">━ VWAP</span> &nbsp; <span class="y">┅ PM high</span> &nbsp; <span class="d">┅ prev close</span> &nbsp;
+        <span style="color:#d7ff6e">━ EMA9</span> &nbsp; <span style="color:#ffa500">━ EMA20</span> &nbsp;
+        <span class="g">▒</span><span class="r">▒</span> cloud &nbsp; <span class="d">━ BB(20,2)</span> &nbsp;
+        ▼ SELL (entry) &nbsp; ▲ BUY (cover). Shaded = premarket. Times in IST.
+      </div>
+      <div style="color:#666;font-size:11px">Use <b>←</b> / <b>→</b> arrow keys to browse charts · <b>Esc</b> to close</div>
     </div>
   </div>
 </div>
@@ -1886,9 +1936,11 @@ function renderTab(tab, r, isRefresh){
   (r.tables||[]).forEach(t=>{
     o += `<div class="panel"><div class="ttl">${esc(t.title)}</div>${table(t.cols,t.rows,t.dim,true)}<div class="foot">${esc(t.foot||'')}</div></div>`;
   });
-  o += `<div class="panel"><div class="ttl">${esc(T.p6)}<select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
+  o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">`+
+     `<div style="display:flex;align-items:center;flex-wrap:wrap">${esc(T.p6)}<select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
      (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/20 EMA cloud + BB)</label></div>`+
-     `<div class="evgrid">`+tab.EV.map((c,i)=>`<div class="evc"><div class="evt">${esc(c.title)}${c.sim?'':'<span class="d"> (not in similar set)</span>'}</div><canvas id="ev${i}"></canvas></div>`).join('')+
+     `<span style="font-size:12px;color:#29a8ff;font-weight:normal">🔍 Click any chart to enlarge</span></div>`+
+     `<div class="evgrid">`+tab.EV.map((c,i)=>`<div class="evc" onclick="openChartModal(${i})" title="Click to view large"><div class="ev_zoom_hint">🔍 Click to enlarge</div><div class="evt">${esc(c.title)}${c.sim?'':'<span class="d"> (not in similar set)</span>'}</div><canvas id="ev${i}"></canvas></div>`).join('')+
      `</div><div class="foot"><span class="c">━ VWAP</span>  <span class="y">┅ PM high</span>  <span class="d">┅ prev close</span> &nbsp; <span style="color:#d7ff6e">━ EMA9</span> <span style="color:#ffa500">━ EMA20</span> <span class="g">▒</span><span class="r">▒</span> cloud (green = 9 above 20) <span class="d">━ BB(20,2)</span> &nbsp; ▼ SELL (short entry) &nbsp; ▲ BUY (cover at stop or close, with P&amp;L). Shaded = premarket. X axis = IST.</div></div>`;
   o += `<div class="panel"><div class="ttl">${esc(T.p7)}</div><canvas id="cv"></canvas>`+
      `<div class="foot"><span class="b">━ history median</span> &nbsp; <span style="color:#6c8">▒ p25–p75</span> &nbsp; <span class="y">━ today</span> &nbsp; <span class="y">┅ today projected (history re-based at now)</span> &nbsp; <span class="d">━ each similar setup</span> &nbsp; Y = % from previous close</div></div>`;
@@ -1936,53 +1988,259 @@ function drawEvAll(evList, containerEl){
   const bzChecked = bzEl ? bzEl.checked : false;
   list.forEach((c,i)=>{const cv=cEl.querySelector('#ev'+i); if(cv) drawEv(cv,c.chart,sel,bzChecked);});
 }
-function drawEv(cv,c,sel,bzChecked){
-  const dpr=window.devicePixelRatio||1, W=Math.max(300,cv.parentElement.clientWidth-16), H=330;
-  cv.style.width=W+'px'; cv.style.height=H+'px'; cv.width=W*dpr; cv.height=H*dpr;
-  const x=cv.getContext('2d'); x.setTransform(dpr,0,0,dpr,0,0); x.clearRect(0,0,W,H); x.font='11px Consolas,monospace';
-  const b=c.bars; if(!b||!b.t.length){x.fillStyle='#8a8a8a';x.fillText('No intraday data',10,20);return;}
-  const L=50,R=8,T=8,VH=58,B=18, ph=H-T-VH-B-6, pw=W-L-R, vy0=T+ph+6, vy1=vy0+VH;
-  const sg=sel==='none'?[]:(c.sig||[]).filter(s=>sel==='all'||s.name===sel);
-  let lo=Math.min(...b.l), hi=Math.max(...b.h);
-  const pad=(hi-lo)*0.05||hi*0.02; lo-=pad; hi+=pad;
-  const X=m=>L+pw*(m-240)/720, Y=v=>T+ph*(1-(v-lo)/(hi-lo));
-  x.fillStyle='rgba(255,255,255,0.04)'; x.fillRect(X(240),T,X(570)-X(240),ph+6+VH);
-  x.lineWidth=1; x.strokeStyle='#1f1f1f'; x.fillStyle='#8a8a8a';
-  for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,y=Y(v);x.beginPath();x.moveTo(L,y);x.lineTo(W-R,y);x.stroke();x.fillText(v>=1?v.toFixed(2):v.toFixed(3),2,y+4);}
-  for(let m=240;m<=960;m+=60){const xx=X(m);x.beginPath();x.moveTo(xx,T);x.lineTo(xx,vy1);x.stroke();x.fillText(hm(m,c.off),xx-14,H-5);}
-  x.strokeStyle='#777'; x.setLineDash([2,3]); x.beginPath(); x.moveTo(X(570),T); x.lineTo(X(570),vy1); x.stroke(); x.setLineDash([]);
-  const dash=(v,col)=>{if(v==null||v<lo||v>hi)return;x.strokeStyle=col;x.setLineDash([4,4]);x.beginPath();x.moveTo(L,Y(v));x.lineTo(W-R,Y(v));x.stroke();x.setLineDash([]);};
-  dash(c.pc,'#888'); dash(c.pmh,'#ffd23f');
-  // ---- bone zone: 9/20 EMA cloud + Bollinger Bands (20, 2) on the 2-min closes, continuous from 04:00 ET
-  const BZ=bzChecked?bone(b):null;
-  const clipP=()=>{x.save();x.beginPath();x.rect(L,T,pw,ph);x.clip();};
-  const poly=(a,col,w)=>{x.strokeStyle=col;x.lineWidth=w;x.beginPath();let on=false;for(let i=0;i<a.length;i++){if(a[i]==null){on=false;continue;}const xx=X(b.t[i]+1),yy=Y(a[i]);if(!on){x.moveTo(xx,yy);on=true}else x.lineTo(xx,yy);}x.stroke();x.lineWidth=1;};
-  if(BZ){clipP();
-    for(let i=1;i<b.t.length;i++){x.fillStyle=BZ.e9[i]>BZ.e20[i]?'rgba(0,255,0,0.30)':'rgba(255,0,0,0.30)';
-      x.beginPath();x.moveTo(X(b.t[i-1]+1),Y(BZ.e9[i-1]));x.lineTo(X(b.t[i]+1),Y(BZ.e9[i]));x.lineTo(X(b.t[i]+1),Y(BZ.e20[i]));x.lineTo(X(b.t[i-1]+1),Y(BZ.e20[i-1]));x.closePath();x.fill();}
-    poly(BZ.bu,'#7a7a7a',1);poly(BZ.bl,'#7a7a7a',1);x.restore();}
-  const bw=Math.max(1,pw/360*0.72), vmax=Math.max(...b.v)||1;
-  for(let i=0;i<b.t.length;i++){
-    const xx=X(b.t[i]+1), up=b.c[i]>=b.o[i], col=up?'#3ddc84':'#ff5a5a';
-    x.fillStyle=up?'rgba(61,220,132,0.55)':'rgba(255,90,90,0.55)';
-    const vh=VH*b.v[i]/vmax; x.fillRect(xx-bw/2,vy1-vh,bw,vh);
-    x.strokeStyle=col; x.beginPath(); x.moveTo(xx,Y(b.h[i])); x.lineTo(xx,Y(b.l[i])); x.stroke();
-    x.fillStyle=col; const yt=Y(Math.max(b.o[i],b.c[i])); x.fillRect(xx-bw/2,yt,bw,Math.max(1,Math.abs(Y(b.o[i])-Y(b.c[i]))));
+function drawEv(cv, c, sel, bzChecked, targetH){
+  const parentW = (cv.parentElement && cv.parentElement.clientWidth) ? cv.parentElement.clientWidth : 0;
+  const dpr = window.devicePixelRatio || 1;
+  const W = Math.max(300, parentW - (targetH ? 0 : 16));
+  const H = targetH || 330;
+  cv.style.width = W + 'px';
+  cv.style.height = H + 'px';
+  cv.width = W * dpr;
+  cv.height = H * dpr;
+  const x = cv.getContext('2d');
+  x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  x.clearRect(0, 0, W, H);
+  const isLarge = H > 450;
+  x.font = (isLarge ? '13px' : '11px') + ' Consolas,monospace';
+  const b = c.bars;
+  if(!b || !b.t.length){
+    x.fillStyle = '#8a8a8a';
+    x.fillText('No intraday data', 10, 20);
+    return;
   }
-  if(BZ){clipP();poly(BZ.e9,'rgb(215,255,110)',1.2);poly(BZ.e20,'rgb(255,165,0)',1.2);x.restore();}
-  x.strokeStyle='#29a8ff'; x.lineWidth=1.3; x.beginPath(); let on=false;
-  for(let i=0;i<b.t.length;i++){const v=b.vw[i]; if(v==null){on=false;continue;} const xx=X(b.t[i]+1),yy=Y(Math.min(hi,Math.max(lo,v))); if(!on){x.moveTo(xx,yy);on=true}else x.lineTo(xx,yy);} x.stroke(); x.lineWidth=1;
-  x.fillStyle='#8a8a8a'; x.fillText('vol',L+2,vy0+10);
-  sg.forEach((s,idx)=>{
-    const col=MC[s.name]||'#fff', xs=X(s.m), ys=Y(s.p); let xm,ym,pl;
-    if(s.stop_m!=null){xm=X(s.stop_m);ym=Y(s.p*(1+c.stop));pl=-c.stop;}
-    else if(c.cover){xm=X(c.cover.m);ym=Y(c.cover.p);pl=s.pnl;} else return;
-    x.strokeStyle=col; x.setLineDash([3,3]); x.beginPath(); x.moveTo(xs,ys); x.lineTo(xm,ym); x.stroke(); x.setLineDash([]);
-    tri(x,xs,ys,'down',col); tri(x,xm,ym,'up','#3ddc84');
-    x.fillStyle=col; x.fillText('SELL '+(MA[s.name]||''),xs+6,ys-8-idx*0);
-    x.fillStyle=pl>=0?'#3ddc84':'#ff5a5a'; x.fillText('BUY '+(pl*100>=0?'+':'')+(pl*100).toFixed(0)+'%',xm+6,ym+16);
+  const L = isLarge ? 64 : 50, R = 12, T = 10;
+  const VH = Math.round(H * 0.18), B = isLarge ? 24 : 18;
+  const ph = H - T - VH - B - 6, pw = W - L - R, vy0 = T + ph + 6, vy1 = vy0 + VH;
+  const sg = sel === 'none' ? [] : (c.sig || []).filter(s => sel === 'all' || s.name === sel);
+  let lo = Math.min(...b.l), hi = Math.max(...b.h);
+  const pad = (hi - lo) * 0.05 || hi * 0.02;
+  lo -= pad;
+  hi += pad;
+  const X = m => L + pw * (m - 240) / 720, Y = v => T + ph * (1 - (v - lo) / (hi - lo));
+  x.fillStyle = 'rgba(255,255,255,0.04)';
+  x.fillRect(X(240), T, X(570) - X(240), ph + 6 + VH);
+  x.lineWidth = 1;
+  x.strokeStyle = '#1f1f1f';
+  x.fillStyle = '#8a8a8a';
+  for(let k = 0; k <= 5; k++){
+    const v = lo + (hi - lo) * k / 5, y = Y(v);
+    x.beginPath();
+    x.moveTo(L, y);
+    x.lineTo(W - R, y);
+    x.stroke();
+    x.fillText(v >= 1 ? v.toFixed(2) : v.toFixed(3), 2, y + 4);
+  }
+  for(let m = 240; m <= 960; m += 60){
+    const xx = X(m);
+    x.beginPath();
+    x.moveTo(xx, T);
+    x.lineTo(xx, vy1);
+    x.stroke();
+    x.fillText(hm(m, c.off), xx - 14, H - 5);
+  }
+  x.strokeStyle = '#777';
+  x.setLineDash([2, 3]);
+  x.beginPath();
+  x.moveTo(X(570), T);
+  x.lineTo(X(570), vy1);
+  x.stroke();
+  x.setLineDash([]);
+  const dash = (v, col) => {
+    if(v == null || v < lo || v > hi) return;
+    x.strokeStyle = col;
+    x.setLineDash([4, 4]);
+    x.beginPath();
+    x.moveTo(L, Y(v));
+    x.lineTo(W - R, Y(v));
+    x.stroke();
+    x.setLineDash([]);
+  };
+  dash(c.pc, '#888');
+  dash(c.pmh, '#ffd23f');
+  // ---- bone zone: 9/20 EMA cloud + Bollinger Bands (20, 2) on the 2-min closes
+  const BZ = bzChecked ? bone(b) : null;
+  const clipP = () => { x.save(); x.beginPath(); x.rect(L, T, pw, ph); x.clip(); };
+  const poly = (a, col, w) => {
+    x.strokeStyle = col;
+    x.lineWidth = w;
+    x.beginPath();
+    let on = false;
+    for(let i = 0; i < a.length; i++){
+      if(a[i] == null){ on = false; continue; }
+      const xx = X(b.t[i] + 1), yy = Y(a[i]);
+      if(!on){ x.moveTo(xx, yy); on = true; } else x.lineTo(xx, yy);
+    }
+    x.stroke();
+    x.lineWidth = 1;
+  };
+  if(BZ){
+    clipP();
+    for(let i = 1; i < b.t.length; i++){
+      x.fillStyle = BZ.e9[i] > BZ.e20[i] ? 'rgba(0,255,0,0.30)' : 'rgba(255,0,0,0.30)';
+      x.beginPath();
+      x.moveTo(X(b.t[i-1] + 1), Y(BZ.e9[i-1]));
+      x.lineTo(X(b.t[i] + 1), Y(BZ.e9[i]));
+      x.lineTo(X(b.t[i] + 1), Y(BZ.e20[i]));
+      x.lineTo(X(b.t[i-1] + 1), Y(BZ.e20[i-1]));
+      x.closePath();
+      x.fill();
+    }
+    poly(BZ.bu, '#7a7a7a', 1);
+    poly(BZ.bl, '#7a7a7a', 1);
+    x.restore();
+  }
+  const bw = Math.max(1, pw / 360 * 0.72), vmax = Math.max(...b.v) || 1;
+  for(let i = 0; i < b.t.length; i++){
+    const xx = X(b.t[i] + 1), up = b.c[i] >= b.o[i], col = up ? '#3ddc84' : '#ff5a5a';
+    x.fillStyle = up ? 'rgba(61,220,132,0.55)' : 'rgba(255,90,90,0.55)';
+    const vh = VH * b.v[i] / vmax;
+    x.fillRect(xx - bw / 2, vy1 - vh, bw, vh);
+    x.strokeStyle = col;
+    x.beginPath();
+    x.moveTo(xx, Y(b.h[i]));
+    x.lineTo(xx, Y(b.l[i]));
+    x.stroke();
+    x.fillStyle = col;
+    const yt = Y(Math.max(b.o[i], b.c[i]));
+    x.fillRect(xx - bw / 2, yt, bw, Math.max(1, Math.abs(Y(b.o[i]) - Y(b.c[i]))));
+  }
+  if(BZ){
+    clipP();
+    poly(BZ.e9, 'rgb(215,255,110)', isLarge ? 1.6 : 1.2);
+    poly(BZ.e20, 'rgb(255,165,0)', isLarge ? 1.6 : 1.2);
+    x.restore();
+  }
+  x.strokeStyle = '#29a8ff';
+  x.lineWidth = isLarge ? 1.6 : 1.3;
+  x.beginPath();
+  let on = false;
+  for(let i = 0; i < b.t.length; i++){
+    const v = b.vw[i];
+    if(v == null){ on = false; continue; }
+    const xx = X(b.t[i] + 1), yy = Y(Math.min(hi, Math.max(lo, v)));
+    if(!on){ x.moveTo(xx, yy); on = true; } else x.lineTo(xx, yy);
+  }
+  x.stroke();
+  x.lineWidth = 1;
+  x.fillStyle = '#8a8a8a';
+  x.fillText('vol', L + 2, vy0 + 10);
+  sg.forEach((s, idx) => {
+    const col = MC[s.name] || '#fff', xs = X(s.m), ys = Y(s.p);
+    let xm, ym, pl;
+    if(s.stop_m != null){
+      xm = X(s.stop_m);
+      ym = Y(s.p * (1 + c.stop));
+      pl = -c.stop;
+    } else if(c.cover){
+      xm = X(c.cover.m);
+      ym = Y(c.cover.p);
+      pl = s.pnl;
+    } else return;
+    x.strokeStyle = col;
+    x.setLineDash([3, 3]);
+    x.beginPath();
+    x.moveTo(xs, ys);
+    x.lineTo(xm, ym);
+    x.stroke();
+    x.setLineDash([]);
+    tri(x, xs, ys, 'down', col);
+    tri(x, xm, ym, 'up', '#3ddc84');
+    x.fillStyle = col;
+    x.fillText('SELL ' + (MA[s.name] || ''), xs + 6, ys - 8 - idx * 0);
+    x.fillStyle = pl >= 0 ? '#3ddc84' : '#ff5a5a';
+    x.fillText('BUY ' + (pl * 100 >= 0 ? '+' : '') + (pl * 100).toFixed(0) + '%', xm + 6, ym + 16);
   });
 }
+
+let currentModalIndex = 0;
+
+window.openChartModal = function(i){
+  if(!activeTab || !openTabs[activeTab]) return;
+  const list = openTabs[activeTab].EV || [];
+  if(!list.length || i < 0 || i >= list.length) return;
+  currentModalIndex = i;
+
+  const mainSig = openTabs[activeTab].container.querySelector('#sig');
+  const mainBz = openTabs[activeTab].container.querySelector('#bz');
+
+  const modelNames = (openTabs[activeTab].result && openTabs[activeTab].result.model_names) || [];
+  let sigHtml = '<option value="none">No signals</option><option value="all">All entry models</option>' +
+    modelNames.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  $('#cm_sig').innerHTML = sigHtml;
+
+  if(mainSig) $('#cm_sig').value = mainSig.value;
+  if(mainBz) $('#cm_bz').checked = mainBz.checked;
+
+  $('#chart_modal').style.display = 'flex';
+  renderModalChart();
+};
+
+window.renderModalChart = function(){
+  if(!activeTab || !openTabs[activeTab]) return;
+  const list = openTabs[activeTab].EV || [];
+  if(!list[currentModalIndex]) return;
+  const item = list[currentModalIndex];
+
+  $('#cm_title').textContent = item.title;
+  $('#cm_badge').innerHTML = item.sim 
+    ? '<span style="color:#3ddc84;background:#141414;border:1px solid #333;padding:2px 8px;border-radius:2px;font-size:11px">SIMILAR SETUP</span>' 
+    : '<span style="color:#777;font-size:11px">(not in similar set)</span>';
+  $('#cm_counter').textContent = `${currentModalIndex + 1} of ${list.length}`;
+  $('#cm_prev').disabled = (currentModalIndex === 0);
+  $('#cm_next').disabled = (currentModalIndex === list.length - 1);
+  $('#cm_prev').style.opacity = (currentModalIndex === 0) ? '0.35' : '1';
+  $('#cm_next').style.opacity = (currentModalIndex === list.length - 1) ? '0.35' : '1';
+
+  const cv = $('#cm_canvas');
+  const body = $('#cm_body');
+  const targetH = Math.max(380, (body.clientHeight || 600) - 10);
+  const sel = $('#cm_sig').value;
+  const bzChecked = $('#cm_bz').checked;
+
+  drawEv(cv, item.chart, sel, bzChecked, targetH);
+};
+
+window.nextModalChart = function(){
+  if(!activeTab || !openTabs[activeTab]) return;
+  const list = openTabs[activeTab].EV || [];
+  if(currentModalIndex < list.length - 1){
+    currentModalIndex++;
+    renderModalChart();
+  }
+};
+
+window.prevModalChart = function(){
+  if(currentModalIndex > 0){
+    currentModalIndex--;
+    renderModalChart();
+  }
+};
+
+window.closeChartModal = function(){
+  $('#chart_modal').style.display = 'none';
+};
+
+$('#cm_sig').onchange = () => {
+  renderModalChart();
+  if(activeTab && openTabs[activeTab]){
+    const mainSig = openTabs[activeTab].container.querySelector('#sig');
+    if(mainSig){
+      mainSig.value = $('#cm_sig').value;
+      drawEvAll(openTabs[activeTab].EV, openTabs[activeTab].container);
+    }
+  }
+};
+
+$('#cm_bz').onchange = () => {
+  renderModalChart();
+  if(activeTab && openTabs[activeTab]){
+    const mainBz = openTabs[activeTab].container.querySelector('#bz');
+    if(mainBz){
+      mainBz.checked = $('#cm_bz').checked;
+      drawEvAll(openTabs[activeTab].EV, openTabs[activeTab].container);
+    }
+  }
+};
 
 function drawChart(ch, cvElement){
   const cv = cvElement || (activeTab && openTabs[activeTab] ? openTabs[activeTab].container.querySelector('#cv') : $('#cv'));
@@ -2014,6 +2272,9 @@ function drawChart(ch, cvElement){
   if(ch.now_k!=null&&ch.today[ch.now_k]!=null){x.fillStyle='#ffd23f';x.beginPath();x.arc(X(ch.now_k),Y(ch.today[ch.now_k]),4,0,7);x.fill();}
 }
 window.addEventListener('resize',()=>{
+  if($('#chart_modal').style.display === 'flex'){
+    renderModalChart();
+  }
   if(activeTab && openTabs[activeTab]){
     const tab = openTabs[activeTab];
     if(tab.lastChart){
@@ -2306,9 +2567,16 @@ $('#admin_view_mode').onchange=(e)=>{
 
 window.addEventListener('keydown', e => {
   if(e.key === 'Escape'){
+    closeChartModal();
     closeUserPopup();
     if($('#pwd_modal').style.display === 'flex'){
       $('#pwd_modal').style.display = 'none';
+    }
+  } else if($('#chart_modal').style.display === 'flex'){
+    if(e.key === 'ArrowLeft'){
+      prevModalChart();
+    } else if(e.key === 'ArrowRight'){
+      nextModalChart();
     }
   }
 });
