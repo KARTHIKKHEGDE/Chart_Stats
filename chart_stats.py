@@ -1356,18 +1356,29 @@ def admin_searches():
     sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
     sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
     data = []
+    err_info = None
     if sub_url and sub_key:
         try:
             endpoint = f"{sub_url}/rest/v1/searches?select=user_name,ticker,time_ist,date_ist&order=id.desc&limit=1000"
-            r = requests.get(endpoint, headers=_supabase_headers(), timeout=5)
+            r = requests.get(endpoint, headers=_supabase_headers(), timeout=10)
             if r.status_code == 200:
                 rows = r.json()
-                if isinstance(rows, list) and len(rows):
-                    data = [{"user": (x.get("user_name") or x.get("user") or "").upper(), "ticker": x.get("ticker"), "time": x.get("time_ist") or x.get("time"), "date": x.get("date_ist")} for x in rows]
-        except Exception:
-            pass
+                if isinstance(rows, list):
+                    data = [{"user": (x.get("user_name") or x.get("user") or "").upper(),
+                             "ticker": x.get("ticker"),
+                             "time": x.get("time_ist") or x.get("time"),
+                             "date": x.get("date_ist")} for x in rows]
+            else:
+                err_info = f"Supabase HTTP {r.status_code}: {r.text[:200]}"
+        except Exception as ex:
+            err_info = str(ex)
+    else:
+        err_info = "SUPABASE_URL or SUPABASE_KEY not configured on server"
 
-    return jsonify({"searches": data})
+    resp = {"searches": data}
+    if err_info:
+        resp["_warn"] = err_info
+    return jsonify(resp)
 
 
 @app.route("/api/job/<jid>")
@@ -2100,6 +2111,10 @@ async function loadAdminSearches(){
       return;
     }
     adminRows = data.searches || [];
+    if(data._warn && !adminRows.length){
+      $('#admin_list').innerHTML = `<div class="panel" style="padding:16px;color:#ffd23f;font-size:13px">⚠ Server warning: ${esc(data._warn)}</div>`;
+      return;
+    }
     renderAdminView();
   } catch(e) {
     $('#admin_list').innerHTML = `<span class="r">Failed to load search logs: ${esc(e)}</span>`;
