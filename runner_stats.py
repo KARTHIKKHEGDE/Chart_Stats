@@ -908,7 +908,7 @@ function render(j){
   if(j.alts&&j.alts.length)h+='<div class="alt">other rallies: '+j.alts.map(esc).join(' \u00b7 ')+'</div>';
   h+='<h2>Key stats</h2><div class="grid">'+j.p1.map(c=>'<div class="card"><div class="k">'+esc(c[0])+'</div><div class="v">'+esc(c[1])+'</div><div class="s">'+esc(c[2]||'')+'</div></div>').join('')+'</div>';
   if(j.chart_15&&j.chart_15.bars&&j.chart_15.bars.length){
-    h+='<h2>15min Structure Chart <span style="color:var(--d);font-weight:normal;text-transform:none;letter-spacing:0;font-size:11px">  pivot-swing legs \u2014 scroll horizontally if needed</span></h2>';
+    h+='<h2>15min Structure Chart <span style="color:var(--d);font-weight:normal;text-transform:none;letter-spacing:0;font-size:11px">  pivot-swing legs \u2014 scroll horizontally if needed</span><label style="float:right;font-size:11px;color:var(--d);font-weight:normal;text-transform:none;letter-spacing:0;cursor:pointer"><input type="checkbox" id="bz15" style="vertical-align:middle;margin-right:4px"> Bone zone (EMA9/20 + BB)</label></h2>';
     h+='<div id="c15wrap"></div>';
   }
   h+='<h2>Deep stats</h2><div class="g2">'+j.p2.map(s=>'<div class="sec"><h3>'+esc(s[0])+'</h3>'+s[1].map(r=>'<div class="row"><span>'+esc(r[0])+'</span><span>'+esc(r[1])+'</span></div>').join('')+'</div>').join('')+'</div>';
@@ -925,7 +925,7 @@ function render(j){
   h+=j.notes.map(n=>'<div class="note">* '+esc(n)+'</div>').join('');
   $('out').innerHTML=h;
   if(j.chart_15&&j.chart_15.bars&&j.chart_15.bars.length){
-    setTimeout(()=>drawChart15(j.chart_15),20);
+    setTimeout(()=>{drawChart15(j.chart_15);const bz=document.getElementById('bz15');if(bz)bz.onchange=()=>drawChart15(j.chart_15);},20);
   }
 }
 
@@ -943,7 +943,25 @@ function fmtP(v){return v<1?'$'+v.toFixed(4):v<100?'$'+v.toFixed(2):'$'+v.toFixe
 function fmtV(v){return v>=1e6?(v/1e6).toFixed(1)+'M':v>=1e3?(v/1e3).toFixed(0)+'K':String(v);}
 function niceNum(v){const p=Math.pow(10,Math.floor(Math.log10(v)));const f=v/p;return(f<1.5?1:f<3?2:f<7?5:10)*p;}
 
+// Bone zone: EMA9, EMA20, Bollinger Bands (20,2) on 15-min closes
+function boneZone15(bars){
+  const n=bars.length,a9=2/10,a20=2/21;
+  const e9=[],e20=[],bu=[],bl=[];
+  for(let i=0;i<n;i++){
+    const c=bars[i].c;
+    e9.push(i?a9*c+(1-a9)*e9[i-1]:c);
+    e20.push(i?a20*c+(1-a20)*e20[i-1]:c);
+    if(i>=19){
+      let s=0;for(let k=i-19;k<=i;k++)s+=bars[k].c;
+      const m=s/20;let v=0;for(let k=i-19;k<=i;k++)v+=(bars[k].c-m)**2;
+      const sd=Math.sqrt(v/20);bu.push(m+2*sd);bl.push(m-2*sd);
+    }else{bu.push(null);bl.push(null);}
+  }
+  return {e9,e20,bu,bl};
+}
+
 function drawChart15(data){
+  const bzChecked=document.getElementById('bz15')&&document.getElementById('bz15').checked;
   const wrap=$('c15wrap');
   if(!wrap||!data||!data.bars||!data.bars.length)return;
   wrap.innerHTML='';
@@ -992,6 +1010,10 @@ function drawChart15(data){
     pp=Math.round((pp+step)*1e5)/1e5;
   }
 
+  // Bone zone (EMA9/EMA20 cloud + Bollinger Bands)
+  const BZ=bzChecked?boneZone15(bars):null;
+  const clipPrice=()=>{ctx.save();ctx.beginPath();ctx.rect(PL,PT,TW-PL-PR,PRICEH);ctx.clip();};
+
   // Leg colored bands
   const LC=['rgba(61,220,132,.09)','rgba(41,168,255,.09)','rgba(255,210,63,.09)','rgba(255,120,90,.09)','rgba(180,100,255,.09)'];
   legs.forEach((lg,li)=>{
@@ -1008,6 +1030,33 @@ function drawChart15(data){
     }
   });
 
+  // Draw bone zone cloud BEFORE candles (below them)
+  if(BZ){
+    clipPrice();
+    for(let i=1;i<N;i++){
+      if(BZ.e9[i]==null||BZ.e20[i]==null)continue;
+      ctx.fillStyle=BZ.e9[i]>BZ.e20[i]?'rgba(0,220,100,0.22)':'rgba(255,60,60,0.22)';
+      ctx.beginPath();
+      ctx.moveTo(xM(i-1),yP(BZ.e9[i-1]));
+      ctx.lineTo(xM(i),yP(BZ.e9[i]));
+      ctx.lineTo(xM(i),yP(BZ.e20[i]));
+      ctx.lineTo(xM(i-1),yP(BZ.e20[i-1]));
+      ctx.closePath();ctx.fill();
+    }
+    // Bollinger Bands
+    ['bu','bl'].forEach(k=>{
+      ctx.strokeStyle='rgba(160,160,160,0.45)';ctx.lineWidth=1;ctx.setLineDash([3,3]);
+      ctx.beginPath();let on=false;
+      for(let i=0;i<N;i++){
+        if(BZ[k][i]==null){on=false;continue;}
+        const y=yP(BZ[k][i]);
+        if(!on){ctx.moveTo(xM(i),y);on=true;}else ctx.lineTo(xM(i),y);
+      }
+      ctx.stroke();ctx.setLineDash([]);
+    });
+    ctx.restore();
+  }
+
   // Volume separator line
   ctx.strokeStyle='#1c1c1c';ctx.lineWidth=1;
   ctx.beginPath();ctx.moveTo(PL,PT+PRICEH);ctx.lineTo(TW-PR,PT+PRICEH);ctx.stroke();
@@ -1023,17 +1072,32 @@ function drawChart15(data){
 
   // Candlesticks
   bars.forEach((b,i)=>{
-    const isG=b.c>=b.o,col=isG?'#3ddc84':'#ff5a5a';
+    const isG=b.c>=b.o;
+    const col=isG?'#3ddc84':'#ff5a5a';
     ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=1;
     const xm=xM(i);
     // Wick
     ctx.beginPath();ctx.moveTo(xm,yP(b.h));ctx.lineTo(xm,yP(b.l));ctx.stroke();
-    // Body
+    // Body — both green and red are solid filled
     const bt=yP(Math.max(b.o,b.c)),bb=yP(Math.min(b.o,b.c));
     const bh=Math.max(1,bb-bt);
-    if(isG)ctx.fillRect(xOf(i),bt,CW,bh);
-    else ctx.strokeRect(xOf(i),bt,CW,bh);
+    ctx.fillRect(xOf(i),bt,CW,bh);
   });
+
+  // Draw EMA9/EMA20 lines on top of candles
+  if(BZ){
+    clipPrice();
+    [['e9','rgb(215,255,110)'],['e20','rgb(255,165,0)']].forEach(([k,col])=>{
+      ctx.strokeStyle=col;ctx.lineWidth=1.5;ctx.beginPath();let on=false;
+      for(let i=0;i<N;i++){
+        const y=yP(BZ[k][i]);
+        if(!on){ctx.moveTo(xM(i),y);on=true;}else ctx.lineTo(xM(i),y);
+      }
+      ctx.stroke();
+    });
+    ctx.lineWidth=1;
+    ctx.restore();
+  }
 
   // Pivot markers — ▲ at lows (green), ▼ at highs (red)
   const tri=(x,y,up,col)=>{
