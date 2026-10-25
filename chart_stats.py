@@ -1456,8 +1456,8 @@ def log_search(user, ticker):
 @app.route("/api/start")
 def start():
     u = (request.args.get("user") or "").strip().lower()
-    if not u:
-        return jsonify({"error": "User name required"}), 400
+    if u not in ALLOWED_USERS:
+        return jsonify({"error": "Access denied"}), 401
     t = (request.args.get("ticker") or "").strip().upper()
     if not re.fullmatch(r"[A-Z.\-]{1,10}", t):
         return jsonify({"error": "Invalid ticker"}), 400
@@ -1547,6 +1547,45 @@ def clear_old_searches():
         return jsonify({"error": f"Failed to delete old records: {ex}"}), 500
 
 
+@app.route("/api/admin/users")
+def admin_get_users():
+    u = (request.args.get("user") or "").strip().lower()
+    pwd = (request.args.get("pwd") or "").strip()
+    if u not in ADMIN_USERS or pwd != "500":
+        return jsonify({"error": "Unauthorized"}), 401
+    return jsonify({"users": sorted(list(ALLOWED_USERS)), "admins": sorted(list(ADMIN_USERS))})
+
+
+@app.route("/api/admin/users/add", methods=["POST"])
+def admin_add_user():
+    u = (request.args.get("user") or request.form.get("user") or "").strip().lower()
+    pwd = (request.args.get("pwd") or request.form.get("pwd") or "").strip()
+    if u not in ADMIN_USERS or pwd != "500":
+        return jsonify({"error": "Unauthorized"}), 401
+    new_user = (request.args.get("name") or request.form.get("name") or "").strip().lower()
+    if not new_user or not re.fullmatch(r"[a-z0-9_]{2,20}", new_user):
+        return jsonify({"error": "Invalid username (2-20 lowercase letters/digits/underscore)"}), 400
+    if new_user in ALLOWED_USERS:
+        return jsonify({"error": f"User '{new_user}' already exists"}), 409
+    ALLOWED_USERS.add(new_user)
+    return jsonify({"ok": True, "added": new_user, "users": sorted(list(ALLOWED_USERS))})
+
+
+@app.route("/api/admin/users/remove", methods=["POST"])
+def admin_remove_user():
+    u = (request.args.get("user") or request.form.get("user") or "").strip().lower()
+    pwd = (request.args.get("pwd") or request.form.get("pwd") or "").strip()
+    if u not in ADMIN_USERS or pwd != "500":
+        return jsonify({"error": "Unauthorized"}), 401
+    target = (request.args.get("name") or request.form.get("name") or "").strip().lower()
+    if target in ADMIN_USERS:
+        return jsonify({"error": f"Cannot remove admin user '{target}'"}), 403
+    if target not in ALLOWED_USERS:
+        return jsonify({"error": f"User '{target}' not found"}), 404
+    ALLOWED_USERS.discard(target)
+    return jsonify({"ok": True, "removed": target, "users": sorted(list(ALLOWED_USERS))})
+
+
 @app.route("/api/job/<jid>")
 def job(jid):
     j = JOBS.get(jid)
@@ -1623,12 +1662,10 @@ canvas{display:block;width:100%}
     <button id="rf">Refresh</button>
     <button id="cp">Copy all</button>
     <!-- Main Screen View Switcher -->
-    <div style="display:flex;background:#111;padding:3px;border-radius:4px;border:1px solid #333;gap:4px">
-      <button id="nav_intraday_btn" style="height:42px;padding:0 14px;border:0;background:#29a8ff;color:#000;font-weight:bold;cursor:pointer;border-radius:3px;font-size:14px" title="Intraday Gap Fade & Historical Setup Analysis">📈 Intraday Gap Notes</button>
-      <button id="nav_multiday_btn" style="height:42px;padding:0 14px;border:0;background:transparent;color:#00c9a7;font-weight:bold;cursor:pointer;border-radius:3px;font-size:14px" title="Multi-day Rally & First Red Day (FRD) Structure Tool">📊 Multiday Runner Stats</button>
-    </div>
-    <div style="margin-left:auto;display:flex;align-items:center;gap:12px;font-size:13px;color:#8a8a8a">
+    <button id="nav_intraday_btn" style="height:48px;padding:0 16px;border:2px solid #29a8ff;background:#002244;color:#29a8ff;font-weight:bold;cursor:pointer;border-radius:4px;font-size:14px" title="Intraday Gap Fade & Historical Setup Analysis">📈 Intraday Gap Notes</button>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:10px;font-size:13px;color:#8a8a8a">
       <span>User: <span id="u_name" style="color:#29a8ff;font-weight:bold"></span><span id="u_badge"></span></span>
+      <button id="nav_multiday_btn" style="height:36px;padding:0 14px;border:2px solid #00c9a7;background:#002b24;color:#00c9a7;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Multi-day Rally & First Red Day (FRD) Structure Tool">📊 Runner Stats</button>
       <button id="logout_btn" style="height:34px;font-size:12px;padding:0 12px;border-color:#444">Exit</button>
     </div>
   </div>
@@ -1654,8 +1691,8 @@ canvas{display:block;width:100%}
 <div id="admin_view" style="display:none;padding:24px 34px">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:16px;border-bottom:1px solid #333;padding-bottom:16px">
     <div>
-      <div class="big" style="color:#29a8ff;font-size:20px">Searched Symbols Audit</div>
-      <div style="color:#8a8a8a;font-size:13px;margin-top:4px">View search history grouped by user or by recent tickers (IST)</div>
+      <div class="big" style="color:#29a8ff;font-size:20px">Admin Panel</div>
+      <div style="color:#8a8a8a;font-size:13px;margin-top:4px">Search history audit &amp; user access management</div>
     </div>
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <div style="display:flex;align-items:center;gap:8px">
@@ -1668,10 +1705,30 @@ canvas{display:block;width:100%}
       <button id="admin_rf_btn" style="height:36px;font-size:13px;padding:0 14px">Refresh</button>
       <button id="admin_clear_btn" style="height:36px;font-size:13px;padding:0 14px;background:#1a0808;border:1px solid #ff5a5a;color:#ff5a5a;cursor:pointer;border-radius:3px;font-weight:bold;display:none" title="Delete all search logs older than 2 weeks">🗑 Clear data &gt; 2 weeks</button>
       <button id="multiday_stats_btn" style="height:36px;font-size:13px;padding:0 18px;background:#0a1a2a;border:1px solid #00c9a7;color:#00c9a7;cursor:pointer;border-radius:3px;font-weight:bold" title="Open Multi-day Rally &amp; FRD stats tool">📊 Multiday Stats</button>
+      <button id="manage_users_btn" style="height:36px;font-size:13px;padding:0 18px;background:#1a1008;border:1px solid #ffd23f;color:#ffd23f;cursor:pointer;border-radius:3px;font-weight:bold" title="Add or remove authorized users">👥 Manage Users</button>
       <button id="admin_back_btn" style="height:36px;font-size:13px;padding:0 14px;border-color:#29a8ff;color:#29a8ff">Back to Terminal</button>
     </div>
   </div>
   <div id="admin_list" style="margin-top:10px"></div>
+</div>
+
+<!-- Manage Users Modal -->
+<div id="users_modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:99999;display:none;align-items:center;justify-content:center;padding:20px" onclick="if(event.target===this)closeUsersModal()">
+  <div style="background:#0c0c0c;border:1px solid #ffd23f44;padding:0;width:480px;max-width:94vw;box-shadow:0 16px 50px rgba(0,0,0,0.95);border-radius:6px;overflow:hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #222;background:#111">
+      <div style="font-size:16px;font-weight:bold;color:#ffd23f">👥 Manage Authorized Users</div>
+      <button onclick="closeUsersModal()" style="background:transparent;border:none;color:#888;font-size:18px;cursor:pointer;padding:2px 6px" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#888'">✕</button>
+    </div>
+    <div style="padding:20px">
+      <div style="font-size:12px;color:#8a8a8a;margin-bottom:14px">Admins (karthik, locke) cannot be removed. Changes are live immediately (session only — restart server to reset).</div>
+      <div id="users_list" style="margin-bottom:20px;min-height:60px"></div>
+      <div style="display:flex;gap:10px;align-items:center;border-top:1px solid #222;padding-top:16px">
+        <input id="new_user_input" placeholder="New username (a-z, 0-9, _)" style="flex:1;height:40px;font-size:14px;padding:0 12px;background:#000;border:1px solid #444;color:#fff" autocomplete="off" spellcheck="false" maxlength="20">
+        <button id="add_user_btn" style="height:40px;padding:0 18px;font-size:14px;background:#0a2a0a;border:1px solid #3ddc84;color:#3ddc84;cursor:pointer;border-radius:3px;font-weight:bold">+ Add</button>
+      </div>
+      <div id="users_modal_err" style="color:#ff5a5a;font-size:12px;margin-top:10px;min-height:18px"></div>
+    </div>
+  </div>
 </div>
 
 <!-- Password Verification Modal -->
@@ -1790,13 +1847,13 @@ const PWD_USERS = ['karthik', 'locke'];
 let currentUser = localStorage.getItem('gap_user') || '';
 
 function checkAuth(){
-  if(currentUser && currentUser.trim()){
+  const cur = (currentUser || '').toLowerCase();
+  if(currentUser && ALLOWED.includes(cur)){
     $('#gate').style.display='none';
     $('#admin_view').style.display='none';
     $('#app_main').style.display='block';
     $('#u_name').textContent=currentUser.toUpperCase();
-    const cur = currentUser.toLowerCase();
-    if(['karthik', 'locke'].includes(cur)){
+    if(PWD_USERS.includes(cur)){
       $('#u_name').style.cursor='pointer';
       $('#u_name').style.textDecoration='underline dotted';
     } else {
@@ -1814,9 +1871,9 @@ function checkAuth(){
 }
 
 function submitGate(){
-  const val = ($('#gate_name').value||'').trim();
-  if(!val){
-    $('#gate_err').textContent='Please enter your name.';
+  const val = ($('#gate_name').value||'').trim().toLowerCase();
+  if(!ALLOWED.includes(val)){
+    $('#gate_err').textContent='Access denied.';
     $('#gate_err').style.display='block';
     return;
   }
@@ -2731,6 +2788,81 @@ $('#admin_back_btn').onclick=()=>{
   $('#t').focus();
 };
 $('#admin_rf_btn').onclick=loadAdminSearches;
+
+// --- User Management Modal ---
+let liveAllowed = [];
+
+function openUsersModal(){
+  const cur = (currentUser||'').toLowerCase();
+  if(!PWD_USERS.includes(cur) || adminPwd !== '500') return;
+  loadUsersModal();
+  $('#users_modal').style.display='flex';
+}
+
+function closeUsersModal(){
+  $('#users_modal').style.display='none';
+  $('#users_modal_err').textContent='';
+}
+
+async function loadUsersModal(){
+  try {
+    const res = await fetch('/api/admin/users?user='+encodeURIComponent(currentUser)+'&pwd='+encodeURIComponent(adminPwd));
+    const data = await res.json();
+    if(data.error){ $('#users_list').innerHTML='<span class="r">'+esc(data.error)+'</span>'; return; }
+    liveAllowed = data.users || [];
+    const admins = data.admins || [];
+    let html = '<div style="display:flex;flex-wrap:wrap;gap:8px">';
+    liveAllowed.forEach(u=>{
+      const isAdmin = admins.includes(u);
+      html += `<div style="display:flex;align-items:center;gap:6px;background:#151515;border:1px solid ${isAdmin?'#ffd23f':'#333'};border-radius:4px;padding:6px 10px 6px 12px">`;
+      html += `<span style="color:${isAdmin?'#ffd23f':'#ddd'};font-size:14px;font-weight:${isAdmin?'bold':'normal'}">${esc(u.toUpperCase())}</span>`;
+      if(isAdmin) html += `<span style="color:#ffd23f;font-size:11px;margin-left:2px">★ ADMIN</span>`;
+      if(!isAdmin) html += `<button onclick="removeUser('${esc(u)}')" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:16px;line-height:1;padding:0 2px" title="Remove ${esc(u)}" onmouseover="this.style.color='#ff5a5a'" onmouseout="this.style.color='#555'">×</button>`;
+      html += '</div>';
+    });
+    html += '</div>';
+    $('#users_list').innerHTML = html;
+    $('#users_modal_err').textContent = '';
+  } catch(e){
+    $('#users_list').innerHTML = '<span class="r">Failed: '+esc(e)+'</span>';
+  }
+}
+
+async function addUser(){
+  const name = ($('#new_user_input').value||'').trim().toLowerCase();
+  if(!name){ $('#users_modal_err').textContent='Enter a username.'; return; }
+  try {
+    const res = await fetch('/api/admin/users/add?user='+encodeURIComponent(currentUser)+'&pwd='+encodeURIComponent(adminPwd)+'&name='+encodeURIComponent(name), {method:'POST'});
+    const data = await res.json();
+    if(data.error){ $('#users_modal_err').textContent = data.error; return; }
+    $('#new_user_input').value='';
+    $('#users_modal_err').textContent='';
+    // Update ALLOWED live in JS too
+    if(!ALLOWED.includes(name)) ALLOWED.push(name);
+    loadUsersModal();
+  } catch(e){
+    $('#users_modal_err').textContent = 'Request failed: '+e;
+  }
+}
+
+window.removeUser = async function(name){
+  if(!confirm('Remove "'+name.toUpperCase()+'" from authorized users?')) return;
+  try {
+    const res = await fetch('/api/admin/users/remove?user='+encodeURIComponent(currentUser)+'&pwd='+encodeURIComponent(adminPwd)+'&name='+encodeURIComponent(name), {method:'POST'});
+    const data = await res.json();
+    if(data.error){ alert('Error: '+data.error); return; }
+    // Update ALLOWED live in JS
+    const idx = ALLOWED.indexOf(name);
+    if(idx > -1) ALLOWED.splice(idx, 1);
+    loadUsersModal();
+  } catch(e){
+    alert('Request failed: '+e);
+  }
+};
+
+$('#manage_users_btn').onclick = openUsersModal;
+$('#add_user_btn').onclick = addUser;
+$('#new_user_input').addEventListener('keydown', e=>{ if(e.key==='Enter') addUser(); });
 function switchMainView(mode){
   const intraBtn = $('#nav_intraday_btn');
   const multiBtn = $('#nav_multiday_btn');
