@@ -130,16 +130,25 @@ def cput(key, val):
         pass
 
 
-def _pick_key(rpm: float) -> tuple:
-    """Return (key, wait_seconds) for the key whose slot opens soonest."""
-    gap = 60.0 / rpm
+def _acquire_slot(rpm: float) -> tuple:
+    """Atomically reserve the earliest available request slot across all keys in the pool.
+    Returns (key, wait_seconds). Must be called with _key_lock held.
+    """
+    gap = 60.0 / max(0.1, rpm)
     now = time.time()
-    best_key, best_wait = None, float("inf")
+    best_key = None
+    best_slot = float("inf")
     for k in _key_pool:
-        w = max(0.0, _key_last[k] + gap - now)
-        if w < best_wait:
-            best_wait, best_key = w, k
-    return best_key, best_wait
+        last = _key_last.get(k, 0.0)
+        slot = max(now, last + gap)
+        if slot < best_slot:
+            best_slot = slot
+            best_key = k
+    if best_key is None:
+        raise RuntimeError("No Polygon API keys configured in pool.")
+    _key_last[best_key] = best_slot
+    wait = max(0.0, best_slot - now)
+    return best_key, wait
 
 
 def poly_get(path, params=None):
@@ -152,13 +161,13 @@ def poly_get(path, params=None):
     rpm = float(os.getenv("POLYGON_RPM", str(POLY_RPM)))
     params = dict(params or {})
 
-    max_attempts = len(_key_pool) * 3   # try every key up to 3 times
+    max_attempts = max(10, len(_key_pool) * 3)
     for attempt in range(max_attempts):
         with _key_lock:
-            key, wait = _pick_key(rpm)
-            if wait > 0:
-                time.sleep(wait)
-            _key_last[key] = time.time()
+            key, wait = _acquire_slot(rpm)
+
+        if wait > 0:
+            time.sleep(wait)
 
         params["apiKey"] = key
         try:
@@ -168,14 +177,19 @@ def poly_get(path, params=None):
             continue
 
         if r.status_code == 429:
-            # Penalise this key: push its next-allowed time 65s into the future
+            # Penalise this key: push its next slot 65s into the future
             with _key_lock:
-                _key_last[key] = time.time() + 65.0
-            # Don't sleep — just rotate to next key immediately
+                _key_last[key] = max(_key_last.get(key, 0.0), time.time() + 65.0)
             continue
 
         if r.status_code in (401, 403):
-            raise RuntimeError(f"Polygon rejected key …{key[-6:]} ({r.status_code}): {r.text[:150]}")
+            # If a key is rejected, remove from active pool so other keys can proceed
+            with _key_lock:
+                if key in _key_pool:
+                    _key_pool.remove(key)
+            if not _key_pool:
+                raise RuntimeError(f"All Polygon keys rejected ({r.status_code}): {r.text[:150]}")
+            continue
 
         r.raise_for_status()
         return r.json()
@@ -1207,44 +1221,149 @@ def clean(o):
 
 # ----------------------------------------------------------------------------- job runner
 JOBS = {}
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+def _prefetch_minute(args):
+    """Worker: fetch (and cache) 1-min data for one event day. Returns (idx, day, ok)."""
+    t, i, daily = args
+    day = daily[i]["date"]
+    try:
+        df = minute_df(t, day)   # cached in .gapcache; analyze_event will hit cache
+        return (i, day, df is not None and not df.empty)
+    except Exception:
+        return (i, day, False)
 
 
 def run_job(job, t, refresh):
     try:
-        job["msg"] = "Loading live data (Yahoo)…"
-        live = live_snapshot(t)
-        job["msg"] = "Loading daily history (Polygon)…"
-        daily = [r for r in load_daily(t, refresh) if r["date"] < str(live["date"])]
-        splits = load_splits(t)
-        typ = ticker_type(t) if (POLY_KEY or os.getenv("POLYGON_API_KEY", "")) else None
-        job["msg"] = "Loading shares outstanding history (SEC EDGAR)…"
-        sec = load_shares_out(t)
+        # ------------------------------------------------------------------ STAGE 1
+        # Fetch everything that doesn't depend on each other concurrently.
+        job["msg"] = "Loading live data + history in parallel…"
+
+        _live_res   = [None]
+        _daily_res  = [None]
+        _splits_res = [None]
+        _type_res   = [None]
+        _sec_res    = [None]
+        _err        = [None]
+
+        def _get_live():
+            try:
+                _live_res[0] = live_snapshot(t)
+            except Exception as ex:
+                _err[0] = ex
+
+        def _get_daily():
+            try:
+                _daily_res[0] = load_daily(t, refresh)
+            except Exception as ex:
+                _err[0] = ex
+
+        def _get_splits():
+            try:
+                _splits_res[0] = load_splits(t)
+            except Exception:
+                _splits_res[0] = []
+
+        def _get_type():
+            try:
+                _type_res[0] = ticker_type(t)
+            except Exception:
+                _type_res[0] = None
+
+        def _get_sec():
+            try:
+                _sec_res[0] = load_shares_out(t)
+            except Exception:
+                _sec_res[0] = []
+
+        stage1_threads = [
+            threading.Thread(target=_get_live,   daemon=True),
+            threading.Thread(target=_get_daily,  daemon=True),
+            threading.Thread(target=_get_splits, daemon=True),
+            threading.Thread(target=_get_type,   daemon=True),
+            threading.Thread(target=_get_sec,    daemon=True),
+        ]
+        for th in stage1_threads:
+            th.start()
+        for th in stage1_threads:
+            th.join()
+
+        if _err[0]:
+            raise _err[0]
+
+        if not _daily_res[0]:
+            raise RuntimeError(f"No daily price history returned from Polygon for {t}")
+
+        live   = _live_res[0]
+        splits = _splits_res[0]
+        typ    = _type_res[0]
+        sec    = _sec_res[0]
+        daily  = [r for r in _daily_res[0] if r["date"] < str(live["date"])]
+
         fl_now = live["float"] or live["so"]
-        ratio = None
+        ratio  = None
         if live["float"] and live["so"]:
             ratio = min(1.0, max(0.02, live["float"] / live["so"]))
         ctx = {"sec": sec, "splits": splits, "float": fl_now, "ratio": ratio}
 
         idxs = detect_events(daily, splits, live["date"])
+
+        # ------------------------------------------------------------------ STAGE 2
+        # Pre-fetch all 1-min files in parallel.
+        # With N keys the pool fires up to N concurrent requests; each key self-throttles
+        # to its own 12-second window via _acquire_slot, so rate limits are strictly respected.
+        n_keys   = max(1, len(_key_pool))
+        n_events = len(idxs)
+
+        if n_events:
+            job["msg"] = (f"Fetching 1-min data for {n_events} event days "
+                          f"in parallel ({n_keys} keys active)…")
+
+            fetch_args = [(t, i, daily) for i in idxs]
+            workers = min(16, max(n_keys * 2, 8))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futs = {pool.submit(_prefetch_minute, a): a for a in fetch_args}
+                done = 0
+                for fut in as_completed(futs):
+                    done += 1
+                    _, day, ok = fut.result()
+                    job["msg"] = (f"Cached {done}/{n_events} minute files… "
+                                  f"({day}{'  ✓' if ok else '  ✗ skipped'})")
+
+        # ------------------------------------------------------------------ STAGE 3
+        # analyze_event is now fully CPU-bound (all 1-min data is in cache).
+        # Run all events in parallel.
+        job["msg"] = "Analyzing events (parallel)…"
+
+        def _analyze(i):
+            return i, analyze_event(t, i, daily, ctx)
+
+        results = {}
+        with ThreadPoolExecutor(max_workers=min(12, max(1, n_events))) as pool:
+            futs = {pool.submit(_analyze, i): i for i in idxs}
+            for fut in as_completed(futs):
+                idx_i, e = fut.result()
+                results[idx_i] = e
+
         events, skipped = [], 0
-        for k, i in enumerate(idxs, 1):
-            job["msg"] = (f"Fetching 1-min data {k}/{len(idxs)} ({daily[i]['date']}) — cached after first run; "
-                          f"free tier ≈ {POLY_RPM:.0f} calls/min")
-            e = analyze_event(t, i, daily, ctx)
+        for i in idxs:
+            e = results.get(i)
             if e:
                 events.append(e)
             else:
                 skipped += 1
-        events.sort(key=lambda e: e["date"], reverse=True)
 
+        # ------------------------------------------------------------------ report
         job["msg"] = "Building report and charts…"
-        lm = metrics(live["df"], live["pc"], False)
-        lctx = ctx_feats(live["hist"], len(live["hist"]))
+        lm    = metrics(live["df"], live["pc"], False)
+        lctx  = ctx_feats(live["hist"], len(live["hist"]))
         lpath = path_full(live["df"], live["pc"], False)
-        lg = ((lm.get("open") or live["cur"]) / live["pc"] - 1)
-        lf = {"gap": max(lg, 0.01), "bucket": pbucket(lm.get("open") or live["cur"]), "float": fl_now,
-              "pm_rel": (lm["pm_vol"] / lctx["avgvol20"]) if lctx.get("avgvol20") else None,
-              "runup5": lctx.get("runup5")}
+        lg    = ((lm.get("open") or live["cur"]) / live["pc"] - 1)
+        lf    = {"gap": max(lg, 0.01), "bucket": pbucket(lm.get("open") or live["cur"]), "float": fl_now,
+                 "pm_rel": (lm["pm_vol"] / lctx["avgvol20"]) if lctx.get("avgvol20") else None,
+                 "runup5": lctx.get("runup5")}
 
         def dist(e):
             d = abs(math.log(max(e["gap"], .01) / lf["gap"]))
@@ -1276,7 +1395,7 @@ def run_job(job, t, refresh):
         job["status"] = "done"
     except Exception as ex:
         job["status"] = "error"
-        job["error"] = f"{type(ex).__name__}: {ex}"
+        job["error"]  = f"{type(ex).__name__}: {ex}"
 
 
 # ----------------------------------------------------------------------------- web
@@ -1624,9 +1743,14 @@ function switchTab(t){
   renderTabBar();
 
   const tab = openTabs[t];
-  if(tab && tab.lastChart){
-    const cv = tab.container.querySelector('#cv');
-    if(cv) drawChart(tab.lastChart, cv);
+  if(tab){
+    if(tab.lastChart){
+      const cv = tab.container.querySelector('#cv');
+      if(cv) drawChart(tab.lastChart, cv);
+    }
+    if(tab.EV && tab.EV.length){
+      drawEvAll(tab.EV, tab.container);
+    }
   }
 }
 
@@ -1863,7 +1987,8 @@ function drawEv(cv,c,sel,bzChecked){
 function drawChart(ch, cvElement){
   const cv = cvElement || (activeTab && openTabs[activeTab] ? openTabs[activeTab].container.querySelector('#cv') : $('#cv'));
   if(!cv) return;
-  const dpr=window.devicePixelRatio||1, W=cv.parentElement.clientWidth-28, H=400;
+  const parentW = (cv.parentElement && cv.parentElement.clientWidth) ? cv.parentElement.clientWidth : 0;
+  const dpr=window.devicePixelRatio||1, W=Math.max(300, parentW-28), H=400;
   cv.style.width=W+'px'; cv.style.height=H+'px'; cv.width=W*dpr; cv.height=H*dpr;
   const x=cv.getContext('2d'); x.setTransform(dpr,0,0,dpr,0,0); x.font='12px Consolas,monospace';
   const L=52,R=14,T=12,B=26, pw=W-L-R, ph=H-T-B, n=ch.labels.length;
@@ -1999,13 +2124,28 @@ function renderAdminView(){
 
   if(activeViewMode === 'user'){
     const users = ['KARTHIK', 'LOCKE', 'GUNSHOW'];
+    const counts = {};
+    const uniqueSymbols = {};
+    adminRows.forEach(s => {
+      const usr = (s.user || 'UNKNOWN').toUpperCase();
+      counts[usr] = (counts[usr] || 0) + 1;
+      if(!uniqueSymbols[usr]) uniqueSymbols[usr] = new Set();
+      if(s.ticker) uniqueSymbols[usr].add(s.ticker.toUpperCase());
+    });
 
-    let html = '<div style="margin-bottom:12px;font-size:13px;color:#8a8a8a">Select a user to view what symbols they have searched:</div>';
+    let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px">`+
+      `<div style="font-size:13px;color:#8a8a8a">Select a user to view what symbols they have searched:</div>`+
+      `<div style="font-size:12px;background:#141414;border:1px solid #333;padding:4px 10px;border-radius:3px;color:#29a8ff">Total searches logged: <b>${adminRows.length}</b></div>`+
+      `</div>`;
     html += '<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:12px;margin-bottom:26px">';
 
     for(const u of users){
+      const c = counts[u] || 0;
+      const uniq = uniqueSymbols[u] ? uniqueSymbols[u].size : 0;
+      const countLabel = c ? `${c} search${c===1?'':'es'} • ${uniq} ticker${uniq===1?'':'s'}` : '0 searches';
       html += `<div onclick="openUserPopup('${esc(u)}')" style="background:#0e0e0e;border:1px solid #282828;padding:18px 20px;border-radius:4px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;transition:background 0.15s, border-color 0.15s;user-select:none" onmouseover="this.style.background='#161616';this.style.borderColor='#444'" onmouseout="this.style.background='#0e0e0e';this.style.borderColor='#282828'">`+
-        `<span style="font-size:16px;font-weight:bold;color:#f0f0f0">${esc(u)}</span>`+
+        `<div><div style="font-size:16px;font-weight:bold;color:#f0f0f0">${esc(u)}</div>`+
+        `<div style="font-size:12px;color:${c ? '#3ddc84' : '#666'};margin-top:4px">${countLabel}</div></div>`+
         `<span style="font-size:12px;color:#888">View →</span>`+
       `</div>`;
     }
