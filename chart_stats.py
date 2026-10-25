@@ -1592,7 +1592,11 @@ canvas{display:block;width:100%}
 .evt{font-size:13px;margin-bottom:2px}
 .tag{border:1px solid var(--y);color:var(--y);padding:0 6px;font-size:11px;margin-left:8px}
 @media(max-width:1100px){.three{grid-template-columns:1fr}.two{grid-template-columns:1fr}.two>div+div{border-left:0;padding-left:14px}.evgrid{grid-template-columns:1fr}}
+#ag_tip{position:fixed;z-index:2147483647;background:#111;border:1px solid #444;color:#e0e0e0;font-size:12px;padding:7px 11px;border-radius:4px;max-width:300px;line-height:1.5;pointer-events:none;opacity:0;transition:opacity 0.15s;box-shadow:0 4px 16px rgba(0,0,0,0.7);white-space:pre-wrap;display:block}
+#ag_tip.visible{opacity:1}
+[data-tip]{cursor:help}
 </style></head><body>
+<div id="ag_tip"></div>
 <!-- Access Gate Modal -->
 <div id="gate" style="position:fixed;inset:0;background:#000;z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px">
   <div style="background:#0c0c0c;border:1px solid #333;padding:36px 32px;width:380px;max-width:92vw;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,0.95)">
@@ -1719,10 +1723,15 @@ canvas{display:block;width:100%}
     <!-- Footer with Legend -->
     <div style="padding:10px 18px;border-top:1px solid #222;background:#0d0d0d;font-size:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
       <div class="foot" style="margin:0">
-        <span class="c">━ VWAP</span> &nbsp; <span class="y">┅ PM high</span> &nbsp; <span class="d">┅ prev close</span> &nbsp;
-        <span style="color:#d7ff6e">━ EMA9</span> &nbsp; <span style="color:#ffa500">━ EMA20</span> &nbsp;
-        <span class="g">▒</span><span class="r">▒</span> cloud &nbsp; <span class="d">━ BB(20,2)</span> &nbsp;
-        ▼ SELL (entry) &nbsp; ▲ BUY (cover). Shaded = premarket. Times in IST.
+        <span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance level. Price above VWAP = bullish bias; below = bearish.">━ VWAP</span> &nbsp;
+        <span class="y" data-tip="Pre-market High — the highest price reached before the US market open (9:30 ET / 19:00 IST). Often acts as the first major resistance target in gap-up fades.">┅ PM high</span> &nbsp;
+        <span class="d" data-tip="Previous Close — yesterday's closing price. The base from which the gap % is measured. Price returning here = full gap fill.">┅ prev close</span> &nbsp;
+        <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period Exponential Moving Average on 2-min closes. Fast-moving trend line. Breaks above/below signal short-term momentum shifts.">━ EMA9</span> &nbsp;
+        <span style="color:#ffa500" data-tip="EMA 20 — 20-period Exponential Moving Average on 2-min closes. Slower trend line. When EMA9 crosses below EMA20, bearish momentum is strengthening.">━ EMA20</span> &nbsp;
+        <span class="g" data-tip="Bone Zone cloud — shaded area between EMA9 and EMA20. Green = EMA9 above EMA20 (bullish). Red = EMA9 below EMA20 (bearish). Width shows momentum strength.">▒</span><span class="r">▒</span> cloud &nbsp;
+        <span class="d" data-tip="Bollinger Bands (20-period, 2 std deviations). Upper/lower bands show the expected price range. Price touching/breaking the lower band can signal exhaustion of a move.">━ BB(20,2)</span> &nbsp;
+        <span data-tip="SELL signal — short entry triggered by an entry model (e.g. short at open, PM high rejection, VWAP loss). Triangle points down at the entry price.">▼ SELL (entry)</span> &nbsp;
+        <span data-tip="BUY signal — cover the short position. Either hit the stop loss or target. Percentage shown is the P&amp;L of that trade.">▲ BUY (cover)</span>. <span data-tip="Shaded (lighter) background area = pre-market session (before 9:30 ET / 19:00 IST). Price action here happens before regular market hours.">Shaded = premarket</span>. Times in IST.
       </div>
       <div style="color:#666;font-size:11px">Use <b>←</b> / <b>→</b> arrow keys to browse charts · <b>Esc</b> to close</div>
     </div>
@@ -1730,6 +1739,32 @@ canvas{display:block;width:100%}
 </div>
 <script>
 const $=s=>document.querySelector(s);
+// ---- Tooltip system ----
+(function(){
+  const box = document.getElementById('ag_tip');
+  let tid = null;
+  document.addEventListener('mouseover', e => {
+    const el = e.target.closest('[data-tip]');
+    if(!el){ clearTimeout(tid); box.classList.remove('visible'); return; }
+    clearTimeout(tid);
+    tid = setTimeout(() => {
+      box.textContent = el.getAttribute('data-tip');
+      box.classList.add('visible');
+    }, 800);
+  });
+  document.addEventListener('mousemove', e => {
+    let x = e.clientX + 14, y = e.clientY + 14;
+    if(x + 310 > window.innerWidth) x = e.clientX - 14 - Math.min(300, box.offsetWidth);
+    if(y + box.offsetHeight + 10 > window.innerHeight) y = e.clientY - box.offsetHeight - 10;
+    box.style.left = x + 'px';
+    box.style.top = y + 'px';
+  });
+  document.addEventListener('mouseout', e => {
+    const el = e.target.closest('[data-tip]');
+    if(el){ clearTimeout(tid); box.classList.remove('visible'); }
+  });
+  document.addEventListener('click', () => { clearTimeout(tid); box.classList.remove('visible'); });
+})();
 const ALLOWED = ['karthik', 'locke', 'gunshow'];
 const PWD_USERS = ['karthik', 'locke'];
 let currentUser = localStorage.getItem('gap_user') || '';
@@ -1987,9 +2022,9 @@ function renderTab(tab, r, isRefresh){
      (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/20 EMA cloud + BB)</label></div>`+
      `<span style="font-size:12px;color:#29a8ff;font-weight:normal">🔍 Click any chart to enlarge</span></div>`+
      `<div class="evgrid">`+tab.EV.map((c,i)=>`<div class="evc" onclick="openChartModal(${i})" title="Click to view large"><div class="ev_zoom_hint">🔍 Click to enlarge</div><div class="evt">${esc(c.title)}${c.sim?'':'<span class="d"> (not in similar set)</span>'}</div><canvas id="ev${i}"></canvas></div>`).join('')+
-     `</div><div class="foot"><span class="c">━ VWAP</span>  <span class="y">┅ PM high</span>  <span class="d">┅ prev close</span> &nbsp; <span style="color:#d7ff6e">━ EMA9</span> <span style="color:#ffa500">━ EMA20</span> <span class="g">▒</span><span class="r">▒</span> cloud (green = 9 above 20) <span class="d">━ BB(20,2)</span> &nbsp; ▼ SELL (short entry) &nbsp; ▲ BUY (cover at stop or close, with P&amp;L). Shaded = premarket. X axis = IST.</div></div>`;
+     `<\/div><div class="foot"><span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance.">━ VWAP<\/span>  <span class="y" data-tip="Pre-market High — highest price before the US market open. Common fade target.">┅ PM high<\/span>  <span class="d" data-tip="Previous Close — yesterday’s close. Gap % is measured from here.">┅ prev close<\/span> &nbsp; <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period EMA on 2-min closes. Fast trend line.">━ EMA9<\/span> <span style="color:#ffa500" data-tip="EMA 20 — 20-period EMA on 2-min closes. Slower trend line. Bearish when EMA9 drops below it.">━ EMA20<\/span> <span class="g" data-tip="Bone Zone cloud — shaded between EMA9 &amp; EMA20. Green = bullish. Red = bearish.">▒<\/span><span class="r">▒<\/span> cloud <span class="d" data-tip="Bollinger Bands (20-period, 2 std dev). Shows expected volatility range on the 2-min chart.">━ BB(20,2)<\/span> &nbsp; <span data-tip="SELL signal — short entry triggered by an entry model.">▼ SELL<\/span> &nbsp; <span data-tip="BUY / Cover signal — close the short here. P&amp;L % shown next to it.">▲ BUY<\/span>. <span data-tip="Lighter shaded background = pre-market session (before 9:30 ET / 19:00 IST).">Shaded = premarket<\/span>. X axis = IST.<\/div><\/div>`;
   o += `<div class="panel"><div class="ttl">${esc(T.p7)}</div><canvas id="cv"></canvas>`+
-     `<div class="foot"><span class="b">━ history median</span> &nbsp; <span style="color:#6c8">▒ p25–p75</span> &nbsp; <span class="y">━ today</span> &nbsp; <span class="y">┅ today projected (history re-based at now)</span> &nbsp; <span class="d">━ each similar setup</span> &nbsp; Y = % from previous close</div></div>`;
+     `<div class="foot"><span class="b" data-tip="History Median — the median % price path from prev close across all similar historical gap-up setups. The expected average path.">━ history median<\/span> &nbsp; <span style="color:#6c8" data-tip="p25–p75 Band (BLUE ZONE) — the middle 50% range of all similar setups. Today staying inside = normal behaviour. Breaking out = unusual.">▒ p25–p75<\/span> &nbsp; <span class="y" data-tip="Today — actual price path so far, as % change from yesterday’s close.">━ today<\/span> &nbsp; <span class="y" data-tip="Today Projected — the historical median path re-scaled to today’s current level. Where the median expects price to go from here.">┅ today projected<\/span> &nbsp; <span class="d" data-tip="Each Similar Setup — individual price paths of every similar historical gap-up day. Shows full range of outcomes.">━ each similar setup<\/span> &nbsp; Y = % from previous close<\/div><\/div>`;
   o += `<div class="three"><div class="panel"><div class="ttl">${esc(T.pa)}</div>${kv(r.pa)}</div>`+
      `<div class="panel"><div class="ttl">${esc(T.pb)}</div>${kv(r.pb)}</div>`+
      `<div class="panel"><div class="ttl">${esc(T.pc)}</div>${kv(r.pc)}</div></div>`;
