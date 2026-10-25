@@ -440,6 +440,9 @@ def legs_15min(tkr, start_date, high_date, flt, chart_end_date=None):
             "l": round(b["l"], 4),
             "c": round(b["c"], 4),
             "v": int(b["v"]),
+            "pm": bool(240 <= (b["_et"].hour * 60 + b["_et"].minute) < 570),
+            "sess": ("pm" if 240 <= (b["_et"].hour * 60 + b["_et"].minute) < 570 else
+                     ("rth" if 570 <= (b["_et"].hour * 60 + b["_et"].minute) < 960 else "ah")),
         }
         for b in bars
     ]
@@ -817,6 +820,14 @@ h2{font-size:12px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;ma
 .btn-tool{font-size:12px;padding:2px 10px;height:28px;line-height:1;border-radius:2px;display:inline-flex;align-items:center;gap:4px}
 .btn-tool:hover{filter:brightness(1.2)}
 .leg-pill{border:1px solid #444;padding:4px 10px;font-size:12px;background:#0a0a0c;display:inline-flex;align-items:center;gap:8px;border-radius:2px}
+
+/* Enlarge / Fullscreen mode */
+#c15section.enlarged{
+  position:fixed;inset:0;z-index:99999;background:#050507;padding:16px 24px;display:flex;flex-direction:column;overflow:hidden;
+}
+#c15section.enlarged #c15wrap{
+  flex:1;height:calc(100vh - 120px)!important;max-height:calc(100vh - 120px)!important;margin-top:8px;
+}
 </style></head><body>
 <div class="bar">
   <input id="t" type="text" placeholder="TICKER" autofocus>
@@ -859,7 +870,8 @@ function render(j){
   h+='<h2>Key stats</h2><div class="grid">'+j.p1.map(c=>'<div class="card" '+(c[0]==='Leg'?'id="legCard"':'')+'><div class="k">'+esc(c[0])+'</div><div class="v">'+esc(c[1])+'</div><div class="s">'+esc(c[2]||'')+'</div></div>').join('')+'</div>';
   
   if(j.chart_15&&j.chart_15.bars&&j.chart_15.bars.length){
-    h+='<div style="display:flex;align-items:center;gap:10px;margin:24px 0 6px;flex-wrap:wrap">'
+    h+='<div id="c15section">'
+      +'<div style="display:flex;align-items:center;gap:8px;margin:24px 0 6px;flex-wrap:wrap">'
       +'<h2 style="margin:0;border:0;padding:0">15min Structure Chart</h2>'
       +'<span style="color:var(--d);font-size:12px">scroll horizontally if needed</span>'
       +'<div style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap">'
@@ -871,13 +883,17 @@ function render(j){
       +'<button id="btnZoomIn" class="btn-tool" title="Zoom In (wider candles)">🔍 +</button>'
       +'<button id="btnZoomFit" class="btn-tool" title="Fit Entire Chart">Fit</button>'
       +'<span style="color:#444;font-size:11px">|</span>'
-      +'<button id="btnBadgeMode" class="btn-tool" title="Toggle Compact / Full Badges">🏷 Compact Badges</button>'
-      +'<button id="btnBases" class="btn-tool" title="Toggle Base Lines On/Off">📐 Bases: On</button>'
-      +'<label style="font-size:12px;color:var(--d);cursor:pointer;display:inline-flex;align-items:center;margin:0;flex-direction:row;gap:5px"><input type="checkbox" id="bz15" style="margin:0;vertical-align:middle"> Bone zone</label>'
+      +'<button id="btnBadgeMode" class="btn-tool" title="Toggle Compact / Full Badges">🏷 Badges</button>'
+      +'<button id="btnBases" class="btn-tool" title="Toggle Base Lines On/Off">📐 Bases</button>'
+      +'<label style="font-size:12px;color:var(--d);cursor:pointer;display:inline-flex;align-items:center;margin:0;flex-direction:row;gap:4px"><input type="checkbox" id="bz15" style="margin:0;vertical-align:middle"> Bone zone</label>'
+      +'<span style="color:#444;font-size:11px">|</span>'
+      +'<button id="btnEnlarge" class="btn-tool" style="border-color:var(--c);color:var(--c);font-weight:bold" title="Enlarge Chart to Fullscreen (F)">⛶ Enlarge View</button>'
+      +'<button id="btnOpenImg" class="btn-tool" style="border-color:#ffd23f;color:#ffd23f;font-weight:bold" title="Open Full Chart as Image to view completely">📷 Open Image</button>'
       +'</div></div>';
     h+='<div id="drawStatus" style="color:#ffd23f;font-size:12px;font-family:Consolas,monospace;min-height:18px;margin:4px 0 4px"></div>';
     h+='<div id="legRibbon" style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap"></div>';
     h+='<div id="c15wrap"></div>';
+    h+='</div>'; // end c15section
     h+='<div id="legPanel" style="margin-top:14px"></div>';
   }
   
@@ -958,6 +974,49 @@ function _updateToolbarUI(){
   if(btnB) btnB.textContent = s.badgeMode === 'compact' ? '🏷 Compact Badges' : '🏷 Full Badges';
   const btnBase = document.getElementById('btnBases');
   if(btnBase) btnBase.textContent = s.showBases ? '📐 Bases: On' : '📐 Bases: Off';
+  const btnEn = document.getElementById('btnEnlarge');
+  if(btnEn) btnEn.textContent = s.enlarged ? '🗗 Exit Enlarge (Esc)' : '⛶ Enlarge View';
+}
+
+function toggleEnlarge(){
+  const sec = document.getElementById('c15section');
+  if(!sec || !_chartState) return;
+  _chartState.enlarged = !_chartState.enlarged;
+  if(_chartState.enlarged){
+    sec.classList.add('enlarged');
+  } else {
+    sec.classList.remove('enlarged');
+  }
+  _updateToolbarUI();
+  _setupAndMountCanvas();
+}
+
+function openChartAsImage(){
+  const s = _chartState;
+  if(!s || !s.cv) return;
+  const imgUrl = s.cv.toDataURL('image/png');
+  const w = window.open('');
+  if(!w){
+    alert('Pop-up blocked. Please allow popups or right click the chart to Save Image.');
+    return;
+  }
+  const tkr = (LAST && LAST.ticker) || 'Chart';
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${tkr} 15-Minute Structure Chart</title>
+  <style>
+    body{margin:0;background:#050507;color:#e0e0e0;font-family:Consolas,monospace;display:flex;flex-direction:column;align-items:center;padding:16px}
+    .top{margin-bottom:12px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+    .top a{background:#111;color:#ffd23f;border:1px solid #ffd23f;padding:6px 14px;text-decoration:none;font-weight:bold;border-radius:2px}
+    .top a:hover{background:#282000}
+    .tip{color:#888;font-size:12px}
+    img{border:1px solid #222;max-width:100%;height:auto;cursor:zoom-in;box-shadow:0 8px 30px rgba(0,0,0,.95)}
+  </style></head><body>
+  <div class="top">
+    <span><strong>${tkr} — 15-Minute Structure Chart</strong></span>
+    <span class="tip">(Click image to toggle 100% full-resolution zoom)</span>
+    <a href="${imgUrl}" download="${tkr}_15min_structure_chart.png">💾 Download High-Res PNG</a>
+  </div>
+  <img src="${imgUrl}" title="Click to zoom in/out" onclick="this.style.maxWidth=this.style.maxWidth==='none'?'100%':'none';this.style.cursor=this.style.maxWidth==='none'?'zoom-out':'zoom-in'"/>
+  </body></html>`);
 }
 
 function initChart15(data){
@@ -965,7 +1024,6 @@ function initChart15(data){
   if(!wrap || !data || !data.bars || !data.bars.length) return;
 
   const N = data.bars.length;
-  // Choose comfortable default candle width so candles have real body!
   let initialCW = 9;
   if(N > 400) initialCW = 7;
   if(N > 800) initialCW = 5;
@@ -977,8 +1035,9 @@ function initChart15(data){
     candleWidth: initialCW,
     gap: Math.max(1, Math.ceil(initialCW * 0.28)),
     drawMode: true,
-    badgeMode: 'compact',  // 'compact' or 'full'
+    badgeMode: 'compact',
     showBases: true,
+    enlarged: false,
     pending: null,
     hoverI: -1,
     dragStartI: null,
@@ -1001,6 +1060,8 @@ function initChart15(data){
   const btnZFit = document.getElementById('btnZoomFit');
   const btnBadgeMode = document.getElementById('btnBadgeMode');
   const btnBases = document.getElementById('btnBases');
+  const btnEnlarge = document.getElementById('btnEnlarge');
+  const btnOpenImg = document.getElementById('btnOpenImg');
 
   if(btnDraw) btnDraw.onclick = () => {
     _chartState.drawMode = !_chartState.drawMode;
@@ -1064,6 +1125,9 @@ function initChart15(data){
     _renderFrame();
   };
 
+  if(btnEnlarge) btnEnlarge.onclick = () => toggleEnlarge();
+  if(btnOpenImg) btnOpenImg.onclick = () => openChartAsImage();
+
   // Mouse wheel zoom
   wrap.onwheel = (e) => {
     if(e.ctrlKey || e.altKey){
@@ -1079,11 +1143,17 @@ function initChart15(data){
   window.onkeydown = (e) => {
     if(e.target.tagName === 'INPUT') return;
     if(e.key === 'Escape'){
+      if(_chartState.enlarged){
+        toggleEnlarge();
+        return;
+      }
       if(_chartState.pending != null){
         _chartState.pending = null;
         _setStatus('Cancelled pending start point.');
         _renderFrame();
       }
+    } else if(e.key.toLowerCase() === 'f'){
+      toggleEnlarge();
     } else if(e.key.toLowerCase() === 'z'){
       if(_chartState.pending != null){
         _chartState.pending = null;
@@ -1119,8 +1189,10 @@ function _setupAndMountCanvas(){
   const CW = s.candleWidth;
   const GAP = s.gap;
   const UNIT = CW + GAP;
-  // Ample top headroom (PT = 48) so peak labels NEVER overlap candles!
-  const PL = 74, PR = 20, PT = 48, PBOT = 26, PRICEH = 430, VOLH = 86;
+  
+  // Height adjusts when enlarged!
+  const PRICEH = s.enlarged ? Math.max(520, window.innerHeight - 230) : 430;
+  const PL = 74, PR = 20, PT = 48, PBOT = 26, VOLH = 86;
   const TH = PT + PRICEH + VOLH + PBOT;
   const TW = Math.max(wrap.clientWidth || 900, PL + N * UNIT + PR);
 
@@ -1143,11 +1215,10 @@ function _setupAndMountCanvas(){
   const ctx = cv.getContext('2d');
   ctx.scale(dpr, dpr);
 
-  // Price calculations with generous 28% top headroom!
   let maxP = Math.max(...bars.map(b => b.h));
   let minP = Math.min(...bars.map(b => b.l));
   const rawRng = maxP - minP || 1;
-  const padTop = rawRng * 0.28;  // Clear sky above the peak!
+  const padTop = rawRng * 0.28;
   const padBot = rawRng * 0.08;
   maxP += padTop;
   minP = Math.max(0, minP - padBot);
@@ -1174,8 +1245,9 @@ function _setupAndMountCanvas(){
     // Tooltip
     const b = bars[i];
     const chg = i > 0 ? ((b.c / bars[i - 1].c - 1) * 100).toFixed(2) + '%' : '-';
-    tipEl.innerHTML = b.t + '\nO ' + fmtP(b.o) + '  H ' + fmtP(b.h) + '  L ' + fmtP(b.l) + '  C ' + fmtP(b.c) + '\nVol ' + fmtV(b.v) + '  Chg ' + chg;
-    const offX = Math.min(ev.offsetX + 14, wrap.offsetWidth - 220);
+    const sessTag = (b.pm || b.sess === 'pm') ? ' [PRE-MARKET]' : '';
+    tipEl.innerHTML = b.t + sessTag + '\nO ' + fmtP(b.o) + '  H ' + fmtP(b.h) + '  L ' + fmtP(b.l) + '  C ' + fmtP(b.c) + '\nVol ' + fmtV(b.v) + '  Chg ' + chg;
+    const offX = Math.min(ev.offsetX + 14, wrap.offsetWidth - 230);
     tipEl.style.left = Math.max(10, offX) + 'px';
     tipEl.style.top = Math.max(8, ev.offsetY - 70) + 'px';
     tipEl.style.display = 'block';
@@ -1254,9 +1326,44 @@ function _renderFrame(){
   const {ctx, bars, N, CW, UNIT, PL, PR, PT, PRICEH, VOLH, TW, TH, xOf, xM, yP, yV, maxP, minP, PRNG, maxV} = s;
   const bzChecked = document.getElementById('bz15') && document.getElementById('bz15').checked;
 
-  // Background
+  // 1. Regular session background (deep obsidian)
   ctx.fillStyle = '#070709';
   ctx.fillRect(0, 0, TW, TH);
+
+  // 2. PREMARKET LIGHT GREY BACKGROUND!
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.065)'; // light grey tint
+  for(let i = 0; i < N; i++){
+    if(bars[i].pm || bars[i].sess === 'pm'){
+      ctx.fillRect(xOf(i), PT, UNIT, PRICEH + VOLH);
+    }
+  }
+
+  // Session tags & 9:30 AM market open vertical markers
+  for(let i = 0; i < N; i++){
+    const isPM = bars[i].pm || bars[i].sess === 'pm';
+    const prevPM = i > 0 && (bars[i-1].pm || bars[i-1].sess === 'pm');
+    if(isPM && !prevPM){
+      ctx.fillStyle = '#8e8e9e';
+      ctx.font = 'bold 9.5px Consolas,monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText('PRE-MARKET', xOf(i) + 4, PT - 8);
+    }
+    if(prevPM && !isPM){
+      const openX = xOf(i);
+      ctx.strokeStyle = 'rgba(255, 210, 63, 0.5)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(openX, PT - 18);
+      ctx.lineTo(openX, PT + PRICEH + VOLH);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = 'bold 9.5px Consolas,monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText('OPEN 9:30', openX + 3, PT - 8);
+    }
+  }
 
   // Price grid lines & axis labels
   const step = niceNum(PRNG / 6);
@@ -1365,7 +1472,7 @@ function _renderFrame(){
     const x1 = xM(lg.loI), x2 = xM(lg.hiI);
     const y1 = yP(lg.loPx), y2 = yP(lg.hiPx);
 
-    // Subtle soft shaded region (does NOT drown candles)
+    // Subtle soft shaded region
     ctx.fillStyle = col + '0c';
     ctx.fillRect(Math.min(x1, x2) - CW / 2, PT, Math.abs(x2 - x1) + CW, PRICEH);
 
@@ -1407,12 +1514,9 @@ function _renderFrame(){
     let bx = x2 - BW / 2;
     bx = Math.max(PL + 4, Math.min(TW - PR - BW - 4, bx));
 
-    // KEY CLARITY FIX: Anchor badge in the clear sky ABOVE the peak!
-    // NEVER push downward over the candles!
     let by = y2 - BH - 12;
     if(by < PT + 2) by = PT + 2;
 
-    // Sleek glassmorphic badge
     ctx.fillStyle = 'rgba(8,8,12,0.88)';
     ctx.fillRect(bx, by, BW, BH);
     ctx.strokeStyle = col;
@@ -1426,7 +1530,7 @@ function _renderFrame(){
       ctx.fillText(line, bx + 8, by + 12 + i2 * LH);
     });
 
-    // Horizontal Base Support Level (Clean, no diagonal slashing through candles!)
+    // Horizontal Base Support Level
     if(s.showBases && li > 0){
       const prev = s.legs[li - 1];
       if(prev.hiI <= lg.loI){
@@ -1438,7 +1542,6 @@ function _renderFrame(){
         const bx2 = xM(lg.loI);
         const byFloor = yP(minL);
 
-        // Horizontal dashed support line at the base floor
         ctx.strokeStyle = 'rgba(255,210,63,0.6)';
         ctx.lineWidth = 1.2;
         ctx.setLineDash([3, 3]);
@@ -1447,7 +1550,6 @@ function _renderFrame(){
         ctx.lineTo(bx2, byFloor);
         ctx.stroke();
 
-        // Vertical drop marker from previous peak to base floor
         ctx.strokeStyle = 'rgba(255,210,63,0.3)';
         ctx.beginPath();
         ctx.moveTo(bx1, yP(prev.hiPx));
@@ -1455,7 +1557,6 @@ function _renderFrame(){
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // Clean base support label sitting right on the base line
         const baseTxt = `Base: -${depth}% (${baseCount}b)`;
         ctx.font = '10px Consolas,monospace';
         const btw = ctx.measureText(baseTxt).width + 8;
@@ -1515,7 +1616,6 @@ function _renderFrame(){
       ctx.fillText(tag, pillX + 8, pillY + 3);
     }
   } else if(s.drawMode && s.hoverI >= 0){
-    // Hover snap indicator
     const px = xM(s.hoverI), py = yP(bars[s.hoverI].l);
     ctx.strokeStyle = 'rgba(255,210,63,0.7)';
     ctx.lineWidth = 1;
@@ -1553,11 +1653,9 @@ function _drawArrow(ctx, x1, y1, x2, y2, color, headLen=10){
   ctx.moveTo(x1, y1);
   ctx.lineTo(x2, y2);
   ctx.stroke();
-  // Start circle
   ctx.beginPath();
   ctx.arc(x1, y1, 4.5, 0, Math.PI * 2);
   ctx.fill();
-  // Arrow head
   ctx.beginPath();
   ctx.moveTo(x2, y2);
   ctx.lineTo(x2 - headLen * Math.cos(angle - Math.PI / 6), y2 - headLen * Math.sin(angle - Math.PI / 6));
