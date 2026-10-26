@@ -2308,6 +2308,10 @@ def _fetch_yahoo_news(ticker):
         except Exception:
             return 0
     unique.sort(key=published_at, reverse=True)
+    now_ts = time.time()
+    # Keep stale and undated releases out of both the notes and voice alerts.
+    unique = [item for item in unique
+              if now_ts - 48 * 60 * 60 <= published_at(item) <= now_ts]
     if not unique:
         app.logger.warning("No press releases found for %s. News fetch diagnostics: %s",
                            ticker, " | ".join(errors) if errors else "sources returned no matching press releases")
@@ -3294,13 +3298,13 @@ function renderTab(tab, r, isRefresh){
   o += `<div>Summary: ${esc(h.summary)}</div>`;
   (h.notes||[]).forEach(n=>o+=`<div class="y">Note: ${esc(n)}</div>`);
   const newsItems = r.news || [];
-  o += `<div class="panel"><div class="ttl">Latest Press Releases</div>`+
-    (newsItems.length ? newsItems.map(item=>{
+  if(newsItems.length) o += `<div class="panel"><div class="ttl">Latest Press Releases</div>`+
+    newsItems.map(item=>{
       const link = /^https?:\/\//i.test(item.url || '')
         ? `<a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer" style="color:#6cc4ff">${esc(item.title)}</a>`
         : esc(item.title);
       return `<div style="padding:5px 0;border-bottom:1px solid #222"><span style="color:#ffd23f;font-size:12px">${esc(item.kind || 'News')}</span> · ${link}<span style="color:#777;font-size:12px"> — ${esc(item.publisher || 'Yahoo Finance')}${item.published?' · '+esc(item.published):''}</span></div>`;
-    }).join('') : `<div class="d">${esc(r.news_status || 'No recent press releases found via Yahoo Finance or Google News.')}</div>`) + `</div>`;
+    }).join('') + `</div>`;
   o += `<div class="panel two"><div><div class="ttl">${esc(T.p1)}</div>${kv(r.p1.left)}</div><div>${kv(r.p1.right)}</div></div>`;
   (r.tables||[]).forEach(t=>{
     o += `<div class="panel"><div class="ttl">${esc(t.title)}</div>${table(t.cols,t.rows,t.dim,true)}<div class="foot">${esc(t.foot||'')}</div></div>`;
