@@ -1966,6 +1966,68 @@ _scanner_cache = {"at": 0.0, "rows": []}
 _scanner_cache_lock = threading.Lock()
 
 
+def _yahoo_scanner_rows():
+    """Fetch Yahoo's free gainers screener and apply the scanner's local filters."""
+    query = yf.EquityQuery("and", [
+        yf.EquityQuery("eq", ["region", "us"]),
+        yf.EquityQuery("gt", ["percentchange", 40]),
+    ])
+
+    rows = []
+    offset = 0
+    page_size = 250
+    while offset < 5000:
+        result = yf.screen(query, offset=offset, size=page_size,
+                           sortField="percentchange", sortAsc=False)
+        quotes = result.get("quotes") or []
+        for quote in quotes:
+            state = str(quote.get("marketState") or "").upper()
+            if not state:
+                et_now = dt.datetime.now(ET).time()
+                if dt.time(4, 0) <= et_now < dt.time(9, 30) and quote.get("preMarketPrice"):
+                    state = "PRE"
+                elif dt.time(16, 0) <= et_now < dt.time(20, 0) and quote.get("postMarketPrice"):
+                    state = "POST"
+            if state in ("PRE", "PREPRE"):
+                price = quote.get("preMarketPrice") or quote.get("regularMarketPrice") or quote.get("intradayprice")
+                volume = quote.get("preMarketVolume") or quote.get("dayvolume") or quote.get("regularMarketVolume")
+            elif state in ("POST", "POSTPOST"):
+                price = quote.get("postMarketPrice") or quote.get("regularMarketPrice") or quote.get("intradayprice")
+                volume = quote.get("postMarketVolume") or quote.get("regularMarketVolume") or quote.get("dayvolume")
+            else:
+                price = quote.get("regularMarketPrice") or quote.get("intradayprice")
+                volume = quote.get("regularMarketVolume") or quote.get("dayvolume")
+            previous_close = quote.get("regularMarketPreviousClose") or quote.get("previousClose")
+            try:
+                price = float(price)
+                previous_close = float(previous_close)
+                volume = float(volume)
+            except (TypeError, ValueError):
+                continue
+            if price <= 0 or previous_close <= 0:
+                continue
+
+            gap_pct = (price / previous_close - 1) * 100
+            dollar_volume = price * volume
+            ticker = str(quote.get("symbol") or "").upper()
+            if ticker and 0.40 < price < 20 and gap_pct > 40 and dollar_volume >= 500_000:
+                rows.append({
+                    "ticker": ticker,
+                    "price": round(price, 4),
+                    "gap_pct": round(gap_pct, 2),
+                    "dollar_volume": round(dollar_volume),
+                    "volume": round(volume),
+                })
+
+        offset += len(quotes)
+        total = result.get("total")
+        if not quotes or len(quotes) < page_size or (total is not None and offset >= int(total)):
+            break
+
+    rows.sort(key=lambda row: (-row["gap_pct"], -row["dollar_volume"], row["ticker"]))
+    return rows
+
+
 @app.route("/api/scanner")
 def scanner_market_scan():
     user = (request.args.get("user") or "").strip().lower()
@@ -1977,38 +2039,7 @@ def scanner_market_scan():
     with _scanner_cache_lock:
         if now - _scanner_cache["at"] >= 25:
             try:
-                snapshot = poly_get("/v2/snapshot/locale/us/markets/stocks/tickers")
-                rows = []
-                for item in snapshot.get("tickers", []):
-                    day = item.get("day") or {}
-                    last_trade = item.get("lastTrade") or {}
-                    prev_day = item.get("prevDay") or {}
-                    price = last_trade.get("p") or day.get("c")
-                    prev_close = prev_day.get("c")
-                    volume = day.get("v")
-                    try:
-                        price = float(price)
-                        prev_close = float(prev_close)
-                        volume = float(volume)
-                    except (TypeError, ValueError):
-                        continue
-                    if prev_close <= 0 or price <= 0:
-                        continue
-                    gap_pct = (price / prev_close - 1) * 100
-                    try:
-                        weighted_price = float(day.get("vw") or price)
-                    except (TypeError, ValueError):
-                        weighted_price = price
-                    dollar_volume = weighted_price * volume
-                    if 0.40 < price < 20 and gap_pct > 40 and dollar_volume >= 500_000:
-                        rows.append({
-                            "ticker": str(item.get("ticker", "")).upper(),
-                            "price": round(price, 4),
-                            "gap_pct": round(gap_pct, 2),
-                            "dollar_volume": round(dollar_volume),
-                            "volume": round(volume),
-                        })
-                rows.sort(key=lambda row: (-row["gap_pct"], -row["dollar_volume"], row["ticker"]))
+                rows = _yahoo_scanner_rows()
                 _scanner_cache.update(at=now, rows=rows)
             except Exception as exc:
                 return jsonify({"error": str(exc)}), 502
@@ -2147,7 +2178,7 @@ canvas{display:block;width:100%}
       <button id="scanner_close_btn" style="height:32px;font-size:13px;padding:0 12px" onclick="closeScanner()">Close</button>
     </header>
     <div style="padding:10px 18px;color:#888;font-size:12px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
-      <span id="scanner_status">Waiting for scan…</span><span>Click a ticker to load its notes</span>
+      <span id="scanner_status">Waiting for scan…</span><span>Yahoo Finance · quotes may be delayed · Click a ticker to load its notes</span>
     </div>
     <div style="overflow:auto;padding:0 18px 18px">
       <table style="width:100%;border-collapse:collapse"><thead><tr style="color:#aaa;text-align:left;border-bottom:1px solid #333">
