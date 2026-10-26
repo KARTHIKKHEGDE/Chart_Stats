@@ -23,7 +23,7 @@ VWAP everywhere = continuous VWAP from 04:00 ET (premarket + regular), like a ch
 Everything fetched from Polygon is cached in ./.gapcache so repeat runs are fast.
 (Cache note: 1-min files are reused as-is, nothing to refetch for the new sections.)
 """
-import os, re, json, time, math, threading, uuid, warnings, datetime as dt
+import os, re, json, time, math, threading, uuid, warnings, hashlib, secrets, datetime as dt
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -1416,14 +1416,183 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
 
-def _supabase_headers():
+def _supabase_headers(prefer="return=minimal"):
     k = os.getenv("SUPABASE_KEY", "") or SUPABASE_KEY
-    return {
+    h = {
         "apikey": k,
         "Authorization": f"Bearer {k}",
-        "Content-Type": "application/json",
-        "Prefer": "return=minimal"
+        "Content-Type": "application/json"
     }
+    if prefer:
+        h["Prefer"] = prefer
+    return h
+
+
+def _db_sync_users():
+    """Sync ALLOWED_USERS and ADMIN_USERS from Supabase app_users table."""
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if not (sub_url and sub_key):
+        return
+    try:
+        r = requests.get(f"{sub_url}/rest/v1/app_users?select=username,is_admin,can_rename", headers=_supabase_headers(), timeout=5)
+        if r.status_code == 200:
+            rows = r.json()
+            if isinstance(rows, list) and rows:
+                global ALLOWED_USERS, ADMIN_USERS
+                ALLOWED_USERS = {x["username"].lower() for x in rows if x.get("username")}
+                ADMIN_USERS = {x["username"].lower() for x in rows if x.get("is_admin") or x.get("can_rename")}
+    except Exception:
+        pass
+
+
+def _db_get_user(username: str):
+    u = (username or "").strip().lower()
+    if not u:
+        return None
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if sub_url and sub_key:
+        try:
+            r = requests.get(f"{sub_url}/rest/v1/app_users?username=eq.{u}&select=*", headers=_supabase_headers(), timeout=5)
+            if r.status_code == 200:
+                rows = r.json()
+                if isinstance(rows, list) and rows:
+                    return rows[0]
+        except Exception:
+            pass
+    if u in ALLOWED_USERS:
+        is_root = u in {"karthik", "locke"}
+        return {"username": u, "is_admin": is_root or u in ADMIN_USERS, "can_rename": is_root}
+    return None
+
+
+def _hash_password(password: str, salt: str = None) -> tuple[str, str]:
+    if not salt:
+        salt = secrets.token_hex(16)
+    pwd_hash = hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+    return pwd_hash, salt
+
+
+def _verify_password(password: str, pwd_hash: str, salt: str) -> bool:
+    if not (password and pwd_hash and salt):
+        return False
+    calc_hash = hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+    return secrets.compare_digest(calc_hash, pwd_hash)
+
+
+def _db_set_password(username: str, password: str):
+    u = username.strip().lower()
+    pwd_hash, salt = _hash_password(password)
+    new_token = uuid.uuid4().hex
+    now_z = dt.datetime.now(dt.timezone.utc).isoformat()
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if sub_url and sub_key:
+        payload = {
+            "password_hash": pwd_hash,
+            "salt": salt,
+            "session_token": new_token,
+            "session_updated_at": now_z
+        }
+        requests.patch(f"{sub_url}/rest/v1/app_users?username=eq.{u}", json=payload, headers=_supabase_headers(), timeout=5)
+    return new_token
+
+
+def _db_login(username: str, password: str, force_logout: bool = False):
+    u = username.strip().lower()
+    user = _db_get_user(u)
+    if not user:
+        return {"error": "User not authorized"}, 404
+    
+    if not user.get("password_hash") or not user.get("salt"):
+        return {"error": "Password not created yet", "require_create": True}, 400
+    
+    if not _verify_password(password, user.get("password_hash"), user.get("salt")):
+        return {"error": "Incorrect password. Please try again."}, 401
+    
+    is_exempt = bool(user.get("can_rename")) or (u in {"karthik", "locke"})
+    existing_session = user.get("session_token")
+    
+    # Enforce single browser for non-exempt users
+    if not is_exempt and existing_session and not force_logout:
+        return {
+            "error": "Account is currently logged in on another device/browser.",
+            "require_force": True,
+            "active_session": True
+        }, 409
+    
+    new_token = uuid.uuid4().hex
+    now_z = dt.datetime.now(dt.timezone.utc).isoformat()
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if sub_url and sub_key:
+        payload = {"session_token": new_token, "session_updated_at": now_z}
+        requests.patch(f"{sub_url}/rest/v1/app_users?username=eq.{u}", json=payload, headers=_supabase_headers(), timeout=5)
+    
+    return {
+        "ok": True,
+        "username": u,
+        "session_token": new_token,
+        "is_admin": bool(user.get("is_admin")),
+        "can_rename": is_exempt
+    }, 200
+
+
+def _db_validate_session(username: str, token: str) -> bool:
+    u = (username or "").strip().lower()
+    if not u or not token:
+        return False
+    user = _db_get_user(u)
+    if not user:
+        return False
+    is_exempt = bool(user.get("can_rename")) or (u in {"karthik", "locke"})
+    if is_exempt:
+        # Karthik and Locke can be logged in from any number of browsers simultaneously
+        return True
+    db_token = user.get("session_token")
+    return bool(db_token and secrets.compare_digest(db_token, token))
+
+
+def _db_rename_user(old_name: str, new_name: str):
+    old_u = old_name.strip().lower()
+    new_u = new_name.strip().lower()
+    if not re.fullmatch(r"[a-z0-9_]{2,20}", new_u):
+        return {"error": "Username must be 2-20 lowercase letters, numbers, or underscore."}, 400
+    
+    user = _db_get_user(old_u)
+    if not user or not (user.get("can_rename") or old_u in {"karthik", "locke"}):
+        return {"error": "Permission denied: Only Karthik and Locke are permitted to change username."}, 403
+    
+    if old_u == new_u:
+        return {"ok": True, "new_username": new_u}, 200
+    
+    existing = _db_get_user(new_u)
+    if existing:
+        return {"error": f"Username '{new_u}' is already taken. Please choose another."}, 409
+    
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if sub_url and sub_key:
+        h = _supabase_headers(prefer="return=representation")
+        r1 = requests.patch(f"{sub_url}/rest/v1/app_users?username=eq.{old_u}", json={"username": new_u}, headers=h, timeout=10)
+        if r1.status_code not in (200, 204):
+            return {"error": f"Failed to update database: {r1.text}"}, 500
+        
+        # Transfer search history in searches table
+        requests.patch(f"{sub_url}/rest/v1/searches?user_name=eq.{old_u.upper()}", json={"user_name": new_u.upper()}, headers=h, timeout=10)
+    
+    global ALLOWED_USERS, ADMIN_USERS
+    ALLOWED_USERS.discard(old_u)
+    ALLOWED_USERS.add(new_u)
+    if old_u in ADMIN_USERS:
+        ADMIN_USERS.discard(old_u)
+        ADMIN_USERS.add(new_u)
+    
+    return {"ok": True, "old_name": old_u, "new_name": new_u}, 200
+
+
+_db_sync_users()
 
 
 def log_search(user, ticker):
@@ -1453,11 +1622,97 @@ def log_search(user, ticker):
         pass
 
 
+@app.route("/api/auth/status")
+def auth_status():
+    u = (request.args.get("user") or "").strip().lower()
+    if not u:
+        return jsonify({"error": "Username required"}), 400
+    user = _db_get_user(u)
+    if not user:
+        return jsonify({"error": "Access denied: Username not authorized."}), 404
+    is_exempt = bool(user.get("can_rename")) or (u in {"karthik", "locke"})
+    has_pwd = bool(user.get("password_hash") and user.get("salt"))
+    has_active = bool(user.get("session_token"))
+    return jsonify({
+        "exists": True,
+        "username": u,
+        "has_password": has_pwd,
+        "is_admin": bool(user.get("is_admin")),
+        "can_rename": is_exempt,
+        "has_active_session": (has_active and not is_exempt)
+    })
+
+
+@app.route("/api/auth/set-password", methods=["POST"])
+def auth_set_password():
+    data = request.get_json(silent=True) or request.form
+    u = (data.get("user") or "").strip().lower()
+    pwd = (data.get("password") or "").strip()
+    if not u or not pwd:
+        return jsonify({"error": "Username and password required"}), 400
+    if len(pwd) < 4:
+        return jsonify({"error": "Password must be at least 4 characters"}), 400
+    user = _db_get_user(u)
+    if not user:
+        return jsonify({"error": "User not authorized"}), 404
+    
+    token = _db_set_password(u, pwd)
+    is_exempt = bool(user.get("can_rename")) or (u in {"karthik", "locke"})
+    return jsonify({
+        "ok": True,
+        "username": u,
+        "session_token": token,
+        "is_admin": bool(user.get("is_admin")),
+        "can_rename": is_exempt
+    })
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def auth_login():
+    data = request.get_json(silent=True) or request.form
+    u = (data.get("user") or "").strip().lower()
+    pwd = (data.get("password") or "").strip()
+    force = bool(data.get("force_logout") or data.get("force"))
+    res, status_code = _db_login(u, pwd, force_logout=force)
+    return jsonify(res), status_code
+
+
+@app.route("/api/auth/verify-session")
+def auth_verify_session():
+    u = (request.args.get("user") or "").strip().lower()
+    token = (request.args.get("token") or "").strip()
+    if not u or not token:
+        return jsonify({"ok": False, "error": "Missing user or token"}), 400
+    ok = _db_validate_session(u, token)
+    if not ok:
+        return jsonify({"ok": False, "error": "Session terminated: This account logged in from another browser."}), 401
+    user = _db_get_user(u)
+    is_exempt = bool(user and user.get("can_rename")) or (u in {"karthik", "locke"})
+    return jsonify({"ok": True, "can_rename": is_exempt, "is_admin": bool(user and user.get("is_admin"))})
+
+
+@app.route("/api/auth/rename-user", methods=["POST"])
+def auth_rename_user():
+    data = request.get_json(silent=True) or request.form
+    old_u = (data.get("old_name") or data.get("user") or "").strip().lower()
+    new_u = (data.get("new_name") or "").strip().lower()
+    token = (data.get("token") or "").strip()
+    if not old_u or not new_u:
+        return jsonify({"error": "Old and new usernames required"}), 400
+    if token and not _db_validate_session(old_u, token):
+        return jsonify({"error": "Invalid session"}), 401
+    res, code = _db_rename_user(old_u, new_u)
+    return jsonify(res), code
+
+
 @app.route("/api/start")
 def start():
     u = (request.args.get("user") or "").strip().lower()
-    if u not in ALLOWED_USERS:
+    token = (request.args.get("token") or "").strip()
+    if not u or u not in ALLOWED_USERS:
         return jsonify({"error": "Access denied"}), 401
+    if token and not _db_validate_session(u, token):
+        return jsonify({"error": "Session expired: Logged in on another browser.", "code": "SESSION_REVOKED"}), 401
     t = (request.args.get("ticker") or "").strip().upper()
     if not re.fullmatch(r"[A-Z.\-]{1,10}", t):
         return jsonify({"error": "Invalid ticker"}), 400
@@ -1522,8 +1777,7 @@ def clear_old_searches():
 
     deleted_count = 0
     try:
-        h = _supabase_headers()
-        h["Prefer"] = "return=representation"
+        h = _supabase_headers(prefer="return=representation")
 
         # Delete records older than 14 days by date_ist
         r1 = requests.delete(f"{sub_url}/rest/v1/searches?date_ist=lt.{cutoff_date}", headers=h, timeout=15)
@@ -1553,7 +1807,21 @@ def admin_get_users():
     pwd = (request.args.get("pwd") or "").strip()
     if u not in ADMIN_USERS or pwd != "500":
         return jsonify({"error": "Unauthorized"}), 401
-    return jsonify({"users": sorted(list(ALLOWED_USERS)), "admins": sorted(list(ADMIN_USERS))})
+    _db_sync_users()
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    users_data = []
+    if sub_url and sub_key:
+        try:
+            r = requests.get(f"{sub_url}/rest/v1/app_users?select=username,is_admin,can_rename", headers=_supabase_headers(), timeout=5)
+            if r.status_code == 200:
+                users_data = r.json()
+        except Exception:
+            pass
+    u_list = [x["username"] for x in users_data] if users_data else sorted(list(ALLOWED_USERS))
+    admins = [x["username"] for x in users_data if x.get("is_admin") or x.get("can_rename")] if users_data else sorted(list(ADMIN_USERS))
+    can_rename = [x["username"] for x in users_data if x.get("can_rename")] if users_data else ["karthik", "locke"]
+    return jsonify({"users": sorted(u_list), "admins": sorted(admins), "can_rename": sorted(can_rename)})
 
 
 @app.route("/api/admin/users/add", methods=["POST"])
@@ -1567,6 +1835,12 @@ def admin_add_user():
         return jsonify({"error": "Invalid username (2-20 lowercase letters/digits/underscore)"}), 400
     if new_user in ALLOWED_USERS:
         return jsonify({"error": f"User '{new_user}' already exists"}), 409
+    
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if sub_url and sub_key:
+        requests.post(f"{sub_url}/rest/v1/app_users", json={"username": new_user, "is_admin": False, "can_rename": False}, headers=_supabase_headers(), timeout=5)
+    
     ALLOWED_USERS.add(new_user)
     return jsonify({"ok": True, "added": new_user, "users": sorted(list(ALLOWED_USERS))})
 
@@ -1578,10 +1852,17 @@ def admin_remove_user():
     if u not in ADMIN_USERS or pwd != "500":
         return jsonify({"error": "Unauthorized"}), 401
     target = (request.args.get("name") or request.form.get("name") or "").strip().lower()
-    if target in ADMIN_USERS:
+    user_row = _db_get_user(target)
+    if user_row and (user_row.get("can_rename") or user_row.get("is_admin")):
         return jsonify({"error": f"Cannot remove admin user '{target}'"}), 403
     if target not in ALLOWED_USERS:
         return jsonify({"error": f"User '{target}' not found"}), 404
+    
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if sub_url and sub_key:
+        requests.delete(f"{sub_url}/rest/v1/app_users?username=eq.{target}", headers=_supabase_headers(), timeout=5)
+    
     ALLOWED_USERS.discard(target)
     return jsonify({"ok": True, "removed": target, "users": sorted(list(ALLOWED_USERS))})
 
@@ -1641,15 +1922,43 @@ canvas{display:block;width:100%}
 <div id="ag_tip"></div>
 <!-- Access Gate Modal -->
 <div id="gate" style="position:fixed;inset:0;background:#000;z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px">
-  <div style="background:#0c0c0c;border:1px solid #333;padding:36px 32px;width:380px;max-width:92vw;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,0.95)">
-    <div style="font-size:22px;font-weight:bold;color:#29a8ff;margin-bottom:8px">Gap-Up Fade Terminal</div>
-    <div style="color:#8a8a8a;font-size:14px;margin-bottom:24px">Authorized access only. Enter your name:</div>
-    <input id="gate_name" placeholder="Enter name" style="width:100%;height:46px;font-size:17px;margin-bottom:14px;padding:0 14px;background:#000;border:1px solid #444;color:#fff;text-align:center" autofocus spellcheck="false" autocomplete="off">
-    <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:22px;font-size:13px;color:#aaa">
-      <input type="checkbox" id="gate_rem" checked style="width:16px;height:16px;cursor:pointer">
-      <label for="gate_rem" style="cursor:pointer">Remember my device</label>
+  <div style="background:#0c0c0c;border:1px solid #2a2a2a;padding:36px 32px;width:420px;max-width:92vw;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,0.95)">
+    <div style="font-size:22px;font-weight:bold;color:#29a8ff;margin-bottom:4px">Gap-Up Fade Terminal</div>
+    <div id="gate_subtitle" style="color:#8a8a8a;font-size:14px;margin-bottom:24px">Authorized access only. Enter your name:</div>
+
+    <!-- Step 1: Name -->
+    <div id="gate_step_name">
+      <input id="gate_name" placeholder="Enter your name" style="width:100%;height:46px;font-size:17px;margin-bottom:18px;padding:0 14px;background:#000;border:1px solid #444;color:#fff;text-align:center;box-sizing:border-box" autofocus spellcheck="false" autocomplete="off">
+      <button id="gate_btn" style="width:100%;height:46px;font-size:16px;background:#141414;border:1px solid #29a8ff;color:#29a8ff;cursor:pointer;font-weight:bold">Continue →</button>
     </div>
-    <button id="gate_btn" style="width:100%;height:46px;font-size:16px;background:#141414;border:1px solid #29a8ff;color:#29a8ff;cursor:pointer;font-weight:bold">Enter Terminal</button>
+
+    <!-- Step 2: Create Password -->
+    <div id="gate_step_create" style="display:none">
+      <div style="font-size:13px;color:#aaa;margin-bottom:14px">Welcome! Create a password for your account:</div>
+      <input id="gate_new_pwd" type="password" placeholder="New password (min 4 chars)" style="width:100%;height:44px;font-size:15px;margin-bottom:10px;padding:0 14px;background:#000;border:1px solid #444;color:#fff;text-align:center;box-sizing:border-box" autocomplete="new-password">
+      <input id="gate_new_pwd2" type="password" placeholder="Confirm password" style="width:100%;height:44px;font-size:15px;margin-bottom:18px;padding:0 14px;background:#000;border:1px solid #444;color:#fff;text-align:center;box-sizing:border-box" autocomplete="new-password">
+      <button id="gate_create_btn" style="width:100%;height:46px;font-size:16px;background:#0a1a0a;border:1px solid #3ddc84;color:#3ddc84;cursor:pointer;font-weight:bold">Create Password & Enter</button>
+    </div>
+
+    <!-- Step 3: Enter Password -->
+    <div id="gate_step_login" style="display:none">
+      <div style="font-size:13px;color:#aaa;margin-bottom:14px">Enter your password to continue:</div>
+      <input id="gate_pwd" type="password" placeholder="Password" style="width:100%;height:44px;font-size:18px;margin-bottom:18px;padding:0 14px;background:#000;border:1px solid #444;color:#fff;text-align:center;box-sizing:border-box" autocomplete="current-password">
+      <!-- Force logout banner (shown when another session is active) -->
+      <div id="gate_force_box" style="display:none;background:#1a1008;border:1px solid #ff9900;padding:12px 14px;margin-bottom:14px;text-align:left;font-size:12px;color:#ffb84d;line-height:1.5">
+        ⚠ This account is already logged in on another browser.<br>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:8px;cursor:pointer;color:#fff;font-size:13px">
+          <input type="checkbox" id="gate_force_chk" style="width:16px;height:16px">
+          Log out from all other browsers and continue here
+        </label>
+      </div>
+      <button id="gate_login_btn" style="width:100%;height:46px;font-size:16px;background:#141414;border:1px solid #29a8ff;color:#29a8ff;cursor:pointer;font-weight:bold">Enter Terminal</button>
+      <div style="margin-top:10px">
+        <span style="font-size:12px;color:#555;cursor:pointer" onclick="gateBack()">← Back</span>
+      </div>
+    </div>
+
+    <div id="gate_spinner" style="display:none;color:#888;font-size:13px;margin-top:14px">Checking…</div>
     <div id="gate_err" style="color:#ff5a5a;font-size:13px;margin-top:14px;display:none"></div>
   </div>
 </div>
@@ -1843,49 +2152,253 @@ const $=s=>document.querySelector(s);
   });
   document.addEventListener('click', () => { clearTimeout(tid); box.classList.remove('visible'); });
 })();
-const ALLOWED = ['karthik', 'locke', 'gunshow'];
-const PWD_USERS = ['karthik', 'locke'];
+const PWD_USERS = ['karthik', 'locke'];   // can rename; session-exempt
 let currentUser = localStorage.getItem('gap_user') || '';
+let sessionToken = localStorage.getItem('gap_token') || '';
+let _canRename = false;
+
+/* ---- Gate helpers ---- */
+function gateErr(msg){ $('#gate_err').textContent=msg; $('#gate_err').style.display= msg?'block':'none'; }
+function gateSpinner(on){ $('#gate_spinner').style.display=on?'block':'none'; }
+function gateShowStep(step){
+  ['name','create','login'].forEach(s=>{
+    const el = $('#gate_step_'+s);
+    if(el) el.style.display = (s===step)?'block':'none';
+  });
+  gateErr('');
+  if(step==='name') setTimeout(()=>{ const el=$('#gate_name'); if(el) el.focus(); },50);
+  if(step==='create') setTimeout(()=>{ const el=$('#gate_new_pwd'); if(el) el.focus(); },50);
+  if(step==='login') setTimeout(()=>{ const el=$('#gate_pwd'); if(el) el.focus(); },50);
+}
+function gateBack(){ gateShowStep('name'); }
+
+async function submitGate(){
+  const val = ($('#gate_name').value||'').trim().toLowerCase();
+  if(!val){ gateErr('Enter your name.'); return; }
+  gateErr('');
+  gateSpinner(true);
+  try{
+    const res = await fetch('/api/auth/status?user='+encodeURIComponent(val));
+    const data = await res.json();
+    gateSpinner(false);
+    if(!data.exists || data.error){
+      gateErr('Access denied: '+( data.error || 'Username not authorized.'));
+      return;
+    }
+    // Store pending username
+    currentUser = val;
+    const sub = $('#gate_subtitle');
+    if(sub) sub.textContent = 'Welcome, '+val.toUpperCase()+'!';
+    if(!data.has_password){
+      gateShowStep('create');
+    } else {
+      // Check if another session is active (only relevant for non-exempt users)
+      if(data.has_active_session && !data.can_rename){
+        $('#gate_force_box').style.display='block';
+        $('#gate_force_chk').checked=false;
+      } else {
+        $('#gate_force_box').style.display='none';
+      }
+      gateShowStep('login');
+    }
+  } catch(e){
+    gateSpinner(false);
+    gateErr('Network error. Try again.');
+  }
+}
+
+async function submitCreate(){
+  const pwd  = ($('#gate_new_pwd').value||'').trim();
+  const pwd2 = ($('#gate_new_pwd2').value||'').trim();
+  if(pwd.length < 4){ gateErr('Password must be at least 4 characters.'); return; }
+  if(pwd !== pwd2){ gateErr('Passwords do not match.'); return; }
+  gateErr('');
+  gateSpinner(true);
+  try{
+    const res = await fetch('/api/auth/set-password',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({user: currentUser, password: pwd})
+    });
+    const data = await res.json();
+    gateSpinner(false);
+    if(!data.ok){ gateErr(data.error || 'Failed to create password.'); return; }
+    sessionToken = data.session_token || '';
+    _canRename = !!data.can_rename;
+    _finishLogin(data);
+  } catch(e){
+    gateSpinner(false);
+    gateErr('Network error. Try again.');
+  }
+}
+
+async function submitLogin(){
+  const pwd = ($('#gate_pwd').value||'').trim();
+  if(!pwd){ gateErr('Enter your password.'); return; }
+  const forceLogout = !!(document.getElementById('gate_force_chk') && $('#gate_force_chk').checked);
+  gateErr('');
+  gateSpinner(true);
+  try{
+    const res = await fetch('/api/auth/login',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({user: currentUser, password: pwd, force_logout: forceLogout})
+    });
+    const data = await res.json();
+    gateSpinner(false);
+    if(res.status === 409 && data.require_force){
+      // Another session active, show the force-logout checkbox
+      $('#gate_force_box').style.display='block';
+      gateErr('Account is already logged in elsewhere. Check the box above to continue here.');
+      return;
+    }
+    if(!data.ok){ gateErr(data.error || 'Login failed.'); return; }
+    sessionToken = data.session_token || '';
+    _canRename = !!data.can_rename;
+    _finishLogin(data);
+  } catch(e){
+    gateSpinner(false);
+    gateErr('Network error. Try again.');
+  }
+}
+
+function _finishLogin(data){
+  // Persist
+  localStorage.setItem('gap_user', currentUser);
+  if(sessionToken) localStorage.setItem('gap_token', sessionToken);
+  else localStorage.removeItem('gap_token');
+  checkAuth();
+}
 
 function checkAuth(){
-  const cur = (currentUser || '').toLowerCase();
-  if(currentUser && ALLOWED.includes(cur)){
-    $('#gate').style.display='none';
-    $('#admin_view').style.display='none';
-    $('#app_main').style.display='block';
-    $('#u_name').textContent=currentUser.toUpperCase();
-    if(PWD_USERS.includes(cur)){
-      $('#u_name').style.cursor='pointer';
-      $('#u_name').style.textDecoration='underline dotted';
-    } else {
-      $('#u_name').style.cursor='default';
-      $('#u_name').style.textDecoration='none';
-    }
-    $('#t').focus();
+  if(currentUser && sessionToken){
+    _showApp();
     return true;
   }
-  $('#gate').style.display='flex';
-  $('#app_main').style.display='none';
-  $('#admin_view').style.display='none';
-  $('#gate_name').focus();
+  // Try auto-login with stored token
+  if(currentUser && !sessionToken){
+    // No token – need to re-login
+  }
+  _showGate();
   return false;
 }
 
-function submitGate(){
-  const val = ($('#gate_name').value||'').trim().toLowerCase();
-  if(!ALLOWED.includes(val)){
-    $('#gate_err').textContent='Access denied.';
-    $('#gate_err').style.display='block';
+function _showApp(){
+  const cur = currentUser.toLowerCase();
+  $('#gate').style.display='none';
+  $('#admin_view').style.display='none';
+  $('#app_main').style.display='block';
+  $('#u_name').textContent=currentUser.toUpperCase();
+  // Show rename affordance for karthik/locke
+  if(_canRename || PWD_USERS.includes(cur)){
+    $('#u_name').style.cursor='pointer';
+    $('#u_name').style.textDecoration='underline dotted';
+    $('#u_name').title = 'Click to rename username or view admin panel';
+  } else {
+    $('#u_name').style.cursor='default';
+    $('#u_name').style.textDecoration='none';
+    $('#u_name').title = 'Click to view admin panel';
+  }
+  $('#t').focus();
+  // Periodically verify session (every 90s) for non-exempt users
+  if(!_canRename && !PWD_USERS.includes(cur)){
+    _startSessionPoll();
+  }
+}
+
+function _showGate(){
+  $('#gate').style.display='flex';
+  $('#app_main').style.display='none';
+  $('#admin_view').style.display='none';
+  gateShowStep('name');
+}
+
+let _sessionPollTimer = null;
+function _startSessionPoll(){
+  if(_sessionPollTimer) clearInterval(_sessionPollTimer);
+  _sessionPollTimer = setInterval(async ()=>{
+    if(!currentUser || !sessionToken) return;
+    try{
+      const res = await fetch('/api/auth/verify-session?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken));
+      if(res.status === 401){
+        clearInterval(_sessionPollTimer);
+        alert('Your session was terminated because this account logged in from another browser.');
+        doLogout();
+      }
+    } catch(e){}
+  }, 90000);
+}
+
+function doLogout(){
+  if(_sessionPollTimer){ clearInterval(_sessionPollTimer); _sessionPollTimer=null; }
+  localStorage.removeItem('gap_user');
+  localStorage.removeItem('gap_token');
+  currentUser='';
+  sessionToken='';
+  _canRename=false;
+  adminPwd='';
+  if($('#gate_name')) $('#gate_name').value='';
+  if($('#gate_pwd')) $('#gate_pwd').value='';
+  if($('#gate_new_pwd')) $('#gate_new_pwd').value='';
+  if($('#gate_new_pwd2')) $('#gate_new_pwd2').value='';
+  if($('#u_badge')) $('#u_badge').innerHTML='';
+  const sub = $('#gate_subtitle');
+  if(sub) sub.textContent='Authorized access only. Enter your name:';
+  _showGate();
+}
+
+/* Rename modal ---- */
+function openRenameModal(){
+  const cur = currentUser.toLowerCase();
+  if(!PWD_USERS.includes(cur) && !_canRename) return;
+  const nm = prompt('Enter new username (2-20 letters/numbers/underscore):', currentUser);
+  if(!nm || nm.trim().toLowerCase() === currentUser.toLowerCase()) return;
+  const newName = nm.trim().toLowerCase();
+  if(!/^[a-z0-9_]{2,20}$/.test(newName)){
+    alert('Invalid username. Use only a-z, 0-9, _ (2-20 chars).');
     return;
   }
-  $('#gate_err').style.display='none';
-  currentUser = val;
-  if($('#gate_rem').checked){
-    localStorage.setItem('gap_user', val);
-  } else {
-    localStorage.removeItem('gap_user');
+  fetch('/api/auth/rename-user',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({old_name: currentUser, new_name: newName, token: sessionToken})
+  }).then(r=>r.json()).then(data=>{
+    if(data.error){ alert('Rename failed: '+data.error); return; }
+    // Update stored name
+    currentUser = data.new_name || newName;
+    localStorage.setItem('gap_user', currentUser);
+    $('#u_name').textContent = currentUser.toUpperCase();
+    alert('Username changed to: '+currentUser.toUpperCase());
+  }).catch(e=>alert('Network error: '+e));
+}
+
+/* ---- Auto re-auth on load ---- */
+async function initAuth(){
+  const savedUser = localStorage.getItem('gap_user') || '';
+  const savedToken = localStorage.getItem('gap_token') || '';
+  if(!savedUser || !savedToken){ _showGate(); return; }
+  // Verify saved session
+  try{
+    const res = await fetch('/api/auth/verify-session?user='+encodeURIComponent(savedUser)+'&token='+encodeURIComponent(savedToken));
+    const data = await res.json();
+    if(res.ok && data.ok){
+      currentUser = savedUser;
+      sessionToken = savedToken;
+      _canRename = !!data.can_rename;
+      _showApp();
+    } else {
+      localStorage.removeItem('gap_token');
+      currentUser = savedUser;
+      sessionToken = '';
+      _showGate();
+      // Pre-fill name in gate
+      if($('#gate_name')) $('#gate_name').value = savedUser;
+    }
+  } catch(e){
+    // Network error – allow offline? show gate
+    _showGate();
+    if($('#gate_name')) $('#gate_name').value = savedUser;
   }
-  checkAuth();
 }
 
 let lastText="", timer=null, lastChart=null, EV=[];
@@ -2028,7 +2541,7 @@ async function run(refresh){
   if(tab.timer) clearInterval(tab.timer);
 
   try {
-    const r = await fetch('/api/start?ticker=' + encodeURIComponent(t) + '&user=' + encodeURIComponent(currentUser) + (refresh ? '&refresh=1' : ''));
+    const r = await fetch('/api/start?ticker=' + encodeURIComponent(t) + '&user=' + encodeURIComponent(currentUser) + '&token=' + encodeURIComponent(sessionToken) + (refresh ? '&refresh=1' : ''));
     const j = await r.json();
     if(j.error){
       tab.isRunning = false;
@@ -2470,12 +2983,13 @@ $('#go').onclick=()=>run(false); $('#rf').onclick=()=>run(true); $('#cp').onclic
 $('#t').addEventListener('keydown',e=>{if(e.key==='Enter')run(false)});
 $('#gate_btn').onclick=submitGate;
 $('#gate_name').addEventListener('keydown',e=>{if(e.key==='Enter')submitGate();});
+if($('#gate_create_btn')) $('#gate_create_btn').onclick=submitCreate;
+if($('#gate_new_pwd2')) $('#gate_new_pwd2').addEventListener('keydown',e=>{if(e.key==='Enter')submitCreate();});
+if($('#gate_new_pwd')) $('#gate_new_pwd').addEventListener('keydown',e=>{if(e.key==='Enter')$('#gate_new_pwd2').focus();});
+if($('#gate_login_btn')) $('#gate_login_btn').onclick=submitLogin;
+if($('#gate_pwd')) $('#gate_pwd').addEventListener('keydown',e=>{if(e.key==='Enter')submitLogin();});
 $('#logout_btn').onclick=()=>{
-  localStorage.removeItem('gap_user');
-  currentUser='';
-  $('#gate_name').value='';
-  $('#u_badge').innerHTML='';
-  checkAuth();
+  if(confirm('Log out from this browser?')) doLogout();
 };
 
 let adminPwd = '';
@@ -2777,7 +3291,16 @@ async function verifyPwd(){
   }
 }
 
-$('#u_name').onclick=openPwdModal;
+$('#u_name').onclick=function(){
+  const cur=(currentUser||'').toLowerCase();
+  if(_canRename || PWD_USERS.includes(cur)){
+    // Offer rename or admin panel
+    const choice = confirm('Click OK to rename your username, or Cancel to open the admin panel.');
+    if(choice){ openRenameModal(); } else { openPwdModal(); }
+  } else {
+    openPwdModal();
+  }
+};
 $('#admin_clear_btn').onclick=clearOldSearches;
 $('#u_badge').onclick=openPwdModal;
 $('#pwd_submit').onclick=verifyPwd;
@@ -2930,7 +3453,7 @@ window.addEventListener('keydown', e => {
   }
 });
 
-checkAuth();
+initAuth();
 </script></body></html>"""
 
 # ----------------------------------------------------------------------------- runner_stats integration
