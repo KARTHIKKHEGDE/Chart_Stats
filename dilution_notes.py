@@ -1546,7 +1546,12 @@ def price_section(sym):
     if not curr_px and not df.empty and "Close" in df:
         curr_px = float(df["Close"].iloc[-1])
     risk_state()["last_price"] = curr_px
-    out.append(f"Float {fl/1e6:.1f}M" if fl else "Float n/a")
+    if fl and so and fl > so:
+        out.append(f"Float ~{so/1e6:.1f}M (⚠ Yahoo data lag: raw {fl/1e6:.1f}M exceeds {so/1e6:.1f}M shares out post-split)")
+    elif fl:
+        out.append(f"Float {fl/1e6:.1f}M")
+    else:
+        out.append("Float n/a")
     if so:
         out.append(f"Shares out {so/1e6:.1f}M")
     out.append("")
