@@ -23,7 +23,7 @@ VWAP everywhere = continuous VWAP from 04:00 ET (premarket + regular), like a ch
 Everything fetched from Polygon is cached in ./.gapcache so repeat runs are fast.
 (Cache note: 1-min files are reused as-is, nothing to refetch for the new sections.)
 """
-import os, re, json, time, math, threading, uuid, warnings, hashlib, secrets, datetime as dt, html
+import os, re, json, time, math, threading, uuid, warnings, hashlib, secrets, datetime as dt
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -31,7 +31,6 @@ import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
-from html.parser import HTMLParser
 from flask import Flask, request, jsonify, Response, send_file
 from urllib.parse import quote
 
@@ -2202,14 +2201,6 @@ _scanner_details = {}
 _scanner_details_lock = threading.RLock()
 _scanner_details_inflight = set()
 _scanner_details_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="scanner-details")
-_finviz_http = requests.Session()
-_finviz_http.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-})
-_finviz_session_lock = threading.Lock()
-_finviz_session_warmed = False
 
 
 def _normalize_yahoo_news(article, kind):
@@ -2286,77 +2277,6 @@ def _get_scanner_news(ticker):
     return news
 
 
-def _finviz_dilution_labels(ticker):
-    """Read the History and Cash Need labels from Finviz's rendered dilution page."""
-    global _finviz_session_warmed
-    ticker = re.sub(r"[^A-Z0-9.\-]", "", str(ticker).upper())
-    if not ticker:
-        return {"history": None, "cash_need": None}
-
-    class _FinvizText(HTMLParser):
-        def __init__(self):
-            super().__init__(convert_charrefs=True)
-            self.parts = []
-
-        def handle_data(self, data):
-            if data and data.strip():
-                self.parts.append(data)
-
-        def handle_starttag(self, tag, attrs):
-            for key, value in attrs:
-                if value and (key in ("aria-label", "title", "content", "alt") or key.startswith("data-")):
-                    self.parts.append(value)
-
-    # Establish a normal Finviz cookie session before requesting the stock page.
-    with _finviz_session_lock:
-        if not _finviz_session_warmed:
-            try:
-                _finviz_http.get("https://finviz.com/", timeout=8)
-            except requests.RequestException:
-                pass
-            _finviz_session_warmed = True
-    page_params = (
-        {"p": "m", "t": ticker, "ta": 1, "ty": "di"},
-        {"b": 2, "p": "m", "t": ticker, "ta": 1, "ty": "di"},
-    )
-    errors = []
-    combined = {"history": None, "cash_need": None}
-    for params in page_params:
-        with _finviz_session_lock:
-            response = _finviz_http.get(
-                "https://finviz.com/stock", params=params,
-                headers={"Referer": "https://finviz.com/", "Sec-Fetch-Dest": "document",
-                         "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "same-origin",
-                         "Upgrade-Insecure-Requests": "1"},
-                timeout=12,
-            )
-        if response.status_code != 200:
-            errors.append(f"HTTP {response.status_code}")
-            continue
-        parser = _FinvizText()
-        parser.feed(response.text)
-        plain = html.unescape(" ".join(parser.parts))
-        plain = re.sub(r"\s+", " ", plain).strip()
-        labels = (("Dilution Risk", "dilution_risk"), ("Offering", "offering"),
-                  ("Cash Need", "cash_need"), ("Overhang", "overhang"), ("History", "history"))
-        label_pattern = re.compile(r"\b(?:" + "|".join(re.escape(label) for label, _ in labels) + r")\b", re.I)
-        for label, field in labels:
-            for match in re.finditer(rf"\b{re.escape(label)}\b", plain, re.I):
-                next_label = label_pattern.search(plain, match.end())
-                end = min(match.end() + 90, next_label.start() if next_label else len(plain))
-                value = re.match(r"\s*[:\-]?\s*(Severe|High|Medium|Moderate|Low)\b", plain[match.end():end], re.I)
-                if value:
-                    level = value.group(1).lower()
-                    combined[field] = "High" if level in ("severe", "high") else "Not High"
-                    break
-        if combined["history"] is not None and combined["cash_need"] is not None:
-            return combined
-    if errors and combined["history"] is None and combined["cash_need"] is None:
-        raise RuntimeError("Finviz returned " + ", ".join(errors))
-    if combined["history"] is None or combined["cash_need"] is None:
-        raise RuntimeError("Finviz dilution labels were not found in its page")
-    return combined
-
 def _scanner_approaches(ticker, previous_close):
     """Return first-pullback approach alerts before price crosses VWAP/21 EMA."""
     bars = yf.Ticker(ticker.replace(".", "-")).history(
@@ -2423,8 +2343,6 @@ def _refresh_scanner_details(ticker, previous_close):
         with _scanner_details_lock:
             cached = _scanner_details.setdefault(ticker, {})
             technical_at = cached.get("technical_at", 0)
-            finviz_at = cached.get("finviz_at", 0)
-            finviz_ok = cached.get("finviz_ok", False)
             news_at = cached.get("news_at", 0)
         if now - technical_at >= 20:
             try:
@@ -2433,20 +2351,6 @@ def _refresh_scanner_details(ticker, previous_close):
                 approaches = []
             with _scanner_details_lock:
                 _scanner_details.setdefault(ticker, {}).update(approaches=approaches, technical_at=now)
-        if now - finviz_at >= (14400 if finviz_ok else 180):
-            try:
-                labels = _finviz_dilution_labels(ticker)
-                finviz_error = None
-            except Exception as exc:
-                app.logger.warning("Finviz dilution scrape failed for %s: %s", ticker, exc)
-                labels = {"history": None, "cash_need": None}
-                finviz_error = str(exc)[:180]
-            success = labels.get("history") is not None and labels.get("cash_need") is not None
-            with _scanner_details_lock:
-                _scanner_details.setdefault(ticker, {}).update(
-                    history_risk=labels.get("history"), cash_need=labels.get("cash_need"),
-                    finviz_at=now, finviz_ok=success, finviz_error=finviz_error
-                )
         if now - news_at >= 300:
             try:
                 _get_scanner_news(ticker)
@@ -2463,7 +2367,6 @@ def _queue_scanner_details(row):
     with _scanner_details_lock:
         cached = _scanner_details.setdefault(ticker, {})
         due = (now - cached.get("technical_at", 0) >= 20
-               or now - cached.get("finviz_at", 0) >= (14400 if cached.get("finviz_ok") else 180)
                or now - cached.get("news_at", 0) >= 300)
         if not due or ticker in _scanner_details_inflight:
             return
@@ -2492,9 +2395,6 @@ def scanner_market_scan():
             with _scanner_details_lock:
                 details = dict(_scanner_details.get(row["ticker"]) or {})
             output.append({**row,
-                           "history_risk": details.get("history_risk"),
-                           "cash_need": details.get("cash_need"),
-                           "finviz_error": details.get("finviz_error"),
                            "news": details.get("news") or [],
                            "approaches": details.get("approaches") or []})
         return jsonify({"tickers": output, "updated": _scanner_cache["at"],
@@ -2651,8 +2551,8 @@ canvas{display:block;width:100%}
     </div>
     <div style="overflow:auto;padding:0 18px 18px">
       <table style="width:100%;border-collapse:collapse"><thead><tr style="color:#aaa;text-align:left;border-bottom:1px solid #333">
-        <th style="padding:8px">Ticker</th><th style="padding:8px;text-align:right">Price</th><th style="padding:8px;text-align:right">Gap</th><th style="padding:8px;text-align:right">Volume</th><th style="padding:8px;text-align:right">$ Volume</th><th style="padding:8px;text-align:center" title="Finviz dilution-history label when available">Dilution History</th><th style="padding:8px;text-align:center" title="Finviz cash-need label when available">Cash Need</th>
-      </tr></thead><tbody id="scanner_rows"><tr><td colspan="7" style="padding:18px;color:#777;text-align:center">No scan yet</td></tr></tbody></table>
+        <th style="padding:8px">Ticker</th><th style="padding:8px;text-align:right">Price</th><th style="padding:8px;text-align:right">Gap</th><th style="padding:8px;text-align:right">Volume</th><th style="padding:8px;text-align:right">$ Volume</th>
+      </tr></thead><tbody id="scanner_rows"><tr><td colspan="5" style="padding:18px;color:#777;text-align:center">No scan yet</td></tr></tbody></table>
     </div>
   </section>
 </div>
@@ -4584,22 +4484,14 @@ async function refreshScanner(){
     }
     const body = $('#scanner_rows');
     if(!tickers.length){
-      body.innerHTML = '<tr><td colspan="7" style="padding:18px;color:#777;text-align:center">No tickers currently meet all scanner conditions.</td></tr>';
+      body.innerHTML = '<tr><td colspan="5" style="padding:18px;color:#777;text-align:center">No tickers currently meet all scanner conditions.</td></tr>';
     } else {
-      const riskCell = (value,error)=>{
-        const errorCode = error && ((String(error).match(/HTTP\s+\d{3}/i) || [])[0] || 'Parse error');
-        const text = value || (error ? errorCode : 'Loading…');
-        const color = text === 'High' ? '#ff7373' : text === 'Not High' ? '#3ddc84' : error ? '#ffb454' : '#777';
-        const title = error ? `Finviz scrape error: ${error}; retrying shortly` : 'Finviz dilution page label';
-        return `<td style="padding:9px;text-align:center;color:${color}" title="${esc(title)}">${esc(text)}</td>`;
-      };
       body.innerHTML = tickers.map(row=>`<tr class="scanner-result-row" data-ticker="${esc(row.ticker)}" style="border-bottom:1px solid #20242a;cursor:pointer" title="Load notes for ${esc(row.ticker)}" onmouseover="this.style.background='#101820'" onmouseout="this.style.background='transparent'">`+
         `<td style="padding:9px;color:#6cc4ff;font-weight:bold">${esc(row.ticker)}</td>`+
         `<td style="padding:9px;text-align:right">$${Number(row.price).toFixed(2)}</td>`+
         `<td style="padding:9px;text-align:right;color:#3ddc84">+${Number(row.gap_pct).toFixed(1)}%</td>`+
         `<td style="padding:9px;text-align:right">${Number(row.volume).toLocaleString()}</td>`+
-        `<td style="padding:9px;text-align:right">$${Number(row.dollar_volume).toLocaleString()}</td>`+
-        riskCell(row.history_risk,row.finviz_error)+riskCell(row.cash_need,row.finviz_error)+`</tr>`).join('');
+        `<td style="padding:9px;text-align:right">$${Number(row.dollar_volume).toLocaleString()}</td></tr>`).join('');
       body.querySelectorAll('[data-ticker]').forEach(row=>row.onclick=()=>selectScannerTicker(row.dataset.ticker));
     }
     const stamp = new Date((data.updated || Date.now()/1000)*1000).toLocaleTimeString();
