@@ -312,7 +312,8 @@ def _alpaca_live_df(t):
                         r2 = requests.get(f"https://data.alpaca.markets/v2/stocks/{t.upper()}/trades?limit=10000&feed={feed}&sort=desc", headers=headers, timeout=5).json()
                         all_t = (r1.get("trades") or []) + (r2.get("trades") or [])
                         if all_t:
-                            tc_v = sum(x.get("s", 0) for x in all_t if x.get("x") == "D")
+                            # TC2000 uses Nasdaq Basic = FINRA TRF ("D") + Nasdaq ("Q")
+                            tc_v = sum(x.get("s", 0) for x in all_t if x.get("x") in ("D", "Q"))
                             tot_v = sum(x.get("s", 0) for x in all_t)
                             if tot_v > 0 and 0 < tc_v <= tot_v:
                                 tc_ratio = tc_v / tot_v
