@@ -109,6 +109,7 @@ except Exception:
     pass
 NPTS = 144                    # 5-minute steps from 04:00 ET to 16:00 ET (premarket + regular session)
 PM_START, RG_START, RG_END = 240, 570, 960   # minutes since midnight ET
+GAP_REL_START, GAP_REL_END = -360, 720  # minutes from premarket high for the gap-retention chart
 
 # ----------------------------------------------------------------------------- cache / http
 _cache_lock = threading.Lock()
@@ -741,7 +742,8 @@ def analyze_event(t, i, daily, ctx):
     e = {
         "date": row["date"], "pc": pc, "gap": o / pc - 1, "open": o, "hod": hod, "lod": lod, "close": close,
         "volume": row["v"], "hod_min": m["hod_min"], "hod_bkt": hod_bucket(m["hod_min"]),
-        "pm_high": m["pm_high"], "pm_high_pct": (m["pm_high"] / pc - 1) if m["pm_high"] else None,
+        "pm_high": m["pm_high"], "pm_hi_min": m.get("pm_hi_min"),
+        "pm_high_pct": (m["pm_high"] / pc - 1) if m["pm_high"] else None,
         "o2h": hod / o - 1, "o2l": lod / o - 1, "o2c": o2c, "hod_close": h2c,
         "close_pos": m["close_pos"], "close_vs_lod": m["close_vs_lod"], "gap_fill": m["gap_fill"],
         "lost_min": m["lost_min"], "vb_min": m["vb_min"], "vb_to_close": m["vb_to_close"],
@@ -1260,13 +1262,62 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes):
                   if e["path"][k] is not None and e["path"][now_k] is not None and 1 + e["path"][now_k] > 0.05]
             if rs:
                 proj[k] = round(base * float(np.median(rs)) - 1, 4)
+    gap_offsets = list(range(GAP_REL_START, GAP_REL_END + 1, 5))
+    gap_labels = ["PM high" if offset == 0 else f"{offset:+d}m" for offset in gap_offsets]
+    def gap_retention(path, gap_size, pm_high_min):
+        aligned = []
+        if not gap_size or gap_size <= 0 or pm_high_min is None:
+            return [None] * len(gap_offsets)
+        for offset in gap_offsets:
+            source_pos = (pm_high_min + offset - PM_START) / 5
+            if source_pos < 0 or source_pos > NPTS:
+                aligned.append(None)
+                continue
+            left, right = int(math.floor(source_pos)), int(math.ceil(source_pos))
+            if path[left] is None or path[right] is None:
+                aligned.append(None)
+                continue
+            fraction = source_pos - left
+            value = path[left] + (path[right] - path[left]) * fraction
+            aligned.append(round(value / gap_size, 4))
+        return aligned
+
+    historical_gap_paths = [gap_retention(e["path"], e.get("pm_high_pct"), e.get("pm_hi_min")) for e in S]
+    gap_arr = np.array([[np.nan if v is None else v for v in path]
+                        for path in historical_gap_paths], dtype=float) if historical_gap_paths else np.zeros((0, len(gap_offsets)))
+    def gap_band(q):
+        out = []
+        for k in range(len(gap_offsets)):
+            col = gap_arr[:, k] if len(gap_arr) else []
+            col = col[~np.isnan(col)] if len(gap_arr) else []
+            out.append(round(float(np.percentile(col, q)), 4) if len(col) else None)
+        return out
+    live_gap_size = ((lm.get("pm_high") / live["pc"] - 1)
+                     if lm.get("pm_high") and live["pc"] > 0 and lm["pm_high"] > live["pc"] else None)
+    live_pm_high_min = lm.get("pm_hi_min")
+    gap_today = gap_retention(lpath, live_gap_size, live_pm_high_min)
+    gap_now_k = max((k for k, value in enumerate(gap_today) if value is not None), default=None)
+    gap_proj = [None] * len(gap_offsets)
+    if live_gap_size and gap_now_k is not None:
+        gap_proj[gap_now_k] = gap_today[gap_now_k]
+        for k in range(gap_now_k + 1, len(gap_offsets)):
+            changes = [path[k] - path[gap_now_k] for path in historical_gap_paths
+                       if path[k] is not None and path[gap_now_k] is not None]
+            if changes:
+                gap_proj[k] = round(gap_today[gap_now_k] + float(np.median(changes)), 4)
+    gap_open_k = (round((RG_START - live_pm_high_min - GAP_REL_START) / 5)
+                  if live_pm_high_min is not None else None)
     chart = {"labels": labels, "paths": [e["path"] for e in S], "med": band(50), "p25": band(25), "p75": band(75),
-             "today": lpath, "proj": proj, "now_k": now_k, "open_k": (RG_START - PM_START) // 5}
+             "today": lpath, "proj": proj, "gap_labels": gap_labels, "gap_paths": historical_gap_paths,
+             "gap_med": gap_band(50), "gap_p25": gap_band(25), "gap_p75": gap_band(75),
+             "gap_today": gap_today, "gap_proj": gap_proj, "premarket_gap_pct": live_gap_size,
+             "gap_now_k": gap_now_k, "gap_open_k": gap_open_k,
+             "normalization": "prev_close", "now_k": now_k, "open_k": (RG_START - PM_START) // 5}
     keyk = [(0, 240), (66, 570), (72, 600), (84, 660), (96, 720), (120, 840), (144, 960)]
     ptext = []
     for k, mn in keyk:
         m_, a_, b_ = chart["med"][k], chart["p25"][k], chart["p75"][k]
-        ptext.append([f"{hhmm(mn, live['date'])} IST  history median / p25..p75 / today / proj",
+        ptext.append([f"{hhmm(mn, live['date'])} IST  history median / p25..p75 / today / proj (% from prev close)",
                       f"{pct(m_, 0)}  /  {pct(a_, 0)}..{pct(b_, 0)}  /  {pct(lpath[k], 0)}  /  {pct(proj[k], 0)}", "w"])
 
     head.update(ticker=t, n=st["n"], summary=summary,
@@ -1274,7 +1325,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes):
     T = {
         "p1": f"[1] CURRENT DAY SETUP ({day_display} — latest data)",
         "p6": "[6] 2-MIN CHARTS — premarket → close, volume + VWAP, SELL = short entry, BUY = cover (stop or close)",
-        "p7": "[7] NORMALIZED PATH (% from prev close) — premarket → close, Times in IST",
+        "p7": "[7] NORMALIZED PRICE PATH",
         "pa": "[A] HISTORICAL STATISTICS (similar)", "pb": "[B] KEY PATTERNS (similar)", "pc": "[C] FINAL RATING",
         "pd": "[D] ENTRY MODELS (similar setups)",
     }
@@ -3208,6 +3259,7 @@ async function run(refresh){
       isRunning: true,
       lastText: '',
       lastChart: null,
+      pathNormalization: 'prev_close',
       EV: [],
       timer: null
     };
@@ -3279,6 +3331,8 @@ async function run(refresh){
 function renderTab(tab, r, isRefresh){
   tab.lastText = r.text;
   tab.lastChart = r.chart;
+  tab.pathNormalization = tab.pathNormalization || 'prev_close';
+  tab.lastChart.normalization = tab.pathNormalization;
   tab.EV = r.evcharts || [];
   tab.result = r;
 
@@ -3316,8 +3370,10 @@ function renderTab(tab, r, isRefresh){
      `<div class="evgrid">`+tab.EV.map((c,i)=>`<div class="evc" onclick="openChartModal(${i})" title="Click to view large"><div class="ev_zoom_hint">🔍 Click to enlarge</div><div class="evt">${esc(c.title)}${c.sim?'':'<span class="d"> (not in similar set)</span>'}</div><canvas id="ev${i}"></canvas></div>`).join('')+
      `<\/div><div class="foot"><span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance.">━ VWAP<\/span>  <span class="y" data-tip="Pre-market High — highest price before the US market open. Common fade target.">┅ PM high<\/span>  <span class="d" data-tip="Previous Close — yesterday’s close. Gap % is measured from here.">┅ prev close<\/span> &nbsp; <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period EMA on 2-min closes. Fast trend line.">━ EMA9<\/span> <span style="color:#ffa500" data-tip="EMA 20 — 20-period EMA on 2-min closes. Slower trend line. Bearish when EMA9 drops below it.">━ EMA20<\/span> <span class="g" data-tip="Bone Zone cloud — shaded between EMA9 &amp; EMA20. Green = bullish. Red = bearish.">▒<\/span><span class="r">▒<\/span> cloud <span class="d" data-tip="Bollinger Bands (20-period, 2 std dev). Shows expected volatility range on the 2-min chart.">━ BB(20,2)<\/span> &nbsp; <span data-tip="SELL signal — short entry triggered by an entry model.">▼ SELL<\/span> &nbsp; <span data-tip="BUY / Cover signal — close the short here. P&amp;L % shown next to it.">▲ BUY<\/span>. <span data-tip="Lighter shaded background = pre-market session (before 9:30 ET / 19:00 IST).">Shaded = premarket<\/span>. X axis = IST.<\/div><\/div>`;
 
-  o += `<div class="panel"><div class="ttl">${esc(T.p7)}</div><canvas id="cv"></canvas>`+
-     `<div class="foot"><span class="b" data-tip="History Median — the median % price path from prev close across all similar historical gap-up setups. The expected average path.">━ history median<\/span> &nbsp; <span style="color:#6c8" data-tip="p25–p75 Band (BLUE ZONE) — the middle 50% range of all similar setups. Today staying inside = normal behaviour. Breaking out = unusual.">▒ p25–p75<\/span> &nbsp; <span class="y" data-tip="Today — actual price path so far, as % change from yesterday’s close.">━ today<\/span> &nbsp; <span class="y" data-tip="Today Projected — the historical median path re-scaled to today’s current level. Where the median expects price to go from here.">┅ today projected<\/span> &nbsp; <span class="d" data-tip="Each Similar Setup — individual price paths of every similar historical gap-up day. Shows full range of outcomes.">━ each similar setup<\/span> &nbsp; Y = % from previous close<\/div><\/div>`;
+  const pmGapText = Number.isFinite(r.chart.premarket_gap_pct)
+    ? `${(r.chart.premarket_gap_pct*100).toFixed(1)}% (PM high vs prev close)` : 'Not available';
+  o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap"><span>${esc(T.p7)}</span><span style="display:flex;align-items:center;gap:12px;font-size:12px;font-weight:normal;color:#aaa"><span>Premarket gap: <b style="color:#e8e8e8">${esc(pmGapText)}</b></span><label for="path_norm">View <select id="path_norm" style="margin-left:5px"><option value="prev_close">% from previous close</option><option value="gap">% of premarket gap retained</option></select></label></span></div><canvas id="cv"></canvas>`+
+     `<div class="foot" id="path_norm_foot"><span class="b" data-tip="Historical median across similar gap-up setups.">━ history median<\/span> &nbsp; <span style="color:#6c8" data-tip="Middle 50% range of similar setups.">▒ p25–p75<\/span> &nbsp; <span class="y">━ today<\/span> &nbsp; <span class="y">┅ today projected<\/span> &nbsp; <span class="d">━ each similar setup<\/span> &nbsp; Y = % from previous close<\/div><\/div>`;
 
   o += `<div class="three"><div class="panel"><div class="ttl">${esc(T.pa)}</div>${kv(r.pa)}</div>`+
      `<div class="panel"><div class="ttl">${esc(T.pb)}</div>${kv(r.pb)}</div>`+
@@ -3331,6 +3387,20 @@ function renderTab(tab, r, isRefresh){
   const bzCheck = tab.container.querySelector('#bz');
   if(sigSelect) sigSelect.onchange = () => drawEvAll(tab.EV, tab.container);
   if(bzCheck) bzCheck.onchange = () => drawEvAll(tab.EV, tab.container);
+  const pathNormSelect = tab.container.querySelector('#path_norm');
+  if(pathNormSelect){
+    pathNormSelect.value = tab.pathNormalization;
+    pathNormSelect.onchange = ()=>{
+      tab.pathNormalization = pathNormSelect.value;
+      tab.lastChart.normalization = tab.pathNormalization;
+      const foot = tab.container.querySelector('#path_norm_foot');
+      if(foot) foot.lastChild.textContent = tab.pathNormalization === 'gap'
+        ? ' X = minutes from each day’s PM high · Y = % of that day’s gap retained · 100% = PM high · 0% = previous close'
+        : ' Y = % from previous close';
+      const canvas = tab.container.querySelector('#cv');
+      if(canvas) drawChart(tab.lastChart, canvas);
+    };
+  }
 
   drawEvAll(tab.EV, tab.container);
   const cv = tab.container.querySelector('#cv');
@@ -3663,35 +3733,46 @@ function drawChart(ch, cvElement, hoverState){
   x.clearRect(0,0,W,H);
   x.font='12px Consolas,monospace';
 
-  const L=52,R=14,T=12,B=26, pw=W-L-R, ph=H-T-B, n=ch.labels.length;
-  const vs=[0]; [ch.med,ch.p25,ch.p75,ch.today,ch.proj,...ch.paths].forEach(a=>a.forEach(v=>{if(v!=null)vs.push(v)}));
+  const gapMode = ch.normalization === 'gap';
+  const plot = gapMode ? {...ch, labels:ch.gap_labels||ch.labels, open_k:ch.gap_open_k,
+    now_k:ch.gap_now_k, paths:ch.gap_paths||[], med:ch.gap_med||[], p25:ch.gap_p25||[],
+    p75:ch.gap_p75||[], today:ch.gap_today||[], proj:ch.gap_proj||[]} : ch;
+  const L=52,R=14,T=12,B=26, pw=W-L-R, ph=H-T-B, n=plot.labels.length;
+  const vs=[0]; [plot.med,plot.p25,plot.p75,plot.today,plot.proj,...plot.paths].forEach(a=>a.forEach(v=>{if(v!=null)vs.push(v)}));
   let lo=Math.max(Math.min(...vs),-0.95), hi=Math.min(Math.max(...vs),10);
   if(hi-lo<0.1){hi+=0.05;lo-=0.05}
   const X=i=>L+pw*i/(n-1), Y=v=>T+ph*(1-(Math.max(lo,Math.min(hi,v))-lo)/(hi-lo));
 
   // Premarket light grey background on path chart
-  if(ch.open_k != null && ch.open_k > 0){
+  if(plot.open_k != null && plot.open_k > 0){
     x.fillStyle = 'rgba(255, 255, 255, 0.085)';
-    x.fillRect(L, T, X(ch.open_k) - L, ph);
+    x.fillRect(L, T, X(plot.open_k) - L, ph);
     x.fillStyle = '#8e8e9e';
     x.fillText('PRE-MARKET', L + 6, T + 13);
   }
   x.strokeStyle='#222'; x.fillStyle='#8a8a8a'; x.lineWidth=1;
   for(let k=0;k<=5;k++){const v=lo+(hi-lo)*k/5, y=Y(v); x.beginPath();x.moveTo(L,y);x.lineTo(W-R,y);x.stroke(); x.fillText((v*100).toFixed(0)+'%',4,y+4);}
-  for(let i=0;i<n;i+=6){const xx=X(i); x.beginPath();x.moveTo(xx,T);x.lineTo(xx,T+ph);x.stroke(); x.fillText(ch.labels[i],xx-14,H-8);}
+  const xTickStep = gapMode ? 24 : 6;
+  for(let i=0;i<n;i+=xTickStep){const xx=X(i); x.beginPath();x.moveTo(xx,T);x.lineTo(xx,T+ph);x.stroke(); x.fillText(plot.labels[i],xx-14,H-8);}
   x.strokeStyle='#666'; x.beginPath(); x.moveTo(L,Y(0)); x.lineTo(W-R,Y(0)); x.stroke();
-  x.strokeStyle='#777'; x.setLineDash([2,3]); x.beginPath(); x.moveTo(X(ch.open_k),T); x.lineTo(X(ch.open_k),T+ph); x.stroke(); x.setLineDash([]);
-  x.fillStyle='#777'; x.fillText('US open '+ch.labels[ch.open_k],X(ch.open_k)+4,T+12);
+  if(gapMode && lo <= 1 && hi >= 1){
+    x.strokeStyle='#697386'; x.setLineDash([3,4]); x.beginPath(); x.moveTo(L,Y(1)); x.lineTo(W-R,Y(1)); x.stroke(); x.setLineDash([]);
+    x.fillStyle='#9aa4b2'; x.fillText('PM HIGH 100%',L+6,Math.max(T+26,Y(1)-4));
+  }
+  if(plot.open_k != null && plot.open_k >= 0 && plot.open_k < n){
+    x.strokeStyle='#777'; x.setLineDash([2,3]); x.beginPath(); x.moveTo(X(plot.open_k),T); x.lineTo(X(plot.open_k),T+ph); x.stroke(); x.setLineDash([]);
+    x.fillStyle='#777'; x.fillText('US open',X(plot.open_k)+4,T+12);
+  }
   const line=(a,col,w,dash)=>{x.strokeStyle=col;x.lineWidth=w;x.setLineDash(dash||[]);x.beginPath();let on=false;a.forEach((v,i)=>{if(v==null){on=false;return;} if(!on){x.moveTo(X(i),Y(v));on=true}else x.lineTo(X(i),Y(v));});x.stroke();x.setLineDash([]);};
-  ch.paths.forEach(p=>line(p,'rgba(120,160,200,0.20)',1));
+  plot.paths.forEach(p=>line(p,'rgba(120,160,200,0.20)',1));
   x.fillStyle='rgba(108,196,255,0.14)'; x.beginPath(); let started=false;
-  for(let i=0;i<n;i++){ if(ch.p75[i]==null) continue; if(!started){x.moveTo(X(i),Y(ch.p75[i]));started=true}else x.lineTo(X(i),Y(ch.p75[i])); }
-  for(let i=n-1;i>=0;i--){ if(ch.p25[i]==null) continue; x.lineTo(X(i),Y(ch.p25[i])); }
+  for(let i=0;i<n;i++){ if(plot.p75[i]==null) continue; if(!started){x.moveTo(X(i),Y(plot.p75[i]));started=true}else x.lineTo(X(i),Y(plot.p75[i])); }
+  for(let i=n-1;i>=0;i--){ if(plot.p25[i]==null) continue; x.lineTo(X(i),Y(plot.p25[i])); }
   x.closePath(); x.fill();
-  line(ch.med,'#6cc4ff',2.5);
-  line(ch.proj,'#ffd23f',2,[6,5]);
-  line(ch.today,'#ffd23f',2.5);
-  if(ch.now_k!=null&&ch.today[ch.now_k]!=null){x.fillStyle='#ffd23f';x.beginPath();x.arc(X(ch.now_k),Y(ch.today[ch.now_k]),4,0,7);x.fill();}
+  line(plot.med,'#6cc4ff',2.5);
+  line(plot.proj,'#ffd23f',2,[6,5]);
+  line(plot.today,'#ffd23f',2.5);
+  if(plot.now_k!=null&&plot.today[plot.now_k]!=null){x.fillStyle='#ffd23f';x.beginPath();x.arc(X(plot.now_k),Y(plot.today[plot.now_k]),4,0,7);x.fill();}
 
   // Interactive Hover: Crosshair, Axis Badges, and HUD Tooltip
   if(hoverState && hoverState.mx != null && hoverState.my != null){
@@ -3705,7 +3786,7 @@ function drawChart(ch, cvElement, hoverState){
       // Value calculation
       const cursorVal = lo + (1 - (my - T) / ph) * (hi - lo);
       const cursorPctStr = (cursorVal >= 0 ? '+' : '') + (cursorVal * 100).toFixed(1) + '%';
-      const timeStr = ch.labels[idx] || '';
+      const timeStr = plot.labels[idx] || '';
 
       x.save();
 
@@ -3728,8 +3809,8 @@ function drawChart(ch, cvElement, hoverState){
       x.setLineDash([]);
 
       // Highlight dots on data curves
-      if(ch.today && ch.today[idx] != null){
-        const ty = Y(ch.today[idx]);
+      if(plot.today && plot.today[idx] != null){
+        const ty = Y(plot.today[idx]);
         x.fillStyle = '#ffd23f';
         x.strokeStyle = '#fff';
         x.lineWidth = 2;
@@ -3738,8 +3819,8 @@ function drawChart(ch, cvElement, hoverState){
         x.fill();
         x.stroke();
       }
-      if(ch.med && ch.med[idx] != null){
-        const my_pt = Y(ch.med[idx]);
+      if(plot.med && plot.med[idx] != null){
+        const my_pt = Y(plot.med[idx]);
         x.fillStyle = '#6cc4ff';
         x.strokeStyle = '#fff';
         x.lineWidth = 1.5;
@@ -3748,8 +3829,8 @@ function drawChart(ch, cvElement, hoverState){
         x.fill();
         x.stroke();
       }
-      if(ch.proj && ch.proj[idx] != null){
-        const py = Y(ch.proj[idx]);
+      if(plot.proj && plot.proj[idx] != null){
+        const py = Y(plot.proj[idx]);
         x.fillStyle = '#ffd23f';
         x.beginPath();
         x.arc(snapX, py, 3.5, 0, Math.PI * 2);
@@ -3758,7 +3839,7 @@ function drawChart(ch, cvElement, hoverState){
 
       // X-Axis Badge (Bottom - Time)
       x.font = 'bold 11px Consolas,monospace';
-      const xBadgeText = timeStr ? timeStr + ' IST' : '';
+      const xBadgeText = timeStr ? (gapMode ? timeStr : timeStr + ' IST') : '';
       const xBadgeW = x.measureText(xBadgeText).width + 12;
       const xBadgeX = Math.max(L, Math.min(W - R - xBadgeW, snapX - xBadgeW / 2));
       const xBadgeY = H - 24;
@@ -3787,23 +3868,23 @@ function drawChart(ch, cvElement, hoverState){
 
       // Tooltip HUD Card
       const rows = [];
-      rows.push({ label: 'Time (X)', val: timeStr + ' IST', col: '#ffffff' });
-      rows.push({ label: 'Value (Y)', val: cursorPctStr, col: yColor });
-      if(ch.today && ch.today[idx] != null){
-        const v = ch.today[idx];
+      rows.push({ label: gapMode ? 'From PM high' : 'Time (X)', val: gapMode ? timeStr : timeStr + ' IST', col: '#ffffff' });
+      rows.push({ label: gapMode ? 'Gap retained (Y)' : 'Value (Y)', val: cursorPctStr, col: yColor });
+      if(plot.today && plot.today[idx] != null){
+        const v = plot.today[idx];
         rows.push({ label: 'Today', val: (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%', col: '#ffd23f' });
       }
-      if(ch.proj && ch.proj[idx] != null){
-        const v = ch.proj[idx];
+      if(plot.proj && plot.proj[idx] != null){
+        const v = plot.proj[idx];
         rows.push({ label: 'Projected', val: (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%', col: '#ffd23f' });
       }
-      if(ch.med && ch.med[idx] != null){
-        const v = ch.med[idx];
+      if(plot.med && plot.med[idx] != null){
+        const v = plot.med[idx];
         rows.push({ label: 'History Median', val: (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%', col: '#6cc4ff' });
       }
-      if(ch.p25 && ch.p75 && ch.p25[idx] != null && ch.p75[idx] != null){
-        const v25 = (ch.p25[idx] * 100).toFixed(1);
-        const v75 = (ch.p75[idx] * 100).toFixed(1);
+      if(plot.p25 && plot.p75 && plot.p25[idx] != null && plot.p75[idx] != null){
+        const v25 = (plot.p25[idx] * 100).toFixed(1);
+        const v75 = (plot.p75[idx] * 100).toFixed(1);
         rows.push({ label: 'p25–p75 Range', val: `${v25}% to ${v75}%`, col: '#78a0c8' });
       }
 
