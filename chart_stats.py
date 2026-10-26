@@ -1286,10 +1286,9 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes):
         "p7": "[7] NORMALIZED PATH (% from prev close) — premarket → close, Times in IST",
         "pa": "[A] HISTORICAL STATISTICS (similar)", "pb": "[B] KEY PATTERNS (similar)", "pc": "[C] FINAL RATING",
         "pd": "[D] ENTRY MODELS (similar setups)",
-        "pe": "[E] DILUTION & FINANCING RISK",
     }
     dilution_url = f"https://finviz.com/stock?b=2&p=m&t={quote(t, safe='')}&ta=1&ty=di"
-    text = [f"Ticker: {t}", f"Current Day: {day_display}", head["sub"], "=" * 42,
+    text = [f"Ticker: {t}  |  Finviz Dilution: {dilution_url}", f"Current Day: {day_display}", head["sub"], "=" * 42,
             f"Final Fade Grade:  {head['grade']}   ({head['score']})",
             f"Sample Size: {st['n']} similar setups of {len(events)} gap-ups",
             f"Verdict: {head['verdict']}", f"Summary: {summary}", "",
@@ -1302,7 +1301,6 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes):
         text += ["", T["pd"], tbl_text(mcols, mrows)]
     if notes:
         text += [""] + [f"Note: {n}" for n in notes]
-    text += ["", "=" * 42, T["pe"], "=" * 42, "", f"Open Finviz Dilution Analysis: {dilution_url}"]
     return {"head": head, "titles": T, "p1": {"left": left, "right": right}, "tables": tables,
             "evcharts": evch, "model_names": ["Short at open", "PM high rejection", "5m low break",
                                               "First red 5m candle", "VWAP loss (post-HOD)"],
@@ -2757,7 +2755,7 @@ function renderTab(tab, r, isRefresh){
     : '';
 
   o += `<div class="refresh_banner" style="display:none;background:#141414;border:1px solid #29a8ff;padding:8px 12px;margin-bottom:14px;color:#29a8ff;font-size:13px"></div>`;
-  o += `<div style="display:flex;align-items:center;flex-wrap:wrap"><span class="big">Ticker: <span class="c">${esc(h.ticker)}</span></span>${refreshBadge}</div><div class="w">${esc(h.sub)}</div><div>==========================================</div><br>`;
+  o += `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:14px"><span class="big">Ticker: <span class="c">${esc(h.ticker)}</span></span><a href="${esc(r.dilution_url)}" target="_blank" rel="noopener noreferrer" style="color:#d8b4fe;font-size:13px;font-weight:normal">Finviz Dilution ↗</a>${refreshBadge}</div><div class="w">${esc(h.sub)}</div><div>==========================================</div><br>`;
   o += `<div>Final Fade Grade:<span class="badge ${h.gcls}">${esc(h.grade)}</span>(${esc(h.score)})</div>`;
   o += `<div>Similar Setups: <span class="c">${h.n}</span> (${h.total ? 'of ' + h.total + ' gap-ups' : ''})</div>`;
   o += `<div>Verdict: <span class="${h.gcls}">${esc(h.verdict)}</span></div>`;
@@ -2781,13 +2779,6 @@ function renderTab(tab, r, isRefresh){
      `<div class="panel"><div class="ttl">${esc(T.pb)}</div>${kv(r.pb)}</div>`+
      `<div class="panel"><div class="ttl">${esc(T.pc)}</div>${kv(r.pc)}</div></div>`;
   if(r.pd.rows.length) o += `<div class="panel"><div class="ttl">${esc(T.pd)}</div>${table(r.pd.cols,r.pd.rows,null,false)}</div>`;
-
-  if(r.dilution_url) {
-    o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">`+
-         `<span>${esc(T.pe || '[E] DILUTION &amp; FINANCING RISK')}</span>`+
-         `<a href="${esc(r.dilution_url)}" target="_blank" rel="noopener noreferrer" style="font-size:13px;color:#d8b4fe;font-weight:normal">Open Finviz Dilution Analysis ↗</a></div>`+
-         `<div style="font-size:13px;color:#aaa">View current dilution risk, cash position, history, and financing instruments on Finviz.</div></div>`;
-  }
 
   tab.container.innerHTML = o;
   tab.container.querySelectorAll('table.sort').forEach(makeSortable);
