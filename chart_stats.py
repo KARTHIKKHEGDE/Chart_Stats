@@ -306,6 +306,19 @@ def _alpaca_live_df(t):
                     rows.append({"Datetime": dt_et, "o": float(b["o"]), "h": float(b["h"]), "l": float(b["l"]), "c": float(b["c"]), "v": float(b["v"])})
                 df = pd.DataFrame(rows).set_index("Datetime")
                 if not df.empty and df["v"].sum() > 0:
+                    # Calibrate volume to match TC2000 / Nasdaq Basic (filters out extra non-TRF ECN prints)
+                    try:
+                        r1 = requests.get(f"https://data.alpaca.markets/v2/stocks/{t.upper()}/trades?start={start_utc}&limit=10000&feed={feed}", headers=headers, timeout=5).json()
+                        r2 = requests.get(f"https://data.alpaca.markets/v2/stocks/{t.upper()}/trades?limit=10000&feed={feed}&sort=desc", headers=headers, timeout=5).json()
+                        all_t = (r1.get("trades") or []) + (r2.get("trades") or [])
+                        if all_t:
+                            tc_v = sum(x.get("s", 0) for x in all_t if x.get("x") == "D")
+                            tot_v = sum(x.get("s", 0) for x in all_t)
+                            if tot_v > 0 and 0 < tc_v <= tot_v:
+                                tc_ratio = tc_v / tot_v
+                                df["v"] = (df["v"] * tc_ratio).round()
+                    except Exception:
+                        pass
                     return df
     except Exception:
         pass
