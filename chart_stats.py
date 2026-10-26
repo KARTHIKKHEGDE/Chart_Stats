@@ -1513,8 +1513,8 @@ def run_job(job, t, refresh):
         else:
             dilution_lines = [
                 "DILUTION RISK",
-                f"- Finviz status: {finviz_err or 'No structured dilution data on Finviz for ' + t} [NOT FOUND]",
-                "- Note: Standard SEC filings may apply; no micro-cap offering or warrant structure flagged on Finviz."
+                f"- Finviz status: {finviz_err or 'No structured dilution data on Finviz for ' + t} [UNAVAILABLE]",
+                "- Dilution instruments were not assessed because Finviz data could not be retrieved."
             ]
         dilution_text = "\n".join(dilution_lines)
 
@@ -3883,7 +3883,9 @@ def api_dilution():
             report_lines = finviz_dilution.build_finviz_dilution_report(fdata)
             report_text = "\n".join(report_lines) if isinstance(report_lines, list) else str(report_lines)
             return jsonify({"ok": True, "ticker": t, "text": report_text, "lines": report_lines, "data": fdata})
-        return jsonify({"ok": False, "ticker": t, "error": ferr or "No data found"}), 404
+        error = ferr or "No data found"
+        status = 404 if "not found on Finviz (HTTP 404)" in error else 502
+        return jsonify({"ok": False, "ticker": t, "error": error}), status
     except Exception as e:
         return jsonify({"ok": False, "ticker": t, "error": str(e)}), 500
 

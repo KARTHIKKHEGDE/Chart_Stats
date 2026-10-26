@@ -14,6 +14,7 @@ import json
 import os
 import re
 import time
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -81,6 +82,66 @@ def _fetch_html(url: str) -> Tuple[int, str]:
     return r.status_code, r.text
 
 
+def _fetch_rendered_html(url: str) -> Tuple[int, str]:
+    """Fetch a rendered copy when Finviz blocks server-side requests."""
+    proxy_url = "https://r.jina.ai/" + url
+    headers = {"Accept": "text/html", "X-Return-Format": "html"}
+    if _curl_requests is not None:
+        try:
+            r = _curl_requests.get(proxy_url, headers=headers, impersonate="chrome124", timeout=30)
+            return r.status_code, r.text
+        except Exception:
+            pass
+    r = requests.get(proxy_url, headers=headers, timeout=30)
+    return r.status_code, r.text
+
+
+class _VisibleText(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.parts: List[str] = []
+        self.hidden = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style", "noscript", "svg"):
+            self.hidden += 1
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style", "noscript", "svg") and self.hidden:
+            self.hidden -= 1
+
+    def handle_data(self, data):
+        if not self.hidden and data.strip():
+            self.parts.append(data.strip())
+
+
+def _rendered_page_fallback(ticker: str, html: str, url: str) -> Dict[str, Any]:
+    """Build a cautious summary from Finviz's server-rendered dilution page."""
+    parser = _VisibleText()
+    parser.feed(html)
+    text = " ".join(parser.parts)
+    # Jina can return Markdown when its HTML mode is unavailable.
+    if not text:
+        text = re.sub(r"[`*_#]+", " ", html)
+        text = re.sub(r"\s+", " ", text).strip()
+    if not re.search(rf"\b{re.escape(ticker)}\b", text, re.I) or not re.search(r"\bDilution\b", text, re.I):
+        raise ValueError("Rendered Finviz response did not contain a recognizable dilution page")
+    return {
+        "_rendered_fallback": True,
+        "_rendered_text": text,
+        "_source_url": url,
+        "_fetched_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+    }
+
+
+def _save_cache(cache_file: Path, data: Dict[str, Any]) -> None:
+    try:
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
 def _fmt_money(val: Optional[float], decimals: int = 2) -> str:
     if val is None:
         return "—"
@@ -130,12 +191,33 @@ def fetch_finviz_dilution_data(ticker: str, refresh: bool = False) -> Tuple[Opti
     url = f"https://finviz.com/stock?b=2&p=m&t={t}&ta=1&ty=di"
     try:
         status_code, html = _fetch_html(url)
-        if status_code == 404:
-            return None, f"Ticker {t} not found on Finviz (HTTP 404)"
-        if status_code == 429:
-            return None, "Finviz rate limit reached (HTTP 429). Please try again shortly."
+        # Finviz commonly returns 403 to hosted/server requests, even for valid
+        # tickers. Try its rendered public page through the reader before giving up.
         if status_code != 200:
-            return None, f"Finviz returned HTTP {status_code}"
+            try:
+                proxy_status, proxy_html = _fetch_rendered_html(url)
+                if proxy_status == 200:
+                    try:
+                        m = re.search(r'(\{"schema_version":\s*1.*?</script>)', proxy_html, re.DOTALL)
+                        if m:
+                            raw_json = m.group(1).split("</script>", 1)[0]
+                            data = json.loads(raw_json)
+                            data["_source_url"] = url
+                            data["_fetched_at"] = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+                            return data, None
+                    except (ValueError, json.JSONDecodeError):
+                        pass
+                    data = _rendered_page_fallback(t, proxy_html, url)
+                    data["ticker"] = t
+                    _save_cache(cache_file, data)
+                    return data, None
+            except Exception:
+                pass
+            if status_code == 404:
+                return None, f"Ticker {t} not found on Finviz (HTTP 404)"
+            if status_code == 429:
+                return None, "Finviz rate limit reached (HTTP 429). Please try again shortly."
+            return None, f"Finviz returned HTTP {status_code}; rendered-page fallback unavailable"
         # Search for schema_version JSON payload
         m = re.search(r'(\{"schema_version":\s*1.*?\})</script>', html, re.DOTALL)
         if not m:
@@ -143,7 +225,13 @@ def fetch_finviz_dilution_data(ticker: str, refresh: bool = False) -> Tuple[Opti
             m = re.search(r'(\{"schema_version":\s*1.*?"cards":\s*\{.*?\}.*?\})', html, re.DOTALL)
 
         if not m:
-            return None, f"No structured dilution tab data found on Finviz for {t} (ticker may lack active dilution tracking)"
+            try:
+                data = _rendered_page_fallback(t, html, url)
+                data["ticker"] = t
+                _save_cache(cache_file, data)
+                return data, None
+            except ValueError:
+                return None, f"Finviz page loaded for {t}, but no structured dilution data was present"
 
         raw_json = m.group(1)
         data = json.loads(raw_json)
@@ -151,11 +239,7 @@ def fetch_finviz_dilution_data(ticker: str, refresh: bool = False) -> Tuple[Opti
         data["_source_url"] = url
 
         # Save to cache
-        try:
-            with open(cache_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-        except Exception:
-            pass
+        _save_cache(cache_file, data)
 
         return data, None
 
@@ -171,6 +255,28 @@ def build_finviz_dilution_report(data: Dict[str, Any], current_price: Optional[f
     """
     Format the Finviz dilution model into the clean, compact report structure requested.
     """
+    if data.get("_rendered_fallback"):
+        text = data.get("_rendered_text", "")
+        def value(label: str) -> Optional[str]:
+            match = re.search(rf"\b{label}\b\s+([A-Za-z]+)(?:\s+(\d{{1,3}})\s*/\s*100)?", text, re.I)
+            if not match:
+                return None
+            return f"{match.group(1)} ({match.group(2)}/100)" if match.group(2) else match.group(1)
+        lines = ["DILUTION RISK"]
+        risk = value("Dilution Risk")
+        lines.append(f"- Finviz risk: {risk} [FINVIZ REPORTED]" if risk else "- Finviz risk score: unavailable in rendered page [UNVERIFIED]")
+        for label in ("Offering", "Cash Need", "Overhang", "History"):
+            result = value(label)
+            if result:
+                lines.append(f"- {label}: {result} [FINVIZ REPORTED]")
+        for label, pattern in (("Runway", r"Runway\s+([\d.]+mo)"), ("Cash", r"Cash\s+(\$[\d.]+[KMB]?)"), ("Burn/Q", r"Burn/Q\s+(\$[\d.]+[KMB]?)"), ("Shares O/S", r"Shares O/S\s+([\d.]+[KMB]?)"), ("Baby Shelf", r"Baby Shelf\s+(Yes|No)")):
+            match = re.search(pattern, text, re.I)
+            if match:
+                lines.append(f"- {label}: {match.group(1)} [FINVIZ REPORTED]")
+        lines.append("- Data source: rendered Finviz Dilution page; some detailed instrument fields may not be available in this fallback [FINVIZ REPORTED]")
+        lines.append(f"- Source: {data.get('_source_url', 'https://finviz.com')} [{data.get('_fetched_at', 'date unavailable')}]")
+        return lines
+
     out: List[str] = []
     badges = data.get("badges") or {}
     overall = badges.get("overall") or {}
