@@ -1629,7 +1629,7 @@ def auth_status():
         return jsonify({"error": "Username required"}), 400
     user = _db_get_user(u)
     if not user:
-        return jsonify({"error": "Access denied: Username not authorized."}), 404
+        return jsonify({"error": "Username not authorized"}), 404
     is_exempt = bool(user.get("can_rename")) or (u in {"karthik", "locke"})
     has_pwd = bool(user.get("password_hash") and user.get("salt"))
     has_active = bool(user.get("session_token"))
@@ -2180,7 +2180,8 @@ async function submitGate(){
     const data = await res.json();
     gateSpinner(false);
     if(!data.exists || data.error){
-      gateErr('Access denied: '+( data.error || 'Username not authorized.'));
+      const errStr = (data.error || 'Username not authorized.').replace(/^access denied:?\s*/i, '');
+      gateErr('Access denied: ' + errStr);
       return;
     }
     // Store pending username
