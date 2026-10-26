@@ -4418,8 +4418,8 @@ function announceScannerTicker(ticker, extra=''){
   }
   const spoken = ticker.split('').join(' ') + (extra ? '. ' + extra : '');
   const utterance = new SpeechSynthesisUtterance(spoken);
-  utterance.rate = 0.74;
-  utterance.pitch = 0.72;
+  utterance.rate = 1.0;
+  utterance.pitch = 1.15;
   utterance.volume = scannerVoiceVolume / 100;
   const voiceId = $('#scanner_voice_select').value;
   const feminineVoice = scannerVoices.find(voice => /\b(aria|ava|amy|emma|jenny|june|karen|kimberly|moira|natasha|olivia|salli|samantha|sara|serena|sophie|susan|tessa|victoria|zira)\b|female/i.test(voice.name));
