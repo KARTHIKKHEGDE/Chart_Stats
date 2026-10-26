@@ -1901,13 +1901,14 @@ def clear_old_searches():
 
 
 DEFAULT_SCANNER_SETTINGS = {
+    "version": 2,
     "voice_enabled": False,
     "voice_volume": 100,
     "voice_uri": "",
     "approach_pct": 2.0,
     "vwap_enabled": True,
-    "bone_2m_enabled": True,
-    "bone_5m_enabled": True,
+    "bone_2m_enabled": False,
+    "bone_5m_enabled": False,
     "news_enabled": True,
 }
 _scanner_user_settings_lock = threading.RLock()
@@ -1917,6 +1918,12 @@ _scanner_user_settings_file = Path(__file__).resolve().parent / ".scanner_user_s
 def _normalize_scanner_settings(value):
     source = value if isinstance(value, dict) else {}
     try:
+        version = int(source.get("version", 0))
+    except (TypeError, ValueError):
+        version = 0
+    if version < 2:
+        source = {**source, "bone_2m_enabled": False, "bone_5m_enabled": False, "version": 2}
+    try:
         approach_pct = float(source.get("approach_pct", DEFAULT_SCANNER_SETTINGS["approach_pct"]))
     except (TypeError, ValueError):
         approach_pct = DEFAULT_SCANNER_SETTINGS["approach_pct"]
@@ -1925,6 +1932,7 @@ def _normalize_scanner_settings(value):
     except (TypeError, ValueError):
         voice_volume = DEFAULT_SCANNER_SETTINGS["voice_volume"]
     return {
+        "version": 2,
         "voice_enabled": bool(source.get("voice_enabled", DEFAULT_SCANNER_SETTINGS["voice_enabled"])),
         "voice_volume": max(0, min(100, voice_volume)),
         "voice_uri": str(source.get("voice_uri") or "")[:300],
@@ -2308,13 +2316,15 @@ def _scanner_approaches(ticker, previous_close):
     if not rally_pullback:
         return []
 
+    previous_price = float(close_values[-2])
     levels = []
     typical = (bars.h + bars.l + bars.c) / 3
     total_volume = bars.v.clip(lower=0).cumsum()
     weighted_volume = (typical * bars.v.clip(lower=0)).cumsum()
     if total_volume.iloc[-1] > 0:
-        vwap = float(weighted_volume.iloc[-1] / total_volume.iloc[-1])
-        levels.append(("VWAP", "approaching VWAP from above", vwap))
+        vwap_series = weighted_volume / total_volume.replace(0, np.nan)
+        levels.append(("VWAP", "approaching VWAP from above",
+                       float(vwap_series.iloc[-1]), float(vwap_series.iloc[-2])))
 
     now_et = dt.datetime.now(ET)
     for timeframe in (2, 5):
@@ -2324,16 +2334,22 @@ def _scanner_approaches(ticker, previous_close):
         grouped = grouped[grouped.index + pd.Timedelta(minutes=timeframe) <= pd.Timestamp(now_et)]
         if len(grouped) < 21:
             continue
-        ema21 = float(grouped.c.ewm(span=21, adjust=False).mean().iloc[-1])
-        levels.append((f"BONE_{timeframe}M", f"approaching the {timeframe}-minute Bone Zone (21 EMA) from above", ema21))
+        ema_series = grouped.c.ewm(span=21, adjust=False).mean()
+        levels.append((f"BONE_{timeframe}M",
+                       f"approaching the {timeframe}-minute Bone Zone (21 EMA) from above",
+                       float(ema_series.iloc[-1]), float(ema_series.iloc[-2])))
 
     alerts = []
-    for code, label, level in levels:
-        if level > 0 and price > level:
+    for code, label, level, previous_level in levels:
+        if level > 0 and previous_level > 0 and price > level and previous_price > previous_level:
             distance_pct = (price - level) / price * 100
-            if distance_pct <= 10.0:
+            previous_distance_pct = (previous_price - previous_level) / previous_price * 100
+            # Alert only on a genuine pullback that is getting closer while still
+            # holding above support; the browser applies each user's threshold.
+            if 0 <= distance_pct <= 10.0 and previous_distance_pct > distance_pct:
                 alerts.append({"code": code, "label": label, "level": round(level, 4),
-                               "distance_pct": round(distance_pct, 2)})
+                               "distance_pct": round(distance_pct, 2),
+                               "previous_distance_pct": round(previous_distance_pct, 2)})
     return alerts
 
 
@@ -4276,7 +4292,7 @@ let scannerLastSpoken = new Map();
 let scannerNewsSpoken = new Map();
 let scannerAlertSession = '';
 let scannerSeenApproaches = new Set();
-const scannerSettingsDefaults = {voice_enabled:false,voice_volume:100,voice_uri:'',approach_pct:2,vwap_enabled:true,bone_2m_enabled:true,bone_5m_enabled:true,news_enabled:true};
+const scannerSettingsDefaults = {version:2,voice_enabled:false,voice_volume:100,voice_uri:'',approach_pct:2,vwap_enabled:true,bone_2m_enabled:false,bone_5m_enabled:false,news_enabled:true};
 let scannerSettings = {...scannerSettingsDefaults};
 let scannerSettingsUser = '';
 let scannerSettingsLoadPromise = null;
@@ -4294,8 +4310,19 @@ function startScannerPolling(){
   if(scannerAlarmEnabled) refreshScanner();
 }
 
+function migrateScannerSettings(settings){
+  const source = settings && typeof settings === 'object' ? settings : {};
+  const migrated = {...scannerSettingsDefaults, ...source};
+  if(Number(source.version || 0) < 2){
+    migrated.bone_2m_enabled = false;
+    migrated.bone_5m_enabled = false;
+  }
+  migrated.version = 2;
+  return migrated;
+}
+
 function applyScannerSettings(settings){
-  scannerSettings = {...scannerSettingsDefaults, ...(settings || {})};
+  scannerSettings = migrateScannerSettings(settings);
   scannerAlarmEnabled = !!scannerSettings.voice_enabled;
   scannerVoiceVolume = Math.max(0, Math.min(100, Number(scannerSettings.voice_volume) || 0));
   $('#scanner_alarm').checked = scannerAlarmEnabled;
@@ -4314,6 +4341,7 @@ function readScannerSettingsControls(){
   if(!Number.isFinite(approachPct)) approachPct = scannerSettings.approach_pct || 2;
   approachPct = Math.max(0.1, Math.min(10, approachPct));
   return {
+    version: 2,
     voice_enabled: $('#scanner_alarm').checked,
     voice_volume: Number($('#scanner_alarm_volume').value),
     voice_uri: $('#scanner_voice_select').value || '',
@@ -4384,7 +4412,7 @@ async function persistScannerSettings(settings, showStatus){
     });
     const data = await response.json();
     if(!response.ok) throw new Error(data.error || 'Could not save settings');
-    scannerSettings = {...scannerSettingsDefaults, ...(data.settings || settings)};
+    scannerSettings = migrateScannerSettings(data.settings || settings);
     try { localStorage.setItem('gap_scanner_user_settings_'+currentUser, JSON.stringify(scannerSettings)); } catch(e){}
     if(showStatus) $('#scanner_settings_status').textContent = data.storage === 'Supabase' ? 'Saved to account' : 'Saved locally · DB migration needed for cloud sync';
   } catch(e){
@@ -4508,7 +4536,10 @@ async function refreshScanner(){
           const enabled = event.code === 'VWAP' ? scannerSettings.vwap_enabled :
             event.code === 'BONE_2M' ? scannerSettings.bone_2m_enabled :
             event.code === 'BONE_5M' ? scannerSettings.bone_5m_enabled : false;
-          if(!enabled || Number(event.distance_pct) > Number(scannerSettings.approach_pct)) return false;
+          const approachPct = Number(scannerSettings.approach_pct);
+          const previousDistancePct = Number(event.previous_distance_pct);
+          if(!enabled || Number(event.distance_pct) > approachPct ||
+             !Number.isFinite(previousDistancePct) || previousDistancePct <= approachPct) return false;
           const id = `${row.ticker}:${event.code}`;
           if(scannerSeenApproaches.has(id)) return false;
           saveScannerApproach(id);
