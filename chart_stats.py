@@ -32,6 +32,7 @@ import pandas as pd
 import requests
 import yfinance as yf
 from flask import Flask, request, jsonify, Response
+import finviz_dilution
 
 def _load_env_file():
     env_file = Path(__file__).resolve().parent / ".env"
@@ -1063,7 +1064,7 @@ def fdate(d):
 
 
 # ----------------------------------------------------------------------------- report
-def build_report(t, live, lm, lpath, lctx, events, S, notes):
+def build_report(t, live, lm, lpath, lctx, events, S, notes, dilution=None):
     simset = {id(e) for e in S}
     st = stats(S)
     g = grade(st)
@@ -1285,6 +1286,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes):
         "p7": "[7] NORMALIZED PATH (% from prev close) — premarket → close, Times in IST",
         "pa": "[A] HISTORICAL STATISTICS (similar)", "pb": "[B] KEY PATTERNS (similar)", "pc": "[C] FINAL RATING",
         "pd": "[D] ENTRY MODELS (similar setups)",
+        "pe": "[E] DILUTION & FINANCING RISK",
     }
     text = [f"Ticker: {t}", f"Current Day: {day_display}", head["sub"], "=" * 42,
             f"Final Fade Grade:  {head['grade']}   ({head['score']})",
@@ -1299,12 +1301,14 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes):
         text += ["", T["pd"], tbl_text(mcols, mrows)]
     if notes:
         text += [""] + [f"Note: {n}" for n in notes]
+    if dilution:
+        text += ["", "=" * 42, T["pe"], "=" * 42, "", dilution]
 
     return {"head": head, "titles": T, "p1": {"left": left, "right": right}, "tables": tables,
             "evcharts": evch, "model_names": ["Short at open", "PM high rejection", "5m low break",
                                               "First red 5m candle", "VWAP loss (post-HOD)"],
             "pa": p3, "pb": p4, "pc": p5, "pd": {"cols": mcols, "rows": mrows},
-            "chart": chart, "text": "\n".join(text)}
+            "chart": chart, "dilution": dilution, "text": "\n".join(text)}
 
 
 def clean(o):
@@ -1346,6 +1350,7 @@ def run_job(job, t, refresh):
         _splits_res = [None]
         _type_res   = [None]
         _sec_res    = [None]
+        _dilution_res = [None]
         _err        = [None]
 
         def _get_live():
@@ -1378,12 +1383,20 @@ def run_job(job, t, refresh):
             except Exception:
                 _sec_res[0] = []
 
+        def _get_dilution():
+            try:
+                fdata, ferr = finviz_dilution.fetch_finviz_dilution_data(t, refresh=refresh)
+                _dilution_res[0] = (fdata, ferr)
+            except Exception as ex:
+                _dilution_res[0] = (None, str(ex))
+
         stage1_threads = [
-            threading.Thread(target=_get_live,   daemon=True),
-            threading.Thread(target=_get_daily,  daemon=True),
-            threading.Thread(target=_get_splits, daemon=True),
-            threading.Thread(target=_get_type,   daemon=True),
-            threading.Thread(target=_get_sec,    daemon=True),
+            threading.Thread(target=_get_live,      daemon=True),
+            threading.Thread(target=_get_daily,     daemon=True),
+            threading.Thread(target=_get_splits,    daemon=True),
+            threading.Thread(target=_get_type,      daemon=True),
+            threading.Thread(target=_get_sec,       daemon=True),
+            threading.Thread(target=_get_dilution,  daemon=True),
         ]
         for th in stage1_threads:
             th.start()
@@ -1491,7 +1504,21 @@ def run_job(job, t, refresh):
             notes.append("No SEC shares-outstanding history found; rotation uses today's float (split-adjusted).")
         notes.append("Historical data is point-in-time for tickers still listed; delisted names are missing, "
                      "which makes fades look weaker than reality (survivorship bias).")
-        job["result"] = clean(build_report(t, live, lm, lpath, lctx, events, S, notes))
+
+        # Automatically include Dilution Notes below technical analysis
+        finviz_data, finviz_err = _dilution_res[0] if _dilution_res[0] else (None, None)
+        dilution_lines = []
+        if finviz_data:
+            dilution_lines = finviz_dilution.build_finviz_dilution_report(finviz_data, current_price=live["cur"])
+        else:
+            dilution_lines = [
+                "DILUTION RISK",
+                f"- Finviz status: {finviz_err or 'No structured dilution data on Finviz for ' + t} [NOT FOUND]",
+                "- Note: Standard SEC filings may apply; no micro-cap offering or warrant structure flagged on Finviz."
+            ]
+        dilution_text = "\n".join(dilution_lines)
+
+        job["result"] = clean(build_report(t, live, lm, lpath, lctx, events, S, notes, dilution=dilution_text))
         job["status"] = "done"
     except Exception as ex:
         job["status"] = "error"
@@ -2067,7 +2094,6 @@ canvas{display:block;width:100%}
     <button id="cp">Copy all</button>
 
     <div style="margin-left:auto;display:flex;align-items:center;gap:10px;font-size:13px;color:#8a8a8a">
-      <button id="nav_dilution_btn" style="height:36px;padding:0 14px;border:2px solid #a855f7;background:#240038;color:#d8b4fe;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Dilution Notes, Cash/Runway & SEC Filings Tool">📑 Dilution Notes</button>
       <button id="nav_multiday_btn" style="height:36px;padding:0 14px;border:2px solid #00c9a7;background:#002b24;color:#00c9a7;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Multi-day Rally & First Red Day (FRD) Structure Tool">📊 Runner Stats</button>
       <span>User: <span id="u_name" style="color:#29a8ff;font-weight:bold"></span><span id="u_badge"></span></span>
       <button id="logout_btn" style="height:34px;font-size:12px;padding:0 12px;border-color:#444">Exit</button>
@@ -2108,7 +2134,6 @@ canvas{display:block;width:100%}
       </div>
       <button id="admin_rf_btn" style="height:36px;font-size:13px;padding:0 14px">Refresh</button>
       <button id="admin_clear_btn" style="height:36px;font-size:13px;padding:0 14px;background:#1a0808;border:1px solid #ff5a5a;color:#ff5a5a;cursor:pointer;border-radius:3px;font-weight:bold;display:none" title="Delete all search logs older than 2 weeks">🗑 Clear data &gt; 2 weeks</button>
-      <button id="dilution_notes_admin_btn" style="height:36px;font-size:13px;padding:0 18px;background:#240038;border:1px solid #a855f7;color:#d8b4fe;cursor:pointer;border-radius:3px;font-weight:bold" title="Open Dilution Notes &amp; SEC Filings tool">📑 Dilution Notes</button>
       <button id="multiday_stats_btn" style="height:36px;font-size:13px;padding:0 18px;background:#0a1a2a;border:1px solid #00c9a7;color:#00c9a7;cursor:pointer;border-radius:3px;font-weight:bold" title="Open Multi-day Rally &amp; FRD stats tool">📊 Multiday Stats</button>
       <button id="manage_users_btn" style="height:36px;font-size:13px;padding:0 18px;background:#1a1008;border:1px solid #ffd23f;color:#ffd23f;cursor:pointer;border-radius:3px;font-weight:bold" title="Add or remove authorized users">👥 Manage Users</button>
       <button id="admin_rename_btn" style="height:36px;font-size:13px;padding:0 18px;background:#1a102a;border:1px solid #a855f7;color:#d8b4fe;cursor:pointer;border-radius:3px;font-weight:bold" title="Rename your username (karthik/locke only)">✏️ Rename Username</button>
@@ -2779,6 +2804,13 @@ function renderTab(tab, r, isRefresh){
      `<div class="panel"><div class="ttl">${esc(T.pb)}</div>${kv(r.pb)}</div>`+
      `<div class="panel"><div class="ttl">${esc(T.pc)}</div>${kv(r.pc)}</div></div>`;
   if(r.pd.rows.length) o += `<div class="panel"><div class="ttl">${esc(T.pd)}</div>${table(r.pd.cols,r.pd.rows,null,false)}</div>`;
+
+  if(r.dilution) {
+    o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">`+
+         `<span>${esc(T.pe || '[E] DILUTION &amp; FINANCING RISK')}</span>`+
+         `<span style="font-size:12px;color:#a855f7;font-weight:normal">Primary Source: Finviz Dilution Analysis</span></div>`+
+         `<pre style="white-space:pre-wrap;word-break:break-word;line-height:1.6;font-size:13.5px;color:#ddd;margin:0;font-family:Consolas,'SF Mono',Menlo,monospace">${esc(r.dilution)}</pre></div>`;
+  }
 
   tab.container.innerHTML = o;
   tab.container.querySelectorAll('table.sort').forEach(makeSortable);
@@ -3759,12 +3791,6 @@ function switchMainView(mode){
   }
 }
 if($('#nav_intraday_btn')) $('#nav_intraday_btn').onclick = () => switchMainView('intraday');
-if($('#nav_dilution_btn')) $('#nav_dilution_btn').onclick = () => {
-  const curTicker = ($('#t') ? $('#t').value : '').trim().toUpperCase();
-  const url = '/dilution' + (curTicker ? '?symbol=' + encodeURIComponent(curTicker) : '');
-  window.open(url, '_blank');
-};
-if($('#dilution_notes_admin_btn')) $('#dilution_notes_admin_btn').onclick = () => window.open('/dilution', '_blank');
 if($('#nav_multiday_btn')) $('#nav_multiday_btn').onclick = () => window.open('/runner', '_blank');
 if($('#open_multiday_newtab')) $('#open_multiday_newtab').onclick = () => window.open('/runner', '_blank');
 if($('#multiday_stats_btn')) $('#multiday_stats_btn').onclick = () => {
