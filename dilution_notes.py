@@ -36,6 +36,7 @@ if _this_dir not in sys.path:
 
 import financing as fin
 import gemini_notes as gn
+import finviz_dilution
 
 
 def load_local_env():
@@ -1507,7 +1508,8 @@ def _polygon_full_day(sym, day):
     if os.path.exists(fp):
         try:
             log(f"{sym} {day}: bars from disk cache", "polygon")
-            return pd.read_pickle(fp)
+            cached = pd.read_pickle(fp)
+            return cached if (isinstance(cached, pd.DataFrame) and not cached.empty) else None
         except Exception as e:
             log(f"{sym} {day}: incompatible or corrupt cache ({e}), re-fetching", "polygon")
             try:
@@ -1530,17 +1532,25 @@ def _polygon_full_day(sym, day):
     except requests.RequestException as e:
         log(f"{sym} {day}: request failed: {e}", "polygon")
         return None
-    if r is not None and r.status_code == 200 and r.json().get("results"):
-        d = pd.DataFrame(r.json()["results"])
-        d.index = pd.DatetimeIndex(pd.to_datetime(d["t"], unit="ms", utc=True)).tz_convert("America/New_York")
-        d = d.rename(columns={
-            "h": "High", "l": "Low", "c": "Close", "v": "Volume"
-        }).between_time("04:00", "15:59")
-        d["Volume"] = d["Volume"].round()
-        if len(d):
-            d.to_pickle(fp)  # past days never change, so cache forever
-            log(f"{sym} {day}: got {len(d)} minute bars (cached to disk)", "polygon")
-            return d
+    if r is not None and r.status_code == 200:
+        res = r.json().get("results")
+        if res:
+            d = pd.DataFrame(res)
+            d.index = pd.DatetimeIndex(pd.to_datetime(d["t"], unit="ms", utc=True)).tz_convert("America/New_York")
+            d = d.rename(columns={
+                "h": "High", "l": "Low", "c": "Close", "v": "Volume"
+            }).between_time("04:00", "15:59")
+            d["Volume"] = d["Volume"].round()
+            if len(d):
+                d.to_pickle(fp)  # past days never change, so cache forever
+                log(f"{sym} {day}: got {len(d)} minute bars (cached to disk)", "polygon")
+                return d
+        else:
+            # Cache negative result so repeat lookups for this day don't block
+            try:
+                pd.DataFrame().to_pickle(fp)
+            except Exception:
+                pass
     log(f"{sym} {day}: no data (HTTP {r.status_code if r is not None else 'n/a'}) - using Yahoo fallback", "polygon")
     return None
 
@@ -1765,31 +1775,95 @@ def ai_rewrite(sym, text):
         return text + f"\n\n[AI notes failed: {e}]"
 
 
+def sec_targeted_verification(sym, cik=None):
+    """Targeted fast SEC check (former names, exchange notices, newest registrations)."""
+    out = []
+    if not cik:
+        cik = get_cik(sym)
+    if not cik:
+        return out
+    try:
+        j = sec_json(f"https://data.sec.gov/submissions/CIK{cik}.json")
+        former = j.get("formerNames", [])
+        if former:
+            fnames = [f"{n['name']} (until {n['to'][:10]})" for n in former[:2] if n.get("name")]
+            if fnames:
+                out.append(f"- Former company names: {'; '.join(fnames)} [VERIFIED SEC]")
+
+        recent = (j.get("filings") or {}).get("recent") or {}
+        forms = recent.get("form") or []
+        dates = recent.get("filingDate") or []
+        items = recent.get("items") or []
+
+        notices = []
+        for i, form in enumerate(forms[:100]):
+            f_items = items[i] if i < len(items) else ""
+            if form in ("8-K", "8-K/A") and "3.01" in str(f_items):
+                notices.append(f"8-K (Item 3.01) on {dates[i]}")
+            elif form in ("6-K", "6-K/A") and any(w in str(f_items).lower() for w in ["deficiency", "delist", "notice"]):
+                notices.append(f"6-K on {dates[i]}")
+        if notices:
+            out.append(f"- Exchange deficiency notices: {', '.join(notices[:3])} [VERIFIED SEC]")
+        else:
+            out.append("- Exchange deficiency notices (recent): None found [VERIFIED SEC]")
+
+        recent_dil_filings = []
+        for i, form in enumerate(forms[:15]):
+            if form.startswith("424B") or form in ("S-1", "S-3", "F-1", "F-3"):
+                recent_dil_filings.append(f"{form} on {dates[i]}")
+        if recent_dil_filings:
+            out.append(f"- Recent prospectus/registration filings on EDGAR: {', '.join(recent_dil_filings[:3])} [VERIFIED SEC]")
+    except Exception as e:
+        log(f"{sym}: targeted SEC verification note: {e}", "sec")
+    return out
+
+
 @app.route("/api/notes")
 def notes():
     sym = request.args.get("symbol", "").strip().upper()
     if not sym.isalnum():
         return jsonify(error="Bad symbol"), 400
     ai = bool(request.args.get("ai"))
+    refresh = bool(request.args.get("refresh"))
     ckey = f"{sym}:ai" if ai else sym
     hit = _result_cache.get(ckey)
-    if hit and time.time() - hit[0] < RESULT_TTL and not request.args.get("refresh"):
+    if hit and time.time() - hit[0] < RESULT_TTL and not refresh:
         log(f"{sym}: served from {RESULT_TTL}s result cache (press Refresh to recompute)", "app")
         return jsonify(text=hit[1])
     t0 = time.time()
     log(f"===== {sym}: new request =====", "app")
     try:
-        # SEC downloads start in the background while Yahoo/Polygon run in the foreground.
-        with ThreadPoolExecutor(1) as bg:
-            log(f"{sym}: starting SEC prefetch in background", "app")
-            warm = bg.submit(prefetch_sec, sym)
-            with step(f"{sym}: price / gap section (Yahoo + Polygon)", "app"):
-                price = price_section(sym)
-            log(f"{sym}: waiting for SEC prefetch to finish", "app")
-            warm.result()
-        with step(f"{sym}: SEC section", "app"):
-            sec, _ = sec_section(sym)  # now mostly cache hits
-        text = "\n".join([f"Notes - {sym}", ""] + price + [""] + sec)
+        # Step 1: Run price / gap / float section (Yahoo + Polygon)
+        with step(f"{sym}: price / gap section (Yahoo + Polygon)", "app"):
+            price = price_section(sym)
+
+        curr_px = risk_state().get("last_price")
+
+        # Step 2: Primary Dilution Source -> Finviz Dilution Page
+        with step(f"{sym}: Finviz Dilution page", "finviz"):
+            finviz_data, finviz_err = finviz_dilution.fetch_finviz_dilution_data(sym, refresh=refresh)
+
+        if finviz_data:
+            log(f"{sym}: successfully loaded Finviz dilution model (Score: {finviz_data.get('badges', {}).get('overall', {}).get('score')})", "finviz")
+            dilution_report = finviz_dilution.build_finviz_dilution_report(finviz_data, current_price=curr_px)
+            # Targeted SEC check for former names & exchange deficiency notices
+            sec_notices = sec_targeted_verification(sym)
+            if sec_notices:
+                dilution_report.append("")
+                dilution_report.append("SEC EDGAR VERIFICATION")
+                dilution_report.extend(sec_notices)
+        else:
+            log(f"{sym}: Finviz dilution unavailable ({finviz_err}) - falling back to SEC EDGAR", "finviz")
+            with step(f"{sym}: SEC fallback section", "sec"):
+                sec, _ = sec_section(sym)
+            fallback_header = [
+                "DILUTION RISK",
+                f"- Finviz status: {finviz_err or 'No structured dilution data on Finviz'} [FALLBACK TO SEC EDGAR]",
+                ""
+            ]
+            dilution_report = fallback_header + sec
+
+        text = "\n".join([f"Notes - {sym}", ""] + price + [""] + dilution_report)
         _result_cache[sym] = (time.time(), text)
         if ai:
             text = ai_rewrite(sym, text)
