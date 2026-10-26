@@ -62,13 +62,59 @@ def pg(path, params=None, tries=4):
     raise RuntimeError("Polygon rate limit hit, try again in a minute")
 
 
-def aggs(tkr, mult, span, frm, to):
-    k = (tkr, mult, span, str(frm), str(to))
+def _alpaca_live_df(t):
+    key = os.getenv("ALPACA_API_KEY")
+    sec = os.getenv("ALPACA_API_SECRET")
+    if not (key and sec):
+        return None
+    try:
+        now_et = datetime.now(ET)
+        today_start_et = datetime(now_et.year, now_et.month, now_et.day, 4, 0, tzinfo=ET)
+        start_utc = today_start_et.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        feed = os.getenv("ALPACA_FEED", "sip")
+        url = f"https://data.alpaca.markets/v2/stocks/{t.upper()}/bars?timeframe=1Min&start={start_utc}&limit=10000&feed={feed}"
+        headers = {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": sec}
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            j = r.json()
+            bars = j.get("bars") or []
+            if bars:
+                rows = []
+                for b in bars:
+                    dt_et = datetime.fromisoformat(b["t"].replace("Z", "+00:00")).astimezone(ET)
+                    rows.append({"Datetime": dt_et, "o": float(b["o"]), "h": float(b["h"]), "l": float(b["l"]), "c": float(b["c"]), "v": float(b["v"])})
+                import pandas as pd
+                df = pd.DataFrame(rows).set_index("Datetime")
+                if not df.empty and df["v"].sum() > 0:
+                    # Calibrate volume to match TC2000 / Nasdaq Basic (FINRA TRF "D" + Nasdaq "Q")
+                    try:
+                        r1 = requests.get(f"https://data.alpaca.markets/v2/stocks/{t.upper()}/trades?start={start_utc}&limit=10000&feed={feed}", headers=headers, timeout=5).json()
+                        r2 = requests.get(f"https://data.alpaca.markets/v2/stocks/{t.upper()}/trades?limit=10000&feed={feed}&sort=desc", headers=headers, timeout=5).json()
+                        all_t = (r1.get("trades") or []) + (r2.get("trades") or [])
+                        if all_t:
+                            tc_v = sum(x.get("s", 0) for x in all_t if x.get("x") in ("D", "Q"))
+                            tot_v = sum(x.get("s", 0) for x in all_t)
+                            if tot_v > 0 and 0 < tc_v <= tot_v:
+                                tc_ratio = tc_v / tot_v
+                                df["v"] = (df["v"] * tc_ratio).round()
+                    except Exception:
+                        pass
+                    return df
+    except Exception:
+        pass
+    return None
+
+
+def aggs(tkr, mult, span, frm, to, adjusted="false"):
+    k = (tkr, mult, span, str(frm), str(to), str(adjusted))
     if k in _aggs_cache:
         return _aggs_cache[k]
     j = pg(f"/v2/aggs/ticker/{tkr}/range/{mult}/{span}/{frm}/{to}",
-           {"adjusted": "true", "sort": "asc", "limit": 50000})
+           {"adjusted": str(adjusted).lower(), "sort": "asc", "limit": 50000})
     res = (j or {}).get("results") or []
+    for b in res:
+        if "v" in b:
+            b["v"] = round(float(b["v"]))
     _aggs_cache[k] = res
     return res
 
@@ -222,10 +268,25 @@ def load_daily(tkr, start_date=None):
         frm_date = today - timedelta(days=LOOKBACK_DAYS + 60)
     frm = frm_date.isoformat()
     rows = []
-    for b in aggs(tkr, 1, "day", frm, today.isoformat()):
+    for b in aggs(tkr, 1, "day", frm, today.isoformat(), adjusted="false"):
         d = datetime.fromtimestamp(b["t"] / 1000 + 6 * 3600, timezone.utc).date()
         vw = b.get("vw") or (b["h"] + b["l"] + b["c"]) / 3
         rows.append(dict(d=d, o=b["o"], h=b["h"], l=b["l"], c=b["c"], v=b["v"], dv=b["v"] * vw))
+    if not any(r["d"] == today for r in rows):
+        alp_df = _alpaca_live_df(tkr)
+        if alp_df is not None and not alp_df.empty:
+            tot_v = float(alp_df["v"].sum())
+            if tot_v > 0:
+                vw = float((alp_df["c"] * alp_df["v"]).sum() / tot_v)
+                rows.append(dict(
+                    d=today,
+                    o=float(alp_df["o"].iloc[0]),
+                    h=float(alp_df["h"].max()),
+                    l=float(alp_df["l"].min()),
+                    c=float(alp_df["c"].iloc[-1]),
+                    v=round(tot_v),
+                    dv=round(tot_v * vw)
+                ))
     return rows
 
 
@@ -451,7 +512,20 @@ def legs_15min(tkr, start_date, high_date, flt, chart_end_date=None):
 
 
 def frd_intraday(tkr, d, prev_close):
-    bars = aggs(tkr, 1, "minute", d.isoformat(), d.isoformat())
+    today = datetime.now(ET).date()
+    bars = []
+    if d == today:
+        alp_df = _alpaca_live_df(tkr)
+        if alp_df is not None and not alp_df.empty:
+            for dt_et, row in alp_df.iterrows():
+                bars.append({
+                    "t": int(dt_et.timestamp() * 1000),
+                    "o": float(row["o"]), "h": float(row["h"]),
+                    "l": float(row["l"]), "c": float(row["c"]),
+                    "v": round(float(row["v"])), "vw": float(row.get("c"))
+                })
+    if not bars:
+        bars = aggs(tkr, 1, "minute", d.isoformat(), d.isoformat(), adjusted="false")
     if not bars:
         return None
     pm, rth, allb = [], [], []

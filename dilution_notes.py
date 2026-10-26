@@ -1445,8 +1445,61 @@ def sec_section(sym):
 _poly_limit = RateLimiter(1.0 / POLYGON_MIN_INTERVAL) if POLYGON_MIN_INTERVAL > 0 else None
 
 
+def _alpaca_live_df(t):
+    key = os.getenv("ALPACA_API_KEY")
+    sec = os.getenv("ALPACA_API_SECRET")
+    if not (key and sec):
+        return None
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        from zoneinfo import ZoneInfo as _zi
+        _et = _zi("America/New_York")
+        now_et = _dt.now(_et)
+        today_start_et = _dt(now_et.year, now_et.month, now_et.day, 4, 0, tzinfo=_et)
+        start_utc = today_start_et.astimezone(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        feed = os.getenv("ALPACA_FEED", "sip")
+        url = f"https://data.alpaca.markets/v2/stocks/{t.upper()}/bars?timeframe=1Min&start={start_utc}&limit=10000&feed={feed}"
+        headers = {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": sec}
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            j = r.json()
+            bars = j.get("bars") or []
+            if bars:
+                rows = []
+                for b in bars:
+                    dt_et = _dt.fromisoformat(b["t"].replace("Z", "+00:00")).astimezone(_et)
+                    rows.append({"Datetime": dt_et, "Open": float(b["o"]), "High": float(b["h"]), "Low": float(b["l"]), "Close": float(b["c"]), "Volume": float(b["v"])})
+                df = pd.DataFrame(rows).set_index("Datetime")
+                if not df.empty and df["Volume"].sum() > 0:
+                    try:
+                        r1 = requests.get(f"https://data.alpaca.markets/v2/stocks/{t.upper()}/trades?start={start_utc}&limit=10000&feed={feed}", headers=headers, timeout=5).json()
+                        r2 = requests.get(f"https://data.alpaca.markets/v2/stocks/{t.upper()}/trades?limit=10000&feed={feed}&sort=desc", headers=headers, timeout=5).json()
+                        all_t = (r1.get("trades") or []) + (r2.get("trades") or [])
+                        if all_t:
+                            # TC2000 uses Nasdaq Basic = FINRA TRF ("D") + Nasdaq ("Q")
+                            tc_v = sum(x.get("s", 0) for x in all_t if x.get("x") in ("D", "Q"))
+                            tot_v = sum(x.get("s", 0) for x in all_t)
+                            if tot_v > 0 and 0 < tc_v <= tot_v:
+                                tc_ratio = tc_v / tot_v
+                                df["Volume"] = (df["Volume"] * tc_ratio).round()
+                    except Exception:
+                        pass
+                    return df
+    except Exception:
+        pass
+    return None
+
+
 def _polygon_full_day(sym, day):
     """Premarket + regular session minute bars (04:00-15:59 ET) in ONE API call."""
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _zi
+    today_date = _dt.now(_zi("America/New_York")).date()
+    if day == today_date:
+        alp_df = _alpaca_live_df(sym)
+        if alp_df is not None and not alp_df.empty:
+            return alp_df.between_time("04:00", "15:59")
+
     if not MASSIVE_KEY:
         return None
     os.makedirs(CACHE, exist_ok=True)
@@ -1469,7 +1522,7 @@ def _polygon_full_day(sym, day):
             log(f"{sym} {day}: calling API (attempt {attempt + 1}/3)", "polygon")
             r = requests.get(
                 f"https://api.polygon.io/v2/aggs/ticker/{sym}/range/1/minute/{day}/{day}",
-                params={"adjusted": "true", "sort": "asc", "limit": 50000, "apiKey": MASSIVE_KEY},
+                params={"adjusted": "false", "sort": "asc", "limit": 50000, "apiKey": MASSIVE_KEY},
                 timeout=30)
             if r.status_code != 429:
                 break
@@ -1483,6 +1536,7 @@ def _polygon_full_day(sym, day):
         d = d.rename(columns={
             "h": "High", "l": "Low", "c": "Close", "v": "Volume"
         }).between_time("04:00", "15:59")
+        d["Volume"] = d["Volume"].round()
         if len(d):
             d.to_pickle(fp)  # past days never change, so cache forever
             log(f"{sym} {day}: got {len(d)} minute bars (cached to disk)", "polygon")

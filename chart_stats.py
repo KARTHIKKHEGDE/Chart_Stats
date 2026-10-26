@@ -209,7 +209,7 @@ def load_daily(t, force=False):
         j = poly_get(f"/v2/aggs/ticker/{t}/range/1/day/{start}/{end}",
                      {"adjusted": "false", "sort": "asc", "limit": 50000})
         d = [{"date": str(pd.to_datetime(r["t"], unit="ms", utc=True).tz_convert(ET).date()),
-              "o": r["o"], "h": r["h"], "l": r["l"], "c": r["c"], "v": r["v"]}
+              "o": r["o"], "h": r["h"], "l": r["l"], "c": r["c"], "v": round(float(r["v"]))}
              for r in j.get("results", [])]
         cput(key, d)
     return d
@@ -269,7 +269,9 @@ def load_shares_out(t):
 def poly_frame(rows):
     df = pd.DataFrame(rows)
     df.index = pd.DatetimeIndex(pd.to_datetime(df["t"], unit="ms", utc=True)).tz_convert(ET)
-    return df[["o", "h", "l", "c", "v"]].astype(float)
+    df = df[["o", "h", "l", "c", "v"]].astype(float)
+    df["v"] = df["v"].round()
+    return df
 
 
 def minute_df(t, day):
