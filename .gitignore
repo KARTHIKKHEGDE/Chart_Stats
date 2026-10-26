@@ -2,6 +2,8 @@
 .env
 .env.*
 *.env
+.scanner_user_settings.json
+.scanner_user_settings.tmp
 
 # Local data cache (Polygon / SEC / Yahoo caches)
 .gapcache/

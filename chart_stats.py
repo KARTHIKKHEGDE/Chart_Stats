@@ -23,7 +23,7 @@ VWAP everywhere = continuous VWAP from 04:00 ET (premarket + regular), like a ch
 Everything fetched from Polygon is cached in ./.gapcache so repeat runs are fast.
 (Cache note: 1-min files are reused as-is, nothing to refetch for the new sections.)
 """
-import os, re, json, time, math, threading, uuid, warnings, hashlib, secrets, datetime as dt
+import os, re, json, time, math, threading, uuid, warnings, hashlib, secrets, datetime as dt, html
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -1483,7 +1483,14 @@ def run_job(job, t, refresh):
         notes.append("Historical data is point-in-time for tickers still listed; delisted names are missing, "
                      "which makes fades look weaker than reality (survivorship bias).")
 
-        job["result"] = clean(build_report(t, live, lm, lpath, lctx, events, S, notes))
+        report = clean(build_report(t, live, lm, lpath, lctx, events, S, notes))
+        recent_news = _get_scanner_news(t)
+        report["news"] = recent_news
+        if recent_news:
+            report["text"] += "\n\nRecent Press Releases / News"
+            for item in recent_news:
+                report["text"] += f"\n- [{item['kind']}] {item['title']} ({item['publisher']}) {item['url']}"
+        job["result"] = report
         job["status"] = "done"
     except Exception as ex:
         job["status"] = "error"
@@ -1888,6 +1895,113 @@ def clear_old_searches():
         return jsonify({"error": f"Failed to delete old records: {ex}"}), 500
 
 
+DEFAULT_SCANNER_SETTINGS = {
+    "voice_enabled": False,
+    "voice_volume": 100,
+    "voice_uri": "",
+    "approach_pct": 2.0,
+    "vwap_enabled": True,
+    "bone_2m_enabled": True,
+    "bone_5m_enabled": True,
+    "news_enabled": True,
+}
+_scanner_user_settings_lock = threading.RLock()
+_scanner_user_settings_file = Path(__file__).resolve().parent / ".scanner_user_settings.json"
+
+
+def _normalize_scanner_settings(value):
+    source = value if isinstance(value, dict) else {}
+    try:
+        approach_pct = float(source.get("approach_pct", DEFAULT_SCANNER_SETTINGS["approach_pct"]))
+    except (TypeError, ValueError):
+        approach_pct = DEFAULT_SCANNER_SETTINGS["approach_pct"]
+    try:
+        voice_volume = int(source.get("voice_volume", DEFAULT_SCANNER_SETTINGS["voice_volume"]))
+    except (TypeError, ValueError):
+        voice_volume = DEFAULT_SCANNER_SETTINGS["voice_volume"]
+    return {
+        "voice_enabled": bool(source.get("voice_enabled", DEFAULT_SCANNER_SETTINGS["voice_enabled"])),
+        "voice_volume": max(0, min(100, voice_volume)),
+        "voice_uri": str(source.get("voice_uri") or "")[:300],
+        "approach_pct": round(max(0.1, min(10.0, approach_pct)), 2),
+        "vwap_enabled": bool(source.get("vwap_enabled", DEFAULT_SCANNER_SETTINGS["vwap_enabled"])),
+        "bone_2m_enabled": bool(source.get("bone_2m_enabled", DEFAULT_SCANNER_SETTINGS["bone_2m_enabled"])),
+        "bone_5m_enabled": bool(source.get("bone_5m_enabled", DEFAULT_SCANNER_SETTINGS["bone_5m_enabled"])),
+        "news_enabled": bool(source.get("news_enabled", DEFAULT_SCANNER_SETTINGS["news_enabled"])),
+    }
+
+
+def _read_local_scanner_settings():
+    try:
+        with _scanner_user_settings_lock:
+            data = json.loads(_scanner_user_settings_file.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_local_scanner_settings(username, settings):
+    with _scanner_user_settings_lock:
+        data = _read_local_scanner_settings()
+        data[username] = settings
+        tmp = _scanner_user_settings_file.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(_scanner_user_settings_file)
+
+
+def _get_user_scanner_settings(username):
+    record = _db_get_user(username) or {}
+    remote = record.get("scanner_settings")
+    if isinstance(remote, dict) and remote:
+        return _normalize_scanner_settings(remote), True, "Supabase"
+    local = _read_local_scanner_settings().get(username)
+    if isinstance(local, dict):
+        return _normalize_scanner_settings(local), True, "local fallback"
+    return _normalize_scanner_settings(DEFAULT_SCANNER_SETTINGS), False, "default"
+
+
+def _save_user_scanner_settings(username, settings):
+    clean_settings = _normalize_scanner_settings(settings)
+    local_error = None
+    try:
+        _write_local_scanner_settings(username, clean_settings)
+    except Exception as exc:
+        local_error = str(exc)
+
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if sub_url and sub_key:
+        try:
+            response = requests.patch(
+                f"{sub_url}/rest/v1/app_users?username=eq.{quote(username, safe='')}",
+                json={"scanner_settings": clean_settings}, headers=_supabase_headers(), timeout=6
+            )
+            if response.status_code in (200, 204):
+                return clean_settings, "Supabase"
+        except Exception:
+            pass
+    if local_error:
+        raise RuntimeError(f"Could not save scanner preferences: {local_error}")
+    return clean_settings, "local fallback"
+
+
+@app.route("/api/scanner/settings", methods=["GET", "POST"])
+def scanner_user_settings():
+    body = request.get_json(silent=True) or {}
+    username = (request.args.get("user") or body.get("user") or "").strip().lower()
+    token = (request.args.get("token") or body.get("token") or "").strip()
+    if not username or not token or not _db_validate_session(username, token):
+        return jsonify({"error": "Session expired. Please sign in again."}), 401
+    if request.method == "GET":
+        settings, configured, storage = _get_user_scanner_settings(username)
+        return jsonify({"settings": settings, "configured": configured, "storage": storage})
+    try:
+        settings, storage = _save_user_scanner_settings(username, body.get("settings"))
+        return jsonify({"ok": True, "settings": settings, "storage": storage})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/api/admin/users")
 def admin_get_users():
     u = (request.args.get("user") or "").strip().lower()
@@ -1909,6 +2023,55 @@ def admin_get_users():
     admins = [x["username"] for x in users_data if x.get("is_admin") or x.get("can_rename")] if users_data else sorted(list(ADMIN_USERS))
     can_rename = [x["username"] for x in users_data if x.get("can_rename")] if users_data else ["karthik", "locke"]
     return jsonify({"users": sorted(u_list), "admins": sorted(admins), "can_rename": sorted(can_rename)})
+
+
+@app.route("/api/admin/users/<target>/details")
+def admin_user_details(target):
+    admin = (request.args.get("user") or "").strip().lower()
+    pwd = (request.args.get("pwd") or "").strip()
+    if admin not in ADMIN_USERS or pwd != "500":
+        return jsonify({"error": "Unauthorized"}), 401
+    target = (target or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9_]{2,20}", target):
+        return jsonify({"error": "Invalid username"}), 400
+    record = _db_get_user(target) or {}
+    if target not in ALLOWED_USERS and not record:
+        return jsonify({"error": "User not found"}), 404
+
+    settings, settings_configured, settings_storage = _get_user_scanner_settings(target)
+    profile_fields = ("username", "is_admin", "can_rename", "created_at", "updated_at", "session_updated_at")
+    profile = {key: record[key] for key in profile_fields if key in record}
+    profile.setdefault("username", target)
+    profile["has_password"] = bool(record.get("password_hash") and record.get("salt"))
+    profile["active_session"] = bool(record.get("session_token"))
+
+    searches = []
+    search_error = None
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if sub_url and sub_key:
+        try:
+            offset = 0
+            while offset < 10000:
+                endpoint = (f"{sub_url}/rest/v1/searches?user_name=eq.{quote(target, safe='')}"
+                            f"&select=ticker,time_ist,date_ist&order=id.desc&limit=1000&offset={offset}")
+                response = requests.get(endpoint, headers=_supabase_headers(), timeout=8)
+                if response.status_code != 200:
+                    search_error = f"Search history unavailable (HTTP {response.status_code})."
+                    break
+                batch = response.json() if isinstance(response.json(), list) else []
+                searches.extend(batch)
+                if len(batch) < 1000:
+                    break
+                offset += len(batch)
+        except Exception as exc:
+            search_error = f"Search history unavailable: {exc}"
+    else:
+        search_error = "Supabase is not configured; search history is unavailable."
+
+    return jsonify({"profile": profile, "settings": settings,
+                    "settings_configured": settings_configured, "settings_storage": settings_storage,
+                    "recent_searches": searches, "search_error": search_error})
 
 
 @app.route("/api/admin/users/add", methods=["POST"])
@@ -2014,6 +2177,7 @@ def _yahoo_scanner_rows():
                 rows.append({
                     "ticker": ticker,
                     "price": round(price, 4),
+                    "previous_close": round(previous_close, 4),
                     "gap_pct": round(gap_pct, 2),
                     "dollar_volume": round(dollar_volume),
                     "volume": round(volume),
@@ -2026,6 +2190,203 @@ def _yahoo_scanner_rows():
 
     rows.sort(key=lambda row: (-row["gap_pct"], -row["dollar_volume"], row["ticker"]))
     return rows
+
+
+_scanner_details = {}
+_scanner_details_lock = threading.RLock()
+_scanner_details_inflight = set()
+_scanner_details_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="scanner-details")
+
+
+def _normalize_yahoo_news(article, kind):
+    content = article.get("content") if isinstance(article.get("content"), dict) else article
+    title = content.get("title") or content.get("storytitle") or article.get("title")
+    if not title:
+        return None
+    link = content.get("canonicalUrl") or content.get("clickThroughUrl") or article.get("link") or article.get("url")
+    if isinstance(link, dict):
+        link = link.get("url")
+    provider = content.get("provider") or article.get("publisher") or {}
+    if isinstance(provider, dict):
+        provider = provider.get("displayName") or provider.get("name") or "Yahoo Finance"
+    published = content.get("pubDate") or content.get("providerPublishTime") or article.get("pubDate") or article.get("providerPublishTime")
+    if isinstance(published, (int, float)):
+        published = dt.datetime.fromtimestamp(published, dt.timezone.utc).isoformat()
+    elif published is not None:
+        published = str(published)
+    return {"title": str(title).strip(), "url": str(link or ""), "publisher": str(provider),
+            "published": published or "", "kind": kind}
+
+
+def _fetch_yahoo_news(ticker):
+    items = []
+    queries = ((f"{ticker} press release", "Press release"), (ticker, "News"))
+    for query, fallback_kind in queries:
+        try:
+            search = yf.Search(query=query, news_count=8, enable_fuzzy_query=False, timeout=8)
+            for article in (search.news or []):
+                content = article.get("content") if isinstance(article.get("content"), dict) else {}
+                provider = content.get("provider") or article.get("publisher") or ""
+                if isinstance(provider, dict):
+                    provider = provider.get("displayName") or provider.get("name") or ""
+                provider = str(provider)
+                kind = "Press release" if re.search(r"globe.?newswire|pr newswire|business wire|newsfile|access newswire", provider, re.I) else "News"
+                item = _normalize_yahoo_news(article, kind)
+                if item:
+                    items.append(item)
+        except Exception:
+            pass
+        if items:
+            break
+    unique, seen = [], set()
+    for item in items:
+        key = item["url"] or item["title"]
+        if key not in seen:
+            unique.append(item)
+            seen.add(key)
+        if len(unique) >= 5:
+            break
+    return unique
+
+
+def _get_scanner_news(ticker):
+    now = time.time()
+    with _scanner_details_lock:
+        cached = _scanner_details.get(ticker) or {}
+        if now - cached.get("news_at", 0) < 300:
+            return list(cached.get("news") or [])
+    news = _fetch_yahoo_news(ticker)
+    with _scanner_details_lock:
+        cached = _scanner_details.setdefault(ticker, {})
+        cached.update(news=news, news_at=now)
+    return news
+
+
+def _finviz_dilution_labels(ticker):
+    """Best-effort extraction of Finviz's displayed History and Cash Need labels."""
+    url = f"https://finviz.com/stock?b=2&p=m&t={quote(ticker, safe='')}&ta=1&ty=di"
+    response = requests.get(url, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36",
+        "Referer": "https://finviz.com/",
+    }, timeout=8)
+    if response.status_code != 200:
+        return {"history": None, "cash_need": None}
+    plain = html.unescape(re.sub(r"<[^>]+>", " ", response.text))
+    plain = re.sub(r"\s+", " ", plain)
+    result = {"history": None, "cash_need": None}
+    for label, field in (("History", "history"), ("Cash Need", "cash_need")):
+        match = re.search(rf"\b{re.escape(label)}\b\s*:?[\s\u00a0]*(High|Medium|Moderate|Low)\b", plain, re.I)
+        if match:
+            result[field] = "High" if match.group(1).lower() == "high" else "Not High"
+    return result
+
+
+def _scanner_approaches(ticker, previous_close):
+    """Return first-pullback approach alerts before price crosses VWAP/21 EMA."""
+    bars = yf.Ticker(ticker.replace(".", "-")).history(
+        period="1d", interval="1m", prepost=True, auto_adjust=False
+    )
+    if bars is None or bars.empty:
+        return []
+    if bars.index.tz is None:
+        bars.index = bars.index.tz_localize(ET)
+    else:
+        bars.index = bars.index.tz_convert(ET)
+    bars = bars.rename(columns={"Open": "o", "High": "h", "Low": "l", "Close": "c", "Volume": "v"})
+    bars = bars[["o", "h", "l", "c", "v"]].dropna(subset=["c"])
+    latest_day = bars.index[-1].date()
+    minute_of_day = bars.index.hour * 60 + bars.index.minute
+    bars = bars[(bars.index.date == latest_day) & (minute_of_day >= 240) & (minute_of_day < 1200)]
+    if len(bars) < 3:
+        return []
+    price = float(bars.c.iloc[-1])
+    high_since_open = float(bars.h.max())
+    try:
+        previous_close = float(previous_close)
+    except (TypeError, ValueError):
+        previous_close = float(bars.o.iloc[0])
+    close_values = bars.c.to_numpy()
+    rally_pullback = (previous_close > 0 and high_since_open >= previous_close * 1.02
+                      and price < high_since_open * 0.999
+                      and close_values[-1] <= close_values[-2])
+    if not rally_pullback:
+        return []
+
+    levels = []
+    typical = (bars.h + bars.l + bars.c) / 3
+    total_volume = bars.v.clip(lower=0).cumsum()
+    weighted_volume = (typical * bars.v.clip(lower=0)).cumsum()
+    if total_volume.iloc[-1] > 0:
+        vwap = float(weighted_volume.iloc[-1] / total_volume.iloc[-1])
+        levels.append(("VWAP", "approaching VWAP from above", vwap))
+
+    now_et = dt.datetime.now(ET)
+    for timeframe in (2, 5):
+        grouped = bars.resample(f"{timeframe}min", origin="start_day", label="left", closed="left").agg(
+            {"o": "first", "h": "max", "l": "min", "c": "last", "v": "sum"}
+        ).dropna(subset=["c"])
+        grouped = grouped[grouped.index + pd.Timedelta(minutes=timeframe) <= pd.Timestamp(now_et)]
+        if len(grouped) < 21:
+            continue
+        ema21 = float(grouped.c.ewm(span=21, adjust=False).mean().iloc[-1])
+        levels.append((f"BONE_{timeframe}M", f"approaching the {timeframe}-minute Bone Zone (21 EMA) from above", ema21))
+
+    alerts = []
+    for code, label, level in levels:
+        if level > 0 and price > level:
+            distance_pct = (price - level) / price * 100
+            if distance_pct <= 10.0:
+                alerts.append({"code": code, "label": label, "level": round(level, 4),
+                               "distance_pct": round(distance_pct, 2)})
+    return alerts
+
+
+def _refresh_scanner_details(ticker, previous_close):
+    try:
+        now = time.time()
+        with _scanner_details_lock:
+            cached = _scanner_details.setdefault(ticker, {})
+            technical_at = cached.get("technical_at", 0)
+            finviz_at = cached.get("finviz_at", 0)
+            news_at = cached.get("news_at", 0)
+        if now - technical_at >= 20:
+            try:
+                approaches = _scanner_approaches(ticker, previous_close)
+            except Exception:
+                approaches = []
+            with _scanner_details_lock:
+                _scanner_details.setdefault(ticker, {}).update(approaches=approaches, technical_at=now)
+        if now - finviz_at >= 14400:
+            try:
+                labels = _finviz_dilution_labels(ticker)
+            except Exception:
+                labels = {"history": None, "cash_need": None}
+            with _scanner_details_lock:
+                _scanner_details.setdefault(ticker, {}).update(
+                    history_risk=labels.get("history"), cash_need=labels.get("cash_need"), finviz_at=now
+                )
+        if now - news_at >= 300:
+            try:
+                _get_scanner_news(ticker)
+            except Exception:
+                pass
+    finally:
+        with _scanner_details_lock:
+            _scanner_details_inflight.discard(ticker)
+
+
+def _queue_scanner_details(row):
+    ticker = row["ticker"]
+    now = time.time()
+    with _scanner_details_lock:
+        cached = _scanner_details.setdefault(ticker, {})
+        due = (now - cached.get("technical_at", 0) >= 20
+               or now - cached.get("finviz_at", 0) >= 14400
+               or now - cached.get("news_at", 0) >= 300)
+        if not due or ticker in _scanner_details_inflight:
+            return
+        _scanner_details_inflight.add(ticker)
+    _scanner_details_pool.submit(_refresh_scanner_details, ticker, row.get("previous_close"))
 
 
 @app.route("/api/scanner")
@@ -2043,7 +2404,18 @@ def scanner_market_scan():
                 _scanner_cache.update(at=now, rows=rows)
             except Exception as exc:
                 return jsonify({"error": str(exc)}), 502
-        return jsonify({"tickers": _scanner_cache["rows"], "updated": _scanner_cache["at"]})
+        output = []
+        for row in _scanner_cache["rows"]:
+            _queue_scanner_details(row)
+            with _scanner_details_lock:
+                details = dict(_scanner_details.get(row["ticker"]) or {})
+            output.append({**row,
+                           "history_risk": details.get("history_risk"),
+                           "cash_need": details.get("cash_need"),
+                           "news": details.get("news") or [],
+                           "approaches": details.get("approaches") or []})
+        return jsonify({"tickers": output, "updated": _scanner_cache["at"],
+                        "session_date": dt.datetime.now(ET).date().isoformat()})
 
 
 HTML = r"""<!doctype html>
@@ -2168,22 +2540,35 @@ canvas{display:block;width:100%}
 </div>
 
 <!-- Live Gap-Up Scanner -->
-<div id="scanner_modal" style="position:fixed;inset:0;background:rgba(0,0,0,.86);z-index:90000;display:none;align-items:center;justify-content:center;padding:20px" onclick="if(event.target===this)closeScanner()">
-  <section style="width:min(900px,96vw);max-height:88vh;display:flex;flex-direction:column;background:#090b0e;border:1px solid #29a8ff;border-radius:6px;box-shadow:0 16px 60px #000">
+<div id="scanner_modal" style="position:fixed;top:96px;right:24px;z-index:90000;display:none;width:min(1280px,calc(100vw - 48px));pointer-events:none">
+  <section style="width:100%;max-height:82vh;display:flex;flex-direction:column;background:#090b0e;border:1px solid #29a8ff;border-radius:6px;box-shadow:0 12px 40px rgba(0,0,0,.8);pointer-events:auto;overflow:hidden">
     <header style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:15px 18px;border-bottom:1px solid #252b31">
       <div style="font-size:17px;font-weight:bold;color:#6cc4ff">🔎 Live Gap-Up Scanner</div>
       <div style="font-size:12px;color:#999">Price &gt;$0.40 and &lt;$20 · Gap &gt;40% · Dollar volume ≥$500K</div>
-      <label style="margin-left:auto;display:flex;align-items:center;gap:8px;color:#ffd23f;font-size:13px;cursor:pointer"><input id="scanner_alarm" type="checkbox" style="width:17px;height:17px"> Voice alarm</label>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:8px;color:#ffd23f;font-size:13px;cursor:pointer"><input id="scanner_alarm" type="checkbox" style="width:17px;height:17px"> Voice alarm · repeats every 5 min</label>
+        <label style="display:flex;align-items:center;gap:7px;color:#aaa;font-size:12px">Volume <input id="scanner_alarm_volume" type="range" min="0" max="100" step="5" value="100" style="width:92px;height:18px;padding:0;accent-color:#ffd23f"><span id="scanner_alarm_volume_value" style="color:#ffd23f;min-width:34px">100%</span></label>
+        <label style="display:flex;align-items:center;gap:6px;color:#aaa;font-size:12px">Voice <select id="scanner_voice_select" style="height:30px;max-width:180px;margin:0;font-size:12px"><option value="">Auto · feminine if available</option></select></label>
+      </div>
       <button id="scanner_refresh_btn" style="height:32px;font-size:13px;padding:0 12px">Refresh</button>
       <button id="scanner_close_btn" style="height:32px;font-size:13px;padding:0 12px" onclick="closeScanner()">Close</button>
     </header>
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:10px 18px;background:#0d1014;border-bottom:1px solid #252b31;font-size:12px">
+      <strong style="color:#aaa">Alert settings:</strong>
+      <label style="display:flex;align-items:center;gap:5px"><input id="scanner_vwap_alert" type="checkbox" style="width:15px;height:15px"> VWAP</label>
+      <label style="display:flex;align-items:center;gap:5px"><input id="scanner_bone_2m_alert" type="checkbox" style="width:15px;height:15px"> Bone Zone 2m (21 EMA)</label>
+      <label style="display:flex;align-items:center;gap:5px"><input id="scanner_bone_5m_alert" type="checkbox" style="width:15px;height:15px"> Bone Zone 5m (21 EMA)</label>
+      <label style="display:flex;align-items:center;gap:5px"><input id="scanner_news_alert" type="checkbox" style="width:15px;height:15px"> Announce News / PR</label>
+      <label style="display:flex;align-items:center;gap:6px;color:#aaa">Alert within <input id="scanner_approach_pct" type="number" min="0.1" max="10" step="0.1" value="2" style="width:76px;height:30px;padding:2px 6px;font-size:13px"> %</label>
+      <span id="scanner_settings_status" style="margin-left:auto;color:#777">Settings save per user</span>
+    </div>
     <div style="padding:10px 18px;color:#888;font-size:12px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
       <span id="scanner_status">Waiting for scan…</span><span>Yahoo Finance · quotes may be delayed · Click a ticker to load its notes</span>
     </div>
     <div style="overflow:auto;padding:0 18px 18px">
       <table style="width:100%;border-collapse:collapse"><thead><tr style="color:#aaa;text-align:left;border-bottom:1px solid #333">
-        <th style="padding:8px">Ticker</th><th style="padding:8px;text-align:right">Price</th><th style="padding:8px;text-align:right">Gap</th><th style="padding:8px;text-align:right">Volume</th><th style="padding:8px;text-align:right">$ Volume</th>
-      </tr></thead><tbody id="scanner_rows"><tr><td colspan="5" style="padding:18px;color:#777;text-align:center">No scan yet</td></tr></tbody></table>
+        <th style="padding:8px">Ticker</th><th style="padding:8px;text-align:right">Price</th><th style="padding:8px;text-align:right">Gap</th><th style="padding:8px;text-align:right">Volume</th><th style="padding:8px;text-align:right">$ Volume</th><th style="padding:8px;text-align:center" title="Finviz dilution-history label when available">Dilution History</th><th style="padding:8px;text-align:center" title="Finviz cash-need label when available">Cash Need</th>
+      </tr></thead><tbody id="scanner_rows"><tr><td colspan="7" style="padding:18px;color:#777;text-align:center">No scan yet</td></tr></tbody></table>
     </div>
   </section>
 </div>
@@ -2216,14 +2601,15 @@ canvas{display:block;width:100%}
 
 <!-- Manage Users Modal -->
 <div id="users_modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:99999;display:none;align-items:center;justify-content:center;padding:20px" onclick="if(event.target===this)closeUsersModal()">
-  <div style="background:#0c0c0c;border:1px solid #ffd23f44;padding:0;width:480px;max-width:94vw;box-shadow:0 16px 50px rgba(0,0,0,0.95);border-radius:6px;overflow:hidden">
+  <div style="background:#0c0c0c;border:1px solid #ffd23f44;padding:0;width:720px;max-width:94vw;max-height:90vh;box-shadow:0 16px 50px rgba(0,0,0,0.95);border-radius:6px;overflow:auto">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #222;background:#111">
       <div style="font-size:16px;font-weight:bold;color:#ffd23f">👥 Manage Authorized Users</div>
       <button onclick="closeUsersModal()" style="background:transparent;border:none;color:#888;font-size:18px;cursor:pointer;padding:2px 6px" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#888'">✕</button>
     </div>
     <div style="padding:20px">
-      <div style="font-size:12px;color:#8a8a8a;margin-bottom:14px">Admins (karthik, locke) cannot be removed. Changes are live immediately (session only — restart server to reset).</div>
+      <div style="font-size:12px;color:#8a8a8a;margin-bottom:14px">Admins (karthik, locke) cannot be removed. Click a username to inspect account status, alert preferences, and recent searches.</div>
       <div id="users_list" style="margin-bottom:20px;min-height:60px"></div>
+      <div id="user_details" style="display:none;margin:0 0 20px;padding:14px;background:#080808;border:1px solid #333;border-radius:4px;max-height:42vh;overflow:auto"></div>
       <div style="display:flex;gap:10px;align-items:center;border-top:1px solid #222;padding-top:16px">
         <input id="new_user_input" placeholder="New username (a-z, 0-9, _)" style="flex:1;height:40px;font-size:14px;padding:0 12px;background:#000;border:1px solid #444;color:#fff" autocomplete="off" spellcheck="false" maxlength="20">
         <button id="add_user_btn" style="height:40px;padding:0 18px;font-size:14px;background:#0a2a0a;border:1px solid #3ddc84;color:#3ddc84;cursor:pointer;border-radius:3px;font-weight:bold">+ Add</button>
@@ -2513,7 +2899,7 @@ function _showApp(){
     $('#u_name').title = '';
   }
   $('#t').focus();
-  startScannerPolling();
+  loadScannerSettings().then(()=>startScannerPolling());
   // Periodically verify session (every 90s) for non-exempt users
   if(!_canRename && !PWD_USERS.includes(cur)){
     _startSessionPoll();
@@ -2858,6 +3244,14 @@ function renderTab(tab, r, isRefresh){
   o += `<div>Verdict: <span class="${h.gcls}">${esc(h.verdict)}</span></div>`;
   o += `<div>Summary: ${esc(h.summary)}</div>`;
   (h.notes||[]).forEach(n=>o+=`<div class="y">Note: ${esc(n)}</div>`);
+  const newsItems = r.news || [];
+  o += `<div class="panel"><div class="ttl">Recent Press Releases / News</div>`+
+    (newsItems.length ? newsItems.map(item=>{
+      const link = /^https?:\/\//i.test(item.url || '')
+        ? `<a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer" style="color:#6cc4ff">${esc(item.title)}</a>`
+        : esc(item.title);
+      return `<div style="padding:5px 0;border-bottom:1px solid #222"><span style="color:#ffd23f;font-size:12px">${esc(item.kind || 'News')}</span> · ${link}<span style="color:#777;font-size:12px"> — ${esc(item.publisher || 'Yahoo Finance')}${item.published?' · '+esc(item.published):''}</span></div>`;
+    }).join('') : `<div class="d">No recent Yahoo Finance press release or news headline found.</div>`) + `</div>`;
   o += `<div class="panel two"><div><div class="ttl">${esc(T.p1)}</div>${kv(r.p1.left)}</div><div>${kv(r.p1.right)}</div></div>`;
   (r.tables||[]).forEach(t=>{
     o += `<div class="panel"><div class="ttl">${esc(t.title)}</div>${table(t.cols,t.rows,t.dim,true)}<div class="foot">${esc(t.foot||'')}</div></div>`;
@@ -3771,11 +4165,12 @@ async function loadUsersModal(){
     if(data.error){ $('#users_list').innerHTML='<span class="r">'+esc(data.error)+'</span>'; return; }
     liveAllowed = data.users || [];
     const admins = data.admins || [];
+    $('#user_details').style.display = 'none';
     let html = '<div style="display:flex;flex-wrap:wrap;gap:8px">';
     liveAllowed.forEach(u=>{
       const isAdmin = admins.includes(u);
       html += `<div style="display:flex;align-items:center;gap:6px;background:#151515;border:1px solid ${isAdmin?'#ffd23f':'#333'};border-radius:4px;padding:6px 10px 6px 12px">`;
-      html += `<span style="color:${isAdmin?'#ffd23f':'#ddd'};font-size:14px;font-weight:${isAdmin?'bold':'normal'}">${esc(u.toUpperCase())}</span>`;
+      html += `<button onclick="viewUserDetails('${esc(u)}')" style="background:transparent;border:0;color:${isAdmin?'#ffd23f':'#ddd'};font-size:14px;font-weight:${isAdmin?'bold':'normal'};cursor:pointer;text-decoration:underline;padding:0" title="View ${esc(u)} account details">${esc(u.toUpperCase())}</button>`;
       if(isAdmin) html += `<span style="color:#ffd23f;font-size:11px;margin-left:2px">★ ADMIN</span>`;
       if(isAdmin && (u === cur || ['karthik', 'locke'].includes(u))) html += `<button onclick="openRenameModal()" style="background:#240038;border:1px solid #a855f7;color:#d8b4fe;font-size:11px;padding:2px 8px;border-radius:2px;cursor:pointer;margin-left:4px" title="Rename this username">✏️ Rename</button>`;
       if(!isAdmin) html += `<button onclick="removeUser('${esc(u)}')" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:16px;line-height:1;padding:0 2px" title="Remove ${esc(u)}" onmouseover="this.style.color='#ff5a5a'" onmouseout="this.style.color='#555'">×</button>`;
@@ -3788,6 +4183,39 @@ async function loadUsersModal(){
     $('#users_list').innerHTML = '<span class="r">Failed: '+esc(e)+'</span>';
   }
 }
+
+window.viewUserDetails = async function(name){
+  const panel = $('#user_details');
+  panel.style.display = 'block';
+  panel.innerHTML = '<span style="color:#888">Loading account details…</span>';
+  try {
+    const url = '/api/admin/users/'+encodeURIComponent(name)+'/details?user='+encodeURIComponent(currentUser)+'&pwd='+encodeURIComponent(adminPwd);
+    const response = await fetch(url);
+    const data = await response.json();
+    if(!response.ok) throw new Error(data.error || 'Could not load user details');
+    const p = data.profile || {}, s = data.settings || {};
+    const yesNo = v => v ? 'Yes' : 'No';
+    const row = (label, value) => `<div style="display:flex;gap:10px;padding:5px 0;border-bottom:1px solid #1c1c1c"><span style="color:#888;min-width:190px">${esc(label)}</span><strong style="color:#ddd;overflow-wrap:anywhere">${esc(value === undefined || value === null || value === '' ? '—' : String(value))}</strong></div>`;
+    const searches = (data.recent_searches || []).map(item=>`<div style="padding:5px 0;border-bottom:1px solid #1c1c1c"><strong style="color:#6cc4ff">${esc(item.ticker || '—')}</strong><span style="color:#888;margin-left:12px">${esc([item.date_ist,item.time_ist].filter(Boolean).join(' '))}</span></div>`).join('') || '<div style="color:#777;padding:6px 0">No recent searches found.</div>';
+    panel.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><strong style="color:#6cc4ff;font-size:15px">${esc((p.username || name).toUpperCase())} · Account details</strong><span style="color:#777;font-size:11px">Preferences: ${esc(data.settings_storage || 'unknown')}</span></div>`+
+      `<div style="font-weight:bold;color:#ffd23f;margin:10px 0 4px">Account</div>`+
+      row('Role', p.is_admin ? 'Admin' : p.can_rename ? 'Account manager' : 'User')+
+      row('Password configured', yesNo(p.has_password))+
+      row('Active session', yesNo(p.active_session))+
+      row('Created', p.created_at)+row('Updated', p.updated_at)+row('Last session update', p.session_updated_at)+
+      `<div style="font-weight:bold;color:#ffd23f;margin:14px 0 4px">Scanner alert settings</div>`+
+      row('Voice alerts enabled', yesNo(s.voice_enabled))+
+      row('Voice volume', `${Number(s.voice_volume ?? 100)}%`)+
+      row('Selected voice', s.voice_uri || 'Automatic')+
+      row('Approach threshold', `${Number(s.approach_pct ?? 2)}%`)+
+      row('VWAP alerts', yesNo(s.vwap_enabled))+
+      row('Bone Zone (21 EMA), 2 minute', yesNo(s.bone_2m_enabled))+
+      row('Bone Zone (21 EMA), 5 minute', yesNo(s.bone_5m_enabled))+
+      row('News / PR announcements', yesNo(s.news_enabled))+
+      `<div style="font-weight:bold;color:#ffd23f;margin:14px 0 4px">Recent searches</div>${searches}`+
+      (data.search_error ? `<div style="color:#888;font-size:11px;margin-top:7px">${esc(data.search_error)}</div>` : '');
+  } catch(error){ panel.innerHTML = `<span style="color:#ff7373">${esc(error.message)}</span>`; }
+};
 
 async function addUser(){
   const name = ($('#new_user_input').value||'').trim().toLowerCase();
@@ -3861,35 +4289,198 @@ if($('#open_multiday_newtab')) $('#open_multiday_newtab').onclick = () => window
 let scannerTimer = null;
 let scannerBusy = false;
 let scannerLastSpoken = new Map();
-let scannerAlarmEnabled = localStorage.getItem('gap_scanner_alarm') === '1';
+let scannerNewsSpoken = new Map();
+let scannerAlertSession = '';
+let scannerSeenApproaches = new Set();
+const scannerSettingsDefaults = {voice_enabled:false,voice_volume:100,voice_uri:'',approach_pct:2,vwap_enabled:true,bone_2m_enabled:true,bone_5m_enabled:true,news_enabled:true};
+let scannerSettings = {...scannerSettingsDefaults};
+let scannerSettingsUser = '';
+let scannerSettingsLoadPromise = null;
+let scannerSettingsSaveTimer = null;
+let scannerAlarmEnabled = false;
+let scannerVoiceVolume = 100;
+let scannerVoices = [];
 
 function startScannerPolling(){
   if(scannerTimer) return;
   scannerTimer = setInterval(()=>{
-    const panelOpen = $('#scanner_modal').style.display === 'flex';
+    const panelOpen = $('#scanner_modal').style.display !== 'none';
     if(panelOpen || scannerAlarmEnabled) refreshScanner();
   }, 30000);
   if(scannerAlarmEnabled) refreshScanner();
 }
 
+function applyScannerSettings(settings){
+  scannerSettings = {...scannerSettingsDefaults, ...(settings || {})};
+  scannerAlarmEnabled = !!scannerSettings.voice_enabled;
+  scannerVoiceVolume = Math.max(0, Math.min(100, Number(scannerSettings.voice_volume) || 0));
+  $('#scanner_alarm').checked = scannerAlarmEnabled;
+  $('#scanner_alarm_volume').value = scannerVoiceVolume;
+  $('#scanner_alarm_volume_value').textContent = scannerVoiceVolume + '%';
+  $('#scanner_vwap_alert').checked = !!scannerSettings.vwap_enabled;
+  $('#scanner_bone_2m_alert').checked = !!scannerSettings.bone_2m_enabled;
+  $('#scanner_bone_5m_alert').checked = !!scannerSettings.bone_5m_enabled;
+  $('#scanner_news_alert').checked = !!scannerSettings.news_enabled;
+  $('#scanner_approach_pct').value = scannerSettings.approach_pct;
+  if($('#scanner_voice_select')) $('#scanner_voice_select').value = scannerSettings.voice_uri || '';
+}
+
+function readScannerSettingsControls(){
+  let approachPct = Number($('#scanner_approach_pct').value);
+  if(!Number.isFinite(approachPct)) approachPct = scannerSettings.approach_pct || 2;
+  approachPct = Math.max(0.1, Math.min(10, approachPct));
+  return {
+    voice_enabled: $('#scanner_alarm').checked,
+    voice_volume: Number($('#scanner_alarm_volume').value),
+    voice_uri: $('#scanner_voice_select').value || '',
+    approach_pct: Math.round(approachPct*10)/10,
+    vwap_enabled: $('#scanner_vwap_alert').checked,
+    bone_2m_enabled: $('#scanner_bone_2m_alert').checked,
+    bone_5m_enabled: $('#scanner_bone_5m_alert').checked,
+    news_enabled: $('#scanner_news_alert').checked
+  };
+}
+
+async function loadScannerSettings(){
+  const username = currentUser;
+  if(!username || scannerSettingsUser === username) return;
+  if(scannerSettingsLoadPromise) await scannerSettingsLoadPromise;
+  if(scannerSettingsUser === username) return;
+  const previousUser = scannerSettingsUser;
+  if(previousUser && previousUser !== username){
+    scannerLastSpoken.clear(); scannerNewsSpoken.clear(); scannerAlertSession = ''; scannerSeenApproaches.clear();
+  }
+  scannerSettingsLoadPromise = (async()=>{
+    let settings = {...scannerSettingsDefaults};
+    let configured = false;
+    try {
+      const url = '/api/scanner/settings?user='+encodeURIComponent(username)+'&token='+encodeURIComponent(sessionToken);
+      const response = await fetch(url);
+      const data = await response.json();
+      if(!response.ok) throw new Error(data.error || 'Settings could not be loaded');
+      settings = {...scannerSettingsDefaults, ...(data.settings || {})};
+      configured = !!data.configured;
+      if(!configured){
+        try {
+          const saved = JSON.parse(localStorage.getItem('gap_scanner_user_settings_'+username) || 'null');
+          if(saved && typeof saved === 'object') settings = {...settings, ...saved};
+        } catch(e){}
+      }
+    } catch(e){
+      try {
+        const saved = JSON.parse(localStorage.getItem('gap_scanner_user_settings_'+username) || 'null');
+        if(saved && typeof saved === 'object') settings = {...settings, ...saved};
+      } catch(err){}
+    }
+    if(currentUser !== username) return;
+    scannerSettingsUser = username;
+    applyScannerSettings(settings);
+    if(!configured) await persistScannerSettings(settings, false);
+  })();
+  try { await scannerSettingsLoadPromise; }
+  finally { scannerSettingsLoadPromise = null; }
+}
+
+function saveScannerSettings(){
+  scannerSettings = readScannerSettingsControls();
+  scannerAlarmEnabled = scannerSettings.voice_enabled;
+  scannerVoiceVolume = scannerSettings.voice_volume;
+  try { localStorage.setItem('gap_scanner_user_settings_'+currentUser, JSON.stringify(scannerSettings)); } catch(e){}
+  $('#scanner_settings_status').textContent = 'Saving…';
+  clearTimeout(scannerSettingsSaveTimer);
+  scannerSettingsSaveTimer = setTimeout(()=>persistScannerSettings(scannerSettings, true), 350);
+}
+
+async function persistScannerSettings(settings, showStatus){
+  if(!currentUser || !sessionToken) return;
+  try {
+    const response = await fetch('/api/scanner/settings', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({user:currentUser,token:sessionToken,settings})
+    });
+    const data = await response.json();
+    if(!response.ok) throw new Error(data.error || 'Could not save settings');
+    scannerSettings = {...scannerSettingsDefaults, ...(data.settings || settings)};
+    try { localStorage.setItem('gap_scanner_user_settings_'+currentUser, JSON.stringify(scannerSettings)); } catch(e){}
+    if(showStatus) $('#scanner_settings_status').textContent = data.storage === 'Supabase' ? 'Saved to account' : 'Saved locally · DB migration needed for cloud sync';
+  } catch(e){
+    if(showStatus) $('#scanner_settings_status').textContent = 'Saved on this device · sync unavailable';
+  }
+}
+
 function openScanner(){
   if(!checkAuth()) return;
-  $('#scanner_modal').style.display = 'flex';
+  $('#scanner_modal').style.display = 'block';
   $('#scanner_alarm').checked = scannerAlarmEnabled;
   refreshScanner();
 }
 
 function closeScanner(){ $('#scanner_modal').style.display = 'none'; }
+function toggleScanner(){
+  if($('#scanner_modal').style.display === 'none') openScanner();
+  else closeScanner();
+}
 
-function announceScannerTicker(ticker){
+document.addEventListener('mousedown', e=>{
+  const panel = $('#scanner_modal');
+  const button = $('#scanner_open_btn');
+  if(panel.style.display !== 'none' && !panel.contains(e.target) && !button.contains(e.target)) closeScanner();
+});
+
+function announceScannerTicker(ticker, extra=''){
   if(!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined'){
     $('#scanner_status').textContent = 'Voice alarm is unavailable in this browser.';
     return;
   }
-  const spoken = ticker.split('').join(' ');
+  const spoken = ticker.split('').join(' ') + (extra ? '. ' + extra : '');
   const utterance = new SpeechSynthesisUtterance(spoken);
-  utterance.rate = 0.9;
+  utterance.rate = 0.74;
+  utterance.pitch = 0.72;
+  utterance.volume = scannerVoiceVolume / 100;
+  const voiceId = $('#scanner_voice_select').value;
+  const feminineVoice = scannerVoices.find(voice => /\b(aria|ava|amy|emma|jenny|june|karen|kimberly|moira|natasha|olivia|salli|samantha|sara|serena|sophie|susan|tessa|victoria|zira)\b|female/i.test(voice.name));
+  const selectedVoice = scannerVoices.find(voice => voice.voiceURI === voiceId);
+  const voice = selectedVoice || feminineVoice || scannerVoices.find(item => /^en([_-]|$)/i.test(item.lang));
+  if(voice) utterance.voice = voice;
   window.speechSynthesis.speak(utterance);
+}
+
+function loadScannerApproachHistory(sessionDate){
+  if(scannerAlertSession === sessionDate) return;
+  scannerAlertSession = sessionDate;
+  try {
+    const saved = JSON.parse(localStorage.getItem('gap_scanner_approaches_' + currentUser + '_' + sessionDate) || '[]');
+    scannerSeenApproaches = new Set(Array.isArray(saved) ? saved : []);
+  } catch(e){ scannerSeenApproaches = new Set(); }
+}
+
+function saveScannerApproach(id){
+  scannerSeenApproaches.add(id);
+  try {
+    localStorage.setItem('gap_scanner_approaches_' + currentUser + '_' + scannerAlertSession,
+                         JSON.stringify([...scannerSeenApproaches].slice(-1000)));
+  } catch(e){}
+}
+
+function loadScannerVoices(){
+  if(!('speechSynthesis' in window)) return;
+  scannerVoices = window.speechSynthesis.getVoices();
+  const select = $('#scanner_voice_select');
+  if(!select) return;
+  const savedVoice = scannerSettings.voice_uri || '';
+  select.innerHTML = '';
+  const automatic = document.createElement('option');
+  automatic.value = '';
+  automatic.textContent = 'Auto · feminine if available';
+  select.appendChild(automatic);
+  scannerVoices.filter(voice => /^en([_-]|$)/i.test(voice.lang)).forEach(voice => {
+    const option = document.createElement('option');
+    option.value = voice.voiceURI;
+    option.textContent = `${voice.name} (${voice.lang})`;
+    select.appendChild(option);
+  });
+  if(savedVoice && [...select.options].some(option => option.value === savedVoice)) select.value = savedVoice;
+  else select.value = '';
 }
 
 async function refreshScanner(){
@@ -3902,20 +4493,27 @@ async function refreshScanner(){
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Scanner request failed');
     const tickers = data.tickers || [];
+    loadScannerApproachHistory(data.session_date || new Date().toISOString().slice(0,10));
     const current = new Set(tickers.map(row=>row.ticker));
     for(const oldTicker of scannerLastSpoken.keys()){
       if(!current.has(oldTicker)) scannerLastSpoken.delete(oldTicker);
     }
     const body = $('#scanner_rows');
     if(!tickers.length){
-      body.innerHTML = '<tr><td colspan="5" style="padding:18px;color:#777;text-align:center">No tickers currently meet all scanner conditions.</td></tr>';
+      body.innerHTML = '<tr><td colspan="7" style="padding:18px;color:#777;text-align:center">No tickers currently meet all scanner conditions.</td></tr>';
     } else {
+      const riskCell = value=>{
+        const text = value || '—';
+        const color = text === 'High' ? '#ff7373' : text === 'Not High' ? '#3ddc84' : '#777';
+        return `<td style="padding:9px;text-align:center;color:${color}" title="Finviz label when available">${esc(text)}</td>`;
+      };
       body.innerHTML = tickers.map(row=>`<tr class="scanner-result-row" data-ticker="${esc(row.ticker)}" style="border-bottom:1px solid #20242a;cursor:pointer" title="Load notes for ${esc(row.ticker)}" onmouseover="this.style.background='#101820'" onmouseout="this.style.background='transparent'">`+
         `<td style="padding:9px;color:#6cc4ff;font-weight:bold">${esc(row.ticker)}</td>`+
         `<td style="padding:9px;text-align:right">$${Number(row.price).toFixed(2)}</td>`+
         `<td style="padding:9px;text-align:right;color:#3ddc84">+${Number(row.gap_pct).toFixed(1)}%</td>`+
         `<td style="padding:9px;text-align:right">${Number(row.volume).toLocaleString()}</td>`+
-        `<td style="padding:9px;text-align:right">$${Number(row.dollar_volume).toLocaleString()}</td></tr>`).join('');
+        `<td style="padding:9px;text-align:right">$${Number(row.dollar_volume).toLocaleString()}</td>`+
+        riskCell(row.history_risk)+riskCell(row.cash_need)+`</tr>`).join('');
       body.querySelectorAll('[data-ticker]').forEach(row=>row.onclick=()=>selectScannerTicker(row.dataset.ticker));
     }
     const stamp = new Date((data.updated || Date.now()/1000)*1000).toLocaleTimeString();
@@ -3924,8 +4522,29 @@ async function refreshScanner(){
       const now = Date.now();
       tickers.forEach(row=>{
         const last = scannerLastSpoken.get(row.ticker);
-        if(last === undefined || now-last >= 600000){
-          announceScannerTicker(row.ticker);
+        const repeatDue = last === undefined || now-last >= 300000;
+        const news = (row.news || [])[0];
+        const newsKey = news ? (news.url || news.title) : '';
+        const freshNews = scannerSettings.news_enabled && !!newsKey && scannerNewsSpoken.get(row.ticker) !== newsKey;
+        const newEvents = (row.approaches || []).filter(event=>{
+          const enabled = event.code === 'VWAP' ? scannerSettings.vwap_enabled :
+            event.code === 'BONE_2M' ? scannerSettings.bone_2m_enabled :
+            event.code === 'BONE_5M' ? scannerSettings.bone_5m_enabled : false;
+          if(!enabled || Number(event.distance_pct) > Number(scannerSettings.approach_pct)) return false;
+          const id = `${row.ticker}:${event.code}`;
+          if(scannerSeenApproaches.has(id)) return false;
+          saveScannerApproach(id);
+          return true;
+        });
+        if(repeatDue || freshNews || newEvents.length){
+          const extras = [];
+          if(scannerSettings.news_enabled && news && (freshNews || repeatDue)){
+            const label = news.kind === 'Press release' ? 'Press release' : 'News';
+            extras.push(`${label}: ${String(news.title || '').slice(0,180)}`);
+            scannerNewsSpoken.set(row.ticker, newsKey);
+          }
+          newEvents.forEach(event=>extras.push(event.label));
+          announceScannerTicker(row.ticker, extras.join('. '));
           scannerLastSpoken.set(row.ticker, now);
         }
       });
@@ -3944,12 +4563,12 @@ function selectScannerTicker(ticker){
   run(false);
 }
 
-if($('#scanner_open_btn')) $('#scanner_open_btn').onclick = openScanner;
+if($('#scanner_open_btn')) $('#scanner_open_btn').onclick = toggleScanner;
 if($('#scanner_close_btn')) $('#scanner_close_btn').onclick = closeScanner;
 if($('#scanner_refresh_btn')) $('#scanner_refresh_btn').onclick = refreshScanner;
 if($('#scanner_alarm')) $('#scanner_alarm').onchange = e=>{
   scannerAlarmEnabled = e.target.checked;
-  localStorage.setItem('gap_scanner_alarm', scannerAlarmEnabled ? '1' : '0');
+  saveScannerSettings();
   if(scannerAlarmEnabled){
     if('speechSynthesis' in window) window.speechSynthesis.resume();
     refreshScanner();
@@ -3957,6 +4576,28 @@ if($('#scanner_alarm')) $('#scanner_alarm').onchange = e=>{
     window.speechSynthesis.cancel();
   }
 };
+['scanner_vwap_alert','scanner_bone_2m_alert','scanner_bone_5m_alert','scanner_news_alert'].forEach(id=>{
+  if($('#'+id)) $('#'+id).onchange = saveScannerSettings;
+});
+if($('#scanner_approach_pct')) $('#scanner_approach_pct').onchange = e=>{
+  const value = Math.max(0.1, Math.min(10, Number(e.target.value) || 2));
+  e.target.value = value.toFixed(1);
+  saveScannerSettings();
+};
+if($('#scanner_alarm_volume')){
+  $('#scanner_alarm_volume').value = scannerVoiceVolume;
+  $('#scanner_alarm_volume_value').textContent = scannerVoiceVolume + '%';
+  $('#scanner_alarm_volume').oninput = e=>{
+    scannerVoiceVolume = Number(e.target.value);
+    $('#scanner_alarm_volume_value').textContent = scannerVoiceVolume + '%';
+    saveScannerSettings();
+  };
+}
+if($('#scanner_voice_select')){
+  loadScannerVoices();
+  if('speechSynthesis' in window) window.speechSynthesis.onvoiceschanged = loadScannerVoices;
+  $('#scanner_voice_select').onchange = saveScannerSettings;
+}
 if($('#multiday_stats_btn')) $('#multiday_stats_btn').onclick = () => {
   $('#admin_view').style.display = 'none';
   $('#app_main').style.display = 'block';
