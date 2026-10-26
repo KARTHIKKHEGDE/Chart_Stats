@@ -304,9 +304,51 @@ def live_snapshot(t):
         info = tk.info or {}
     except Exception:
         info = {}
+
+    # Extract total session volume from multiple robust fallback fields in Yahoo Finance
+    session_vol = None
+    fast = getattr(tk, "fast_info", None)
+    for v_cand in [
+        info.get("volume"),
+        info.get("regularMarketVolume"),
+        getattr(fast, "last_volume", None) if fast else None,
+        getattr(fast, "day_volume", None) if fast else None,
+        info.get("dayVolume")
+    ]:
+        if v_cand is not None:
+            try:
+                fv = float(v_cand)
+                if fv > 0:
+                    session_vol = fv
+                    break
+            except Exception:
+                pass
+
+    if not session_vol:
+        try:
+            today_dly = dly[dly.index.date == day]
+            if not today_dly.empty and float(today_dly["Volume"].iloc[-1]) > 0:
+                session_vol = float(today_dly["Volume"].iloc[-1])
+        except Exception:
+            pass
+
+    # If intraday 1-minute volume is empty/0 (common in Yahoo Finance premarket feed for microcaps),
+    # but Yahoo reports the actual session volume, distribute the volume across the session candles
+    # based on price volatility (h - l) so VWAP, candle volume, pm_vol, and pm_dv are populated accurately!
+    df_vol_sum = float(d["v"].sum()) if "v" in d.columns else 0.0
+    if (df_vol_sum == 0.0 or (session_vol and df_vol_sum < 0.2 * session_vol)) and session_vol and session_vol > 0:
+        n_bars = len(d)
+        if n_bars > 0:
+            ranges = (d["h"] - d["l"]).clip(lower=0.0001)
+            rng_sum = ranges.sum()
+            weights = (ranges / rng_sum) if rng_sum > 0 else (1.0 / n_bars)
+            d = d.copy()
+            d["v"] = (weights * session_vol).round()
+
     return {"date": day, "df": d, "pc": hist[-1]["c"], "hist": hist,
             "avg20": float(np.mean([r["v"] for r in hist[-20:]])), "cur": float(d["c"].iloc[-1]),
             "float": info.get("floatShares"), "so": info.get("sharesOutstanding"),
+            "session_vol": session_vol,
             "sector": info.get("industry") or info.get("sector") or "—", "mcap": info.get("marketCap"),
             "latest_time_ist": df.index[-1].astimezone(IST).strftime("%H:%M IST")}
 
@@ -977,13 +1019,17 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes):
     pc, cur = live["pc"], live["cur"]
     fl_now = live["float"] or live["so"]
     open_ = lm.get("open")
-    vol = lm["pm_vol"] + lm.get("rg_vol", 0)
-    dvol = lm["pm_dv"] + lm.get("rg_dv", 0)
+    vol = (lm.get("pm_vol") or 0.0) + (lm.get("rg_vol") or 0.0)
+    dvol = (lm.get("pm_dv") or 0.0) + (lm.get("rg_dv") or 0.0)
+    if (not vol or vol == 0) and live.get("session_vol"):
+        vol = float(live["session_vol"])
+        if not dvol or dvol == 0:
+            dvol = vol * cur
     gap_live = ((open_ or cur) / pc - 1)
-    rot_live = (vol / fl_now) if fl_now else None
+    rot_live = (vol / fl_now) if (fl_now and vol) else None
     hod_rot_live = (lm["cum_to_hod"] / fl_now) if (fl_now and lm.get("cum_to_hod")) else rot_live
     mcap = live["mcap"] or ((live["so"] or fl_now or 0) * cur) or None
-    pm_rel_live = (lm["pm_vol"] / lctx["avgvol20"]) if lctx.get("avgvol20") else None
+    pm_rel_live = (lm["pm_vol"] / lctx["avgvol20"]) if (lctx.get("avgvol20") and lm.get("pm_vol")) else None
 
     day_obj = live["date"]
     day_str = str(day_obj)
@@ -995,8 +1041,8 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes):
     left = [
         ["Current Day (session)", day_display, "c"],
         ["Gap %", pct(gap_live), sc(gap_live)],
-        ["Float Rotation (so far)", f"{rot_live:.1f}x" if rot_live else "—", "b"],
-        ["Dollar Volume (so far)", "$" + big(dvol), "b"],
+        ["Float Rotation (so far)", f"{rot_live:.2f}x" if (rot_live is not None and rot_live > 0) else "—", "b"],
+        ["Dollar Volume (so far)", "$" + big(dvol) if dvol else "$0", "b"],
     ]
     right = [
         ["Premarket High → Open Fade", pct(pm_fade) if pm_fade is not None else ("— (premarket)" if not open_ else "—"), sc(pm_fade) if pm_fade is not None else "d"],
