@@ -1663,6 +1663,7 @@ canvas{display:block;width:100%}
     <button id="cp">Copy all</button>
 
     <div style="margin-left:auto;display:flex;align-items:center;gap:10px;font-size:13px;color:#8a8a8a">
+      <button id="nav_dilution_btn" style="height:36px;padding:0 14px;border:2px solid #a855f7;background:#240038;color:#d8b4fe;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Dilution Notes, Cash/Runway & SEC Filings Tool">📑 Dilution Notes</button>
       <button id="nav_multiday_btn" style="height:36px;padding:0 14px;border:2px solid #00c9a7;background:#002b24;color:#00c9a7;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Multi-day Rally & First Red Day (FRD) Structure Tool">📊 Runner Stats</button>
       <span>User: <span id="u_name" style="color:#29a8ff;font-weight:bold"></span><span id="u_badge"></span></span>
       <button id="logout_btn" style="height:34px;font-size:12px;padding:0 12px;border-color:#444">Exit</button>
@@ -1703,6 +1704,7 @@ canvas{display:block;width:100%}
       </div>
       <button id="admin_rf_btn" style="height:36px;font-size:13px;padding:0 14px">Refresh</button>
       <button id="admin_clear_btn" style="height:36px;font-size:13px;padding:0 14px;background:#1a0808;border:1px solid #ff5a5a;color:#ff5a5a;cursor:pointer;border-radius:3px;font-weight:bold;display:none" title="Delete all search logs older than 2 weeks">🗑 Clear data &gt; 2 weeks</button>
+      <button id="dilution_notes_admin_btn" style="height:36px;font-size:13px;padding:0 18px;background:#240038;border:1px solid #a855f7;color:#d8b4fe;cursor:pointer;border-radius:3px;font-weight:bold" title="Open Dilution Notes &amp; SEC Filings tool">📑 Dilution Notes</button>
       <button id="multiday_stats_btn" style="height:36px;font-size:13px;padding:0 18px;background:#0a1a2a;border:1px solid #00c9a7;color:#00c9a7;cursor:pointer;border-radius:3px;font-weight:bold" title="Open Multi-day Rally &amp; FRD stats tool">📊 Multiday Stats</button>
       <button id="manage_users_btn" style="height:36px;font-size:13px;padding:0 18px;background:#1a1008;border:1px solid #ffd23f;color:#ffd23f;cursor:pointer;border-radius:3px;font-weight:bold" title="Add or remove authorized users">👥 Manage Users</button>
       <button id="admin_back_btn" style="height:36px;font-size:13px;padding:0 14px;border-color:#29a8ff;color:#29a8ff">Back to Terminal</button>
@@ -2894,6 +2896,12 @@ function switchMainView(mode){
   }
 }
 if($('#nav_intraday_btn')) $('#nav_intraday_btn').onclick = () => switchMainView('intraday');
+if($('#nav_dilution_btn')) $('#nav_dilution_btn').onclick = () => {
+  const curTicker = ($('#t') ? $('#t').value : '').trim().toUpperCase();
+  const url = '/dilution' + (curTicker ? '?symbol=' + encodeURIComponent(curTicker) : '');
+  window.open(url, '_blank');
+};
+if($('#dilution_notes_admin_btn')) $('#dilution_notes_admin_btn').onclick = () => window.open('/dilution', '_blank');
 if($('#nav_multiday_btn')) $('#nav_multiday_btn').onclick = () => window.open('/runner', '_blank');
 if($('#open_multiday_newtab')) $('#open_multiday_newtab').onclick = () => window.open('/runner', '_blank');
 if($('#multiday_stats_btn')) $('#multiday_stats_btn').onclick = () => {
@@ -2968,6 +2976,39 @@ def runner_analyze():
         ))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ----------------------------------------------------------------------------- dilution_notes integration
+# Load dilution_notes.py from the same directory so Dilution Notes runs inside
+# this process — no separate server on port 5000 needed.
+_dn = None
+try:
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location(
+        "dilution_notes",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "dilution_notes.py")
+    )
+    _dn = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_dn)
+except Exception as _dn_err:
+    print(f"[dilution_notes] Could not load: {_dn_err}")
+
+
+@app.route("/dilution")
+@app.route("/notes")
+def dilution_index():
+    if _dn is None:
+        return "dilution_notes.py not found next to chart_stats.py", 404
+    from flask import Response as _FR
+    return _FR(_dn.PAGE, mimetype="text/html")
+
+
+@app.route("/api/notes")
+@app.route("/api/dilution/notes")
+def api_notes():
+    if _dn is None:
+        return jsonify({"error": "dilution_notes not available"}), 404
+    return _dn.notes()
 
 
 if __name__ == "__main__":
