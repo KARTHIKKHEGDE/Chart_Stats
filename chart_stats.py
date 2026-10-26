@@ -1094,6 +1094,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes):
         ["Current Day (session)", day_display, "c"],
         ["Gap %", pct(gap_live), sc(gap_live)],
         ["Float Rotation (so far)", f"{rot_live:.2f}x" if (rot_live is not None and rot_live > 0) else "—", "b"],
+        ["Volume (so far)", f"{big(vol)} shares" if vol else "0 shares", "b"],
         ["Dollar Volume (so far)", "$" + big(dvol) if dvol else "$0", "b"],
     ]
     right = [
