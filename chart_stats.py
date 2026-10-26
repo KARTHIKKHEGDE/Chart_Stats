@@ -1488,7 +1488,7 @@ def run_job(job, t, refresh):
         recent_news = _get_scanner_news(t)
         report["news"] = recent_news
         if recent_news:
-            report["text"] += "\n\nRecent Press Releases / News"
+            report["text"] += "\n\nLatest Press Releases"
             for item in recent_news:
                 report["text"] += f"\n- [{item['kind']}] {item['title']} ({item['publisher']}) {item['url']}"
         job["result"] = report
@@ -2234,33 +2234,43 @@ def _normalize_yahoo_news(article, kind):
 
 def _fetch_yahoo_news(ticker):
     items = []
-    queries = ((f"{ticker} press release", "Press release"), (ticker, "News"))
-    for query, fallback_kind in queries:
-        try:
-            search = yf.Search(query=query, news_count=8, enable_fuzzy_query=False, timeout=8)
-            for article in (search.news or []):
-                content = article.get("content") if isinstance(article.get("content"), dict) else {}
-                provider = content.get("provider") or article.get("publisher") or ""
-                if isinstance(provider, dict):
-                    provider = provider.get("displayName") or provider.get("name") or ""
-                provider = str(provider)
-                kind = "Press release" if re.search(r"globe.?newswire|pr newswire|business wire|newsfile|access newswire", provider, re.I) else "News"
-                item = _normalize_yahoo_news(article, kind)
-                if item:
-                    items.append(item)
-        except Exception:
-            pass
-        if items:
-            break
+    press_wire_pattern = re.compile(
+        r"globe.?newswire|pr\s*newswire|business\s*wire|newsfile|access\s*newswire|"
+        r"the.?newswire|newsdirect|eqs.?news|cnw.?group", re.I
+    )
+    try:
+        search = yf.Search(query=f"{ticker} press release", news_count=20,
+                           enable_fuzzy_query=False, timeout=8)
+        for article in (search.news or []):
+            content = article.get("content") if isinstance(article.get("content"), dict) else {}
+            provider = content.get("provider") or article.get("publisher") or ""
+            if isinstance(provider, dict):
+                provider = provider.get("displayName") or provider.get("name") or ""
+            provider = str(provider)
+            if not press_wire_pattern.search(provider):
+                continue
+            item = _normalize_yahoo_news(article, "Press release")
+            if item:
+                items.append(item)
+    except Exception:
+        pass
+
     unique, seen = [], set()
     for item in items:
         key = item["url"] or item["title"]
         if key not in seen:
             unique.append(item)
             seen.add(key)
-        if len(unique) >= 5:
-            break
-    return unique
+    def published_at(item):
+        try:
+            stamp = pd.Timestamp(item.get("published"))
+            if stamp.tzinfo is None:
+                stamp = stamp.tz_localize("UTC")
+            return stamp.timestamp()
+        except Exception:
+            return 0
+    unique.sort(key=published_at, reverse=True)
+    return unique[:2]
 
 
 def _get_scanner_news(ticker):
@@ -2426,14 +2436,16 @@ def _refresh_scanner_details(ticker, previous_close):
         if now - finviz_at >= (14400 if finviz_ok else 180):
             try:
                 labels = _finviz_dilution_labels(ticker)
+                finviz_error = None
             except Exception as exc:
                 app.logger.warning("Finviz dilution scrape failed for %s: %s", ticker, exc)
                 labels = {"history": None, "cash_need": None}
+                finviz_error = str(exc)[:180]
             success = labels.get("history") is not None and labels.get("cash_need") is not None
             with _scanner_details_lock:
                 _scanner_details.setdefault(ticker, {}).update(
                     history_risk=labels.get("history"), cash_need=labels.get("cash_need"),
-                    finviz_at=now, finviz_ok=success
+                    finviz_at=now, finviz_ok=success, finviz_error=finviz_error
                 )
         if now - news_at >= 300:
             try:
@@ -2482,6 +2494,7 @@ def scanner_market_scan():
             output.append({**row,
                            "history_risk": details.get("history_risk"),
                            "cash_need": details.get("cash_need"),
+                           "finviz_error": details.get("finviz_error"),
                            "news": details.get("news") or [],
                            "approaches": details.get("approaches") or []})
         return jsonify({"tickers": output, "updated": _scanner_cache["at"],
@@ -3316,13 +3329,13 @@ function renderTab(tab, r, isRefresh){
   o += `<div>Summary: ${esc(h.summary)}</div>`;
   (h.notes||[]).forEach(n=>o+=`<div class="y">Note: ${esc(n)}</div>`);
   const newsItems = r.news || [];
-  o += `<div class="panel"><div class="ttl">Recent Press Releases / News</div>`+
+  o += `<div class="panel"><div class="ttl">Latest Press Releases</div>`+
     (newsItems.length ? newsItems.map(item=>{
       const link = /^https?:\/\//i.test(item.url || '')
         ? `<a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer" style="color:#6cc4ff">${esc(item.title)}</a>`
         : esc(item.title);
       return `<div style="padding:5px 0;border-bottom:1px solid #222"><span style="color:#ffd23f;font-size:12px">${esc(item.kind || 'News')}</span> · ${link}<span style="color:#777;font-size:12px"> — ${esc(item.publisher || 'Yahoo Finance')}${item.published?' · '+esc(item.published):''}</span></div>`;
-    }).join('') : `<div class="d">No recent Yahoo Finance press release or news headline found.</div>`) + `</div>`;
+    }).join('') : `<div class="d">No recent press releases found.</div>`) + `</div>`;
   o += `<div class="panel two"><div><div class="ttl">${esc(T.p1)}</div>${kv(r.p1.left)}</div><div>${kv(r.p1.right)}</div></div>`;
   (r.tables||[]).forEach(t=>{
     o += `<div class="panel"><div class="ttl">${esc(t.title)}</div>${table(t.cols,t.rows,t.dim,true)}<div class="foot">${esc(t.foot||'')}</div></div>`;
@@ -4573,10 +4586,12 @@ async function refreshScanner(){
     if(!tickers.length){
       body.innerHTML = '<tr><td colspan="7" style="padding:18px;color:#777;text-align:center">No tickers currently meet all scanner conditions.</td></tr>';
     } else {
-      const riskCell = value=>{
-        const text = value || '—';
-        const color = text === 'High' ? '#ff7373' : text === 'Not High' ? '#3ddc84' : '#777';
-        return `<td style="padding:9px;text-align:center;color:${color}" title="Finviz label when available">${esc(text)}</td>`;
+      const riskCell = (value,error)=>{
+        const errorCode = error && ((String(error).match(/HTTP\s+\d{3}/i) || [])[0] || 'Parse error');
+        const text = value || (error ? errorCode : 'Loading…');
+        const color = text === 'High' ? '#ff7373' : text === 'Not High' ? '#3ddc84' : error ? '#ffb454' : '#777';
+        const title = error ? `Finviz scrape error: ${error}; retrying shortly` : 'Finviz dilution page label';
+        return `<td style="padding:9px;text-align:center;color:${color}" title="${esc(title)}">${esc(text)}</td>`;
       };
       body.innerHTML = tickers.map(row=>`<tr class="scanner-result-row" data-ticker="${esc(row.ticker)}" style="border-bottom:1px solid #20242a;cursor:pointer" title="Load notes for ${esc(row.ticker)}" onmouseover="this.style.background='#101820'" onmouseout="this.style.background='transparent'">`+
         `<td style="padding:9px;color:#6cc4ff;font-weight:bold">${esc(row.ticker)}</td>`+
@@ -4584,7 +4599,7 @@ async function refreshScanner(){
         `<td style="padding:9px;text-align:right;color:#3ddc84">+${Number(row.gap_pct).toFixed(1)}%</td>`+
         `<td style="padding:9px;text-align:right">${Number(row.volume).toLocaleString()}</td>`+
         `<td style="padding:9px;text-align:right">$${Number(row.dollar_volume).toLocaleString()}</td>`+
-        riskCell(row.history_risk)+riskCell(row.cash_need)+`</tr>`).join('');
+        riskCell(row.history_risk,row.finviz_error)+riskCell(row.cash_need,row.finviz_error)+`</tr>`).join('');
       body.querySelectorAll('[data-ticker]').forEach(row=>row.onclick=()=>selectScannerTicker(row.dataset.ticker));
     }
     const stamp = new Date((data.updated || Date.now()/1000)*1000).toLocaleTimeString();
