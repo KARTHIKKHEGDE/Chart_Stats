@@ -2014,6 +2014,7 @@ canvas{display:block;width:100%}
       <button id="dilution_notes_admin_btn" style="height:36px;font-size:13px;padding:0 18px;background:#240038;border:1px solid #a855f7;color:#d8b4fe;cursor:pointer;border-radius:3px;font-weight:bold" title="Open Dilution Notes &amp; SEC Filings tool">📑 Dilution Notes</button>
       <button id="multiday_stats_btn" style="height:36px;font-size:13px;padding:0 18px;background:#0a1a2a;border:1px solid #00c9a7;color:#00c9a7;cursor:pointer;border-radius:3px;font-weight:bold" title="Open Multi-day Rally &amp; FRD stats tool">📊 Multiday Stats</button>
       <button id="manage_users_btn" style="height:36px;font-size:13px;padding:0 18px;background:#1a1008;border:1px solid #ffd23f;color:#ffd23f;cursor:pointer;border-radius:3px;font-weight:bold" title="Add or remove authorized users">👥 Manage Users</button>
+      <button id="admin_rename_btn" style="height:36px;font-size:13px;padding:0 18px;background:#1a102a;border:1px solid #a855f7;color:#d8b4fe;cursor:pointer;border-radius:3px;font-weight:bold" title="Rename your username (karthik/locke only)">✏️ Rename Username</button>
       <button id="admin_back_btn" style="height:36px;font-size:13px;padding:0 14px;border-color:#29a8ff;color:#29a8ff">Back to Terminal</button>
     </div>
   </div>
@@ -2035,6 +2036,26 @@ canvas{display:block;width:100%}
         <button id="add_user_btn" style="height:40px;padding:0 18px;font-size:14px;background:#0a2a0a;border:1px solid #3ddc84;color:#3ddc84;cursor:pointer;border-radius:3px;font-weight:bold">+ Add</button>
       </div>
       <div id="users_modal_err" style="color:#ff5a5a;font-size:12px;margin-top:10px;min-height:18px"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Rename Username Modal -->
+<div id="rename_modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:99999;display:none;align-items:center;justify-content:center;padding:20px" onclick="if(event.target===this)closeRenameModal()">
+  <div style="background:#0c0c0c;border:1px solid #a855f7;padding:0;width:400px;max-width:92vw;box-shadow:0 16px 50px rgba(0,0,0,0.95);border-radius:6px;overflow:hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #222;background:#160926">
+      <div style="font-size:16px;font-weight:bold;color:#d8b4fe">✏️ Rename Username</div>
+      <button onclick="closeRenameModal()" style="background:transparent;border:none;color:#888;font-size:18px;cursor:pointer;padding:2px 6px" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#888'">✕</button>
+    </div>
+    <div style="padding:22px 20px">
+      <div style="font-size:12px;color:#8a8a8a;margin-bottom:10px">Current username: <span id="rename_curr_user" style="color:#29a8ff;font-weight:bold"></span></div>
+      <div style="font-size:12px;color:#777;margin-bottom:14px">Only Karthik and Locke can rename their username. All search history and permissions will be migrated.</div>
+      <input id="rename_input" placeholder="New username (a-z, 0-9, _)" style="width:100%;height:44px;font-size:15px;padding:0 14px;background:#000;border:1px solid #444;color:#fff;box-sizing:border-box;margin-bottom:14px;text-align:center" autocomplete="off" spellcheck="false" maxlength="20">
+      <div style="display:flex;gap:10px">
+        <button onclick="closeRenameModal()" style="flex:1;height:42px;font-size:13px;background:#1a1a1a;border:1px solid #444;color:#aaa;cursor:pointer;border-radius:3px">Cancel</button>
+        <button id="rename_submit_btn" onclick="submitRename()" style="flex:1;height:42px;font-size:13px;background:#240038;border:1px solid #a855f7;color:#d8b4fe;cursor:pointer;font-weight:bold;border-radius:3px">Save &amp; Rename</button>
+      </div>
+      <div id="rename_err" style="color:#ff5a5a;font-size:12px;margin-top:12px;min-height:18px;text-align:center"></div>
     </div>
   </div>
 </div>
@@ -2288,15 +2309,15 @@ function _showApp(){
   $('#admin_view').style.display='none';
   $('#app_main').style.display='block';
   $('#u_name').textContent=currentUser.toUpperCase();
-  // Show rename affordance for karthik/locke
+  // Show admin affordance
   if(_canRename || PWD_USERS.includes(cur)){
     $('#u_name').style.cursor='pointer';
     $('#u_name').style.textDecoration='underline dotted';
-    $('#u_name').title = 'Click to rename username or view admin panel';
+    $('#u_name').title = 'Click to open Admin Panel';
   } else {
     $('#u_name').style.cursor='default';
     $('#u_name').style.textDecoration='none';
-    $('#u_name').title = 'Click to view admin panel';
+    $('#u_name').title = '';
   }
   $('#t').focus();
   // Periodically verify session (every 90s) for non-exempt users
@@ -2348,27 +2369,67 @@ function doLogout(){
 
 /* Rename modal ---- */
 function openRenameModal(){
-  const cur = currentUser.toLowerCase();
+  const cur = (currentUser||'').toLowerCase();
   if(!PWD_USERS.includes(cur) && !_canRename) return;
-  const nm = prompt('Enter new username (2-20 letters/numbers/underscore):', currentUser);
-  if(!nm || nm.trim().toLowerCase() === currentUser.toLowerCase()) return;
-  const newName = nm.trim().toLowerCase();
-  if(!/^[a-z0-9_]{2,20}$/.test(newName)){
-    alert('Invalid username. Use only a-z, 0-9, _ (2-20 chars).');
+  $('#rename_curr_user').textContent = currentUser.toUpperCase();
+  $('#rename_input').value = currentUser;
+  $('#rename_err').textContent = '';
+  $('#rename_modal').style.display = 'flex';
+  setTimeout(()=>{ const inp=$('#rename_input'); if(inp){ inp.focus(); inp.select(); } }, 50);
+}
+
+function closeRenameModal(){
+  $('#rename_modal').style.display = 'none';
+  $('#rename_err').textContent = '';
+}
+
+async function submitRename(){
+  const cur = (currentUser||'').toLowerCase();
+  if(!PWD_USERS.includes(cur) && !_canRename){
+    $('#rename_err').textContent = 'Only karthik and locke can rename their username.';
     return;
   }
-  fetch('/api/auth/rename-user',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({old_name: currentUser, new_name: newName, token: sessionToken})
-  }).then(r=>r.json()).then(data=>{
-    if(data.error){ alert('Rename failed: '+data.error); return; }
-    // Update stored name
-    currentUser = data.new_name || newName;
-    localStorage.setItem('gap_user', currentUser);
-    $('#u_name').textContent = currentUser.toUpperCase();
-    alert('Username changed to: '+currentUser.toUpperCase());
-  }).catch(e=>alert('Network error: '+e));
+  const nm = ($('#rename_input').value||'').trim().toLowerCase();
+  if(!nm || nm === cur){
+    $('#rename_err').textContent = 'Enter a different username.';
+    return;
+  }
+  if(!/^[a-z0-9_]{2,20}$/.test(nm)){
+    $('#rename_err').textContent = 'Username must be 2-20 chars (a-z, 0-9, _).';
+    return;
+  }
+  $('#rename_err').textContent = '';
+  const btn = $('#rename_submit_btn');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  try {
+    const res = await fetch('/api/auth/rename-user',{
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({old_name: currentUser, new_name: nm, token: sessionToken})
+    });
+    const data = await res.json();
+    btn.disabled = false;
+    btn.textContent = 'Save & Rename';
+    if(data.error){
+      $('#rename_err').textContent = data.error;
+      return;
+    }
+    const newName = data.new_name || nm;
+    currentUser = newName;
+    if(!PWD_USERS.includes(newName)) PWD_USERS.push(newName);
+    _canRename = true;
+    localStorage.setItem('gap_user', newName);
+    $('#u_name').textContent = newName.toUpperCase();
+    closeRenameModal();
+    alert('Username successfully changed to: ' + newName.toUpperCase());
+    if($('#users_modal').style.display === 'flex') loadUsersModal();
+    if($('#admin_view').style.display === 'block') loadAdminSearches();
+  } catch(e){
+    btn.disabled = false;
+    btn.textContent = 'Save & Rename';
+    $('#rename_err').textContent = 'Network error: ' + e;
+  }
 }
 
 /* ---- Auto re-auth on load ---- */
@@ -3184,7 +3245,7 @@ let adminPwd = '';
 
 function openPwdModal(){
   const cur = (currentUser||'').toLowerCase();
-  if(!PWD_USERS.includes(cur)){
+  if(!PWD_USERS.includes(cur) && !_canRename){
     return;
   }
   if(adminPwd === '500'){
@@ -3454,7 +3515,7 @@ async function clearOldSearches(){
 async function verifyPwd(){
   const cur = (currentUser||'').toLowerCase();
   const pwd = ($('#pwd_input').value||'').trim();
-  if(!PWD_USERS.includes(cur)){
+  if(!PWD_USERS.includes(cur) && !_canRename){
     return;
   }
   if(pwd === '500'){
@@ -3479,16 +3540,9 @@ async function verifyPwd(){
   }
 }
 
-$('#u_name').onclick=function(){
-  const cur=(currentUser||'').toLowerCase();
-  if(_canRename || PWD_USERS.includes(cur)){
-    // Offer rename or admin panel
-    const choice = confirm('Click OK to rename your username, or Cancel to open the admin panel.');
-    if(choice){ openRenameModal(); } else { openPwdModal(); }
-  } else {
-    openPwdModal();
-  }
-};
+$('#u_name').onclick=openPwdModal;
+$('#admin_rename_btn').onclick=openRenameModal;
+if($('#rename_input')) $('#rename_input').addEventListener('keydown',e=>{if(e.key==='Enter')submitRename();});
 $('#admin_clear_btn').onclick=clearOldSearches;
 $('#u_badge').onclick=openPwdModal;
 $('#pwd_submit').onclick=verifyPwd;
@@ -3506,7 +3560,7 @@ let liveAllowed = [];
 
 function openUsersModal(){
   const cur = (currentUser||'').toLowerCase();
-  if(!PWD_USERS.includes(cur) || adminPwd !== '500') return;
+  if((!PWD_USERS.includes(cur) && !_canRename) || adminPwd !== '500') return;
   loadUsersModal();
   $('#users_modal').style.display='flex';
 }
@@ -3529,6 +3583,7 @@ async function loadUsersModal(){
       html += `<div style="display:flex;align-items:center;gap:6px;background:#151515;border:1px solid ${isAdmin?'#ffd23f':'#333'};border-radius:4px;padding:6px 10px 6px 12px">`;
       html += `<span style="color:${isAdmin?'#ffd23f':'#ddd'};font-size:14px;font-weight:${isAdmin?'bold':'normal'}">${esc(u.toUpperCase())}</span>`;
       if(isAdmin) html += `<span style="color:#ffd23f;font-size:11px;margin-left:2px">★ ADMIN</span>`;
+      if(isAdmin && (u === cur || ['karthik', 'locke'].includes(u))) html += `<button onclick="openRenameModal()" style="background:#240038;border:1px solid #a855f7;color:#d8b4fe;font-size:11px;padding:2px 8px;border-radius:2px;cursor:pointer;margin-left:4px" title="Rename this username">✏️ Rename</button>`;
       if(!isAdmin) html += `<button onclick="removeUser('${esc(u)}')" style="background:transparent;border:none;color:#555;cursor:pointer;font-size:16px;line-height:1;padding:0 2px" title="Remove ${esc(u)}" onmouseover="this.style.color='#ff5a5a'" onmouseout="this.style.color='#555'">×</button>`;
       html += '</div>';
     });
