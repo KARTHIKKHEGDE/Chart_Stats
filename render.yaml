@@ -15,3 +15,9 @@ services:
         sync: false
       - key: SUPABASE_KEY
         sync: false
+      - key: ALPACA_API_KEY
+        sync: false
+      - key: ALPACA_API_SECRET
+        sync: false
+      - key: ALPACA_FEED
+        value: sip
