@@ -31,6 +31,7 @@ import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
+import xml.etree.ElementTree as ET_XML
 from flask import Flask, request, jsonify, Response, send_file
 from urllib.parse import quote
 
@@ -1486,6 +1487,9 @@ def run_job(job, t, refresh):
         report = clean(build_report(t, live, lm, lpath, lctx, events, S, notes))
         recent_news = _get_scanner_news(t)
         report["news"] = recent_news
+        report["news_status"] = (_scanner_details.get(t, {}).get("news_status") or
+                                  ("Latest press releases found" if recent_news else
+                                   "No recent press releases found via Yahoo Finance or Google News"))
         if recent_news:
             report["text"] += "\n\nLatest Press Releases"
             for item in recent_news:
@@ -2233,6 +2237,7 @@ def _normalize_yahoo_news(article, kind):
 
 def _fetch_yahoo_news(ticker):
     items = []
+    errors = []
     press_wire_pattern = re.compile(
         r"globe.?newswire|pr\s*newswire|business\s*wire|newsfile|access\s*newswire|"
         r"the.?newswire|newsdirect|eqs.?news|cnw.?group", re.I
@@ -2253,14 +2258,44 @@ def _fetch_yahoo_news(ticker):
                 item = _normalize_yahoo_news(article, "Press release")
                 if item:
                     items.append(item)
-        except Exception:
-            pass
+        except Exception as exc:
+            errors.append(f"Yahoo '{query}': {type(exc).__name__}: {exc}")
         if len(items) >= 2:
             break
 
+    if len(items) < 2:
+        try:
+            rss_url = ("https://news.google.com/rss/search?q=" +
+                       quote(f"{ticker} press release", safe="") +
+                       "&hl=en-US&gl=US&ceid=US:en")
+            response = requests.get(rss_url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/rss+xml,application/xml,text/xml"}, timeout=10)
+            response.raise_for_status()
+            root = ET_XML.fromstring(response.content)
+            for article in root.findall("./channel/item"):
+                source_node = article.find("source")
+                publisher = source_node.text.strip() if source_node is not None and source_node.text else ""
+                if not press_wire_pattern.search(publisher):
+                    continue
+                title = article.findtext("title") or ""
+                if not title.strip():
+                    continue
+                items.append({
+                    "title": title.strip(),
+                    "url": article.findtext("link") or "",
+                    "publisher": publisher,
+                    "published": article.findtext("pubDate") or "",
+                    "kind": "Press release",
+                })
+        except Exception as exc:
+            errors.append(f"Google News RSS: {type(exc).__name__}: {exc}")
+
     unique, seen = [], set()
     for item in items:
-        key = item["url"] or item["title"]
+        # Yahoo and Google News often link to the same wire release through
+        # different URLs. Deduplicate on normalized headline as well.
+        key = re.sub(r"\W+", " ", item["title"].lower()).strip()
+        if not key:
+            key = item["url"]
         if key not in seen:
             unique.append(item)
             seen.add(key)
@@ -2273,6 +2308,9 @@ def _fetch_yahoo_news(ticker):
         except Exception:
             return 0
     unique.sort(key=published_at, reverse=True)
+    if not unique:
+        app.logger.warning("No press releases found for %s. News fetch diagnostics: %s",
+                           ticker, " | ".join(errors) if errors else "sources returned no matching press releases")
     return unique[:2]
 
 
@@ -2280,12 +2318,17 @@ def _get_scanner_news(ticker):
     now = time.time()
     with _scanner_details_lock:
         cached = _scanner_details.get(ticker) or {}
-        if now - cached.get("news_at", 0) < 300:
+        # Keep the newest two releases current; a five-minute cache made new
+        # releases invisible to the scanner for too long.
+        news_ttl = 60
+        if now - cached.get("news_at", 0) < news_ttl:
             return list(cached.get("news") or [])
     news = _fetch_yahoo_news(ticker)
     with _scanner_details_lock:
         cached = _scanner_details.setdefault(ticker, {})
-        cached.update(news=news, news_at=now)
+        cached.update(news=news, news_at=now,
+                      news_status=("Latest press releases found" if news else
+                                   "Press release lookup unavailable; see server log"))
     return news
 
 
@@ -2364,6 +2407,7 @@ def _refresh_scanner_details(ticker, previous_close):
             cached = _scanner_details.setdefault(ticker, {})
             technical_at = cached.get("technical_at", 0)
             news_at = cached.get("news_at", 0)
+            news_ttl = 60
         if now - technical_at >= 20:
             try:
                 approaches = _scanner_approaches(ticker, previous_close)
@@ -2371,7 +2415,7 @@ def _refresh_scanner_details(ticker, previous_close):
                 approaches = []
             with _scanner_details_lock:
                 _scanner_details.setdefault(ticker, {}).update(approaches=approaches, technical_at=now)
-        if now - news_at >= 300:
+        if now - news_at >= news_ttl:
             try:
                 _get_scanner_news(ticker)
             except Exception:
@@ -2387,7 +2431,7 @@ def _queue_scanner_details(row):
     with _scanner_details_lock:
         cached = _scanner_details.setdefault(ticker, {})
         due = (now - cached.get("technical_at", 0) >= 20
-               or now - cached.get("news_at", 0) >= 300)
+               or now - cached.get("news_at", 0) >= 60)
         if not due or ticker in _scanner_details_inflight:
             return
         _scanner_details_inflight.add(ticker)
@@ -2416,6 +2460,7 @@ def scanner_market_scan():
                 details = dict(_scanner_details.get(row["ticker"]) or {})
             output.append({**row,
                            "news": details.get("news") or [],
+                           "news_status": details.get("news_status"),
                            "approaches": details.get("approaches") or []})
         return jsonify({"tickers": output, "updated": _scanner_cache["at"],
                         "session_date": dt.datetime.now(ET).date().isoformat()})
@@ -3255,7 +3300,7 @@ function renderTab(tab, r, isRefresh){
         ? `<a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer" style="color:#6cc4ff">${esc(item.title)}</a>`
         : esc(item.title);
       return `<div style="padding:5px 0;border-bottom:1px solid #222"><span style="color:#ffd23f;font-size:12px">${esc(item.kind || 'News')}</span> · ${link}<span style="color:#777;font-size:12px"> — ${esc(item.publisher || 'Yahoo Finance')}${item.published?' · '+esc(item.published):''}</span></div>`;
-    }).join('') : `<div class="d">No recent press releases found.</div>`) + `</div>`;
+    }).join('') : `<div class="d">${esc(r.news_status || 'No recent press releases found via Yahoo Finance or Google News.')}</div>`) + `</div>`;
   o += `<div class="panel two"><div><div class="ttl">${esc(T.p1)}</div>${kv(r.p1.left)}</div><div>${kv(r.p1.right)}</div></div>`;
   (r.tables||[]).forEach(t=>{
     o += `<div class="panel"><div class="ttl">${esc(t.title)}</div>${table(t.cols,t.rows,t.dim,true)}<div class="foot">${esc(t.foot||'')}</div></div>`;
