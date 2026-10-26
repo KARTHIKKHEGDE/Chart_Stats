@@ -4493,16 +4493,20 @@ function announceScannerTicker(ticker, extra=''){
     $('#scanner_status').textContent = 'Voice alarm is unavailable in this browser.';
     return;
   }
-  const spoken = ticker.split('').join(' ') + (extra ? '. ' + extra : '');
+  // Punctuation gives browser voices natural pauses between the ticker and
+  // each alert detail; plain spaces were often spoken as one rushed phrase.
+  const tickerSpoken = ticker.toUpperCase().split('').join(', ');
+  const details = String(extra || '').replace(/\s+/g, ' ').trim();
+  const spoken = tickerSpoken + (details ? '. ' + details.replace(/\s*\.\s*/g, '. ') : '.');
   const utterance = new SpeechSynthesisUtterance(spoken);
   utterance.rate = 1.0;
-  utterance.pitch = 1.15;
+  utterance.pitch = 1.08;
   utterance.volume = scannerVoiceVolume / 100;
   const voiceId = $('#scanner_voice_select').value;
   const feminineVoice = scannerVoices.find(voice => /\b(aria|ava|amy|emma|jenny|june|karen|kimberly|moira|natasha|olivia|salli|samantha|sara|serena|sophie|susan|tessa|victoria|zira)\b|female/i.test(voice.name));
   const selectedVoice = scannerVoices.find(voice => voice.voiceURI === voiceId);
   const voice = selectedVoice || feminineVoice || scannerVoices.find(item => /^en([_-]|$)/i.test(item.lang));
-  if(voice) utterance.voice = voice;
+  if(voice){ utterance.voice = voice; utterance.lang = voice.lang; }
   window.speechSynthesis.speak(utterance);
 }
 
