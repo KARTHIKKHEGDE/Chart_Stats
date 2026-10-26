@@ -1920,6 +1920,23 @@ PAGE = """<!doctype html>
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
+    .ticker_tab:hover {
+      background: #181220 !important;
+    }
+    .tab_pre {
+      border: 1px solid var(--border);
+      padding: 24px 28px;
+      background: var(--card-bg);
+      border-radius: 4px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.6;
+      font-size: 13.5px;
+      color: #ddd;
+      min-height: 280px;
+      overflow-x: auto;
+      margin: 0;
+    }
   </style>
 </head>
 <body>
@@ -1933,14 +1950,21 @@ PAGE = """<!doctype html>
     <span id="status" class="status"></span>
     <button class="back-btn" id="backbtn">← Back to Chart Stats</button>
   </div>
+  <!-- Multi-Ticker Tab Bar -->
+  <div id="tab_bar" style="display:none;padding:8px 30px 0;background:#050505;border-bottom:1px solid var(--border);gap:6px;overflow-x:auto;align-items:center;flex-wrap:nowrap"></div>
   <div class="main-wrap">
-    <pre id="o"><div class="empty-state">Enter a stock ticker above (e.g. <b>BKYI</b>, <b>AAPL</b>, <b>NVDA</b>) and click <b>Get notes</b>.<br><br>• Real-time SEC EDGAR Dilution & Offering History<br>• Cash Balance, Burn Rate & Estimated Runway<br>• Warrant Overhang & Exercise Prices<br>• 10-K, 10-Q, 8-K, S-1, S-3 & 424B Prospectus Breakdown<br>• Reverse Splits & Intraday Gap Stats</div></pre>
+    <div id="tabs_view">
+      <pre id="o"><div class="empty-state">Enter a stock ticker above (e.g. <b>BKYI</b>, <b>AAPL</b>, <b>NVDA</b>) and click <b>Get notes</b>.<br><br>• Real-time SEC EDGAR Dilution & Offering History<br>• Cash Balance, Burn Rate & Estimated Runway<br>• Warrant Overhang & Exercise Prices<br>• 10-K, 10-Q, 8-K, S-1, S-3 & 424B Prospectus Breakdown<br>• Reverse Splits & Intraday Gap Stats</div></pre>
+    </div>
   </div>
   <script>
     const s = document.getElementById('s');
     const o = document.getElementById('o');
-    const status = document.getElementById('status');
+    const statusEl = document.getElementById('status');
     const copyBtn = document.getElementById('copy');
+
+    let openTabs = {}; // sym -> { sym, container, text, status, isRunning }
+    let activeTab = null;
 
     s.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
 
@@ -1954,6 +1978,70 @@ PAGE = """<!doctype html>
       }
     };
 
+    function renderTabBar() {
+      const bar = document.getElementById('tab_bar');
+      const tickers = Object.keys(openTabs);
+      if (!tickers.length) {
+        bar.style.display = 'none';
+        o.style.display = 'block';
+        return;
+      }
+      bar.style.display = 'flex';
+      o.style.display = 'none';
+
+      bar.innerHTML = tickers.map(sym => {
+        const isActive = sym === activeTab;
+        const tabObj = openTabs[sym];
+        const isRunning = tabObj && tabObj.isRunning;
+        const bg = isActive ? '#1e142b' : '#08080a';
+        const borderTop = isActive ? '2px solid var(--purple)' : '2px solid transparent';
+        const color = isActive ? '#fff' : '#888';
+        const border = isActive ? '1px solid #4a286a' : '1px solid #1f1f24';
+
+        return `<div class="ticker_tab" onclick="switchTab('${escapeHtml(sym)}')" style="background:${bg};border:${border};border-top:${borderTop};color:${color};padding:8px 14px;border-radius:4px 4px 0 0;font-size:13px;cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none;transition:background 0.15s">`+
+          `<span style="font-weight:bold">${escapeHtml(sym)}</span>`+
+          (isRunning ? '<span style="color:#ffd23f;font-size:11px" title="Gathering data...">●</span>' : '')+
+          `<span onclick="event.stopPropagation(); closeTab('${escapeHtml(sym)}')" style="font-size:14px;color:#666;line-height:1;padding:0 2px" onmouseover="this.style.color='#ff5a5a'" onmouseout="this.style.color='#666'">✕</span>`+
+        `</div>`;
+      }).join('');
+    }
+
+    function switchTab(sym) {
+      if (!openTabs[sym]) return;
+      activeTab = sym;
+      s.value = sym;
+
+      Object.keys(openTabs).forEach(k => {
+        const el = openTabs[k].container;
+        if (el) el.style.display = (k === sym) ? 'block' : 'none';
+      });
+
+      const tab = openTabs[sym];
+      statusEl.textContent = tab.status || '';
+      renderTabBar();
+    }
+
+    function closeTab(sym) {
+      if (!openTabs[sym]) return;
+      if (openTabs[sym].container) openTabs[sym].container.remove();
+      delete openTabs[sym];
+
+      if (activeTab === sym) {
+        const remaining = Object.keys(openTabs);
+        activeTab = remaining.length ? remaining[remaining.length - 1] : null;
+        if (activeTab) {
+          switchTab(activeTab);
+        } else {
+          s.value = '';
+          statusEl.textContent = '';
+          o.style.display = 'block';
+          renderTabBar();
+        }
+      } else {
+        renderTabBar();
+      }
+    }
+
     // Auto-load symbol if passed in query string (?symbol=XYZ or ?ticker=XYZ)
     const urlParams = new URLSearchParams(window.location.search);
     const initialSym = (urlParams.get('symbol') || urlParams.get('ticker') || '').trim().toUpperCase();
@@ -1963,14 +2051,43 @@ PAGE = """<!doctype html>
     }
 
     async function go(refresh) {
-      const sym = (s.value || '').trim().toUpperCase();
+      let sym = (s.value || '').trim().toUpperCase();
+      if (!sym && activeTab) sym = activeTab;
       if (!sym) {
-        o.innerHTML = '<span style="color:#ff5a5a">Please enter a valid stock symbol.</span>';
+        if (!activeTab || !openTabs[activeTab]) {
+          o.innerHTML = '<span style="color:#ff5a5a">Please enter a valid stock symbol.</span>';
+        }
         return;
       }
+
+      if (!openTabs[sym]) {
+        const cont = document.createElement('pre');
+        cont.id = 'tab_pre_' + sym;
+        cont.className = 'tab_pre';
+        cont.style.display = 'none';
+        document.getElementById('tabs_view').appendChild(cont);
+
+        openTabs[sym] = {
+          sym: sym,
+          container: cont,
+          text: '',
+          status: '',
+          isRunning: true
+        };
+      }
+
+      const tab = openTabs[sym];
+      tab.isRunning = true;
+      switchTab(sym);
+
       const modeLabel = refresh === 'ai' ? 'Running Gemini AI dilution analysis' : (refresh ? 'Refreshing SEC & Market stats' : 'Gathering SEC filings & dilution data');
-      o.innerHTML = `<span style="color:#8a8a8a"><span class="loading-spin"></span>${modeLabel} for <b style="color:#fff">${sym}</b>…</span>`;
-      status.textContent = '';
+      if (!tab.text || refresh) {
+        tab.container.innerHTML = `<span style="color:#8a8a8a"><span class="loading-spin"></span>${modeLabel} for <b style="color:#fff">${sym}</b>…</span>`;
+        tab.status = 'loading…';
+        statusEl.textContent = tab.status;
+      }
+      renderTabBar();
+
       const t0 = Date.now();
       try {
         const url = '/api/notes?symbol=' + encodeURIComponent(sym) +
@@ -1978,18 +2095,25 @@ PAGE = """<!doctype html>
                     (refresh === 'ai' ? '&ai=1' : '');
         const r = await fetch(url);
         const j = await r.json();
+        tab.isRunning = false;
         const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
         if (j.error) {
-          o.innerHTML = `<span style="color:#ff4d4d">Error: ${escapeHtml(j.error)}</span>`;
-          status.textContent = `Failed after ${elapsed}s`;
+          tab.container.innerHTML = `<span style="color:#ff4d4d">Error: ${escapeHtml(j.error)}</span>`;
+          tab.status = `Failed after ${elapsed}s`;
         } else {
-          o.textContent = j.text || 'No data returned.';
-          status.textContent = `Completed in ${elapsed}s`;
+          tab.text = j.text || 'No data returned.';
+          tab.container.textContent = tab.text;
+          tab.status = `Completed in ${elapsed}s`;
         }
       } catch (err) {
-        o.innerHTML = `<span style="color:#ff4d4d">Network or server error: ${escapeHtml(err.message || String(err))}</span>`;
-        status.textContent = 'Error';
+        tab.isRunning = false;
+        tab.container.innerHTML = `<span style="color:#ff4d4d">Network or server error: ${escapeHtml(err.message || String(err))}</span>`;
+        tab.status = 'Error';
       }
+      if (activeTab === sym) {
+        statusEl.textContent = tab.status;
+      }
+      renderTabBar();
     }
 
     function escapeHtml(str) {
@@ -1997,15 +2121,15 @@ PAGE = """<!doctype html>
     }
 
     async function copyNotes() {
-      const text = o.textContent;
-      if (!text || text.includes('Enter a stock ticker above') || text.includes('Gathering SEC filings')) {
-        status.textContent = 'Nothing to copy';
+      if (!activeTab || !openTabs[activeTab] || !openTabs[activeTab].text) {
+        statusEl.textContent = 'Nothing to copy';
         return;
       }
+      const text = openTabs[activeTab].text;
       try {
         await navigator.clipboard.writeText(text);
         copyBtn.textContent = 'Copied ✓';
-        status.textContent = 'Report copied to clipboard!';
+        statusEl.textContent = 'Report copied to clipboard!';
         setTimeout(() => { copyBtn.textContent = 'Copy all'; }, 1500);
       } catch (e) {
         const area = document.createElement('textarea');

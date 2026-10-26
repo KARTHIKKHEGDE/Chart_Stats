@@ -828,9 +828,10 @@ h2{font-size:12px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;ma
 #c15section.enlarged #c15wrap{
   flex:1;height:calc(100vh - 120px)!important;max-height:calc(100vh - 120px)!important;margin-top:8px;
 }
+.ticker_tab:hover{background:#00221c!important}
 </style></head><body>
 <div class="bar">
-  <input id="t" type="text" placeholder="TICKER" autofocus>
+  <input id="t" type="text" placeholder="TICKER" autofocus autocomplete="off" spellcheck="false">
   <label>Rally start date<input id="s" type="date"></label>
   <label>FRD (optional)<input id="f" type="date"></label>
   <label>Float M (optional)<input id="fl" type="number" step="any" style="width:110px"></label>
@@ -840,14 +841,18 @@ h2{font-size:12px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;ma
   <span id="st" class="status"></span>
   <button class="back-btn" id="backbtn">← Back to Chart Stats</button>
 </div>
+<!-- Multi-Ticker Tab Bar -->
+<div id="tab_bar" style="display:none;padding:8px 34px 0;background:#050505;border-bottom:1px solid var(--line);gap:6px;overflow-x:auto;align-items:center;flex-wrap:nowrap"></div>
 <div id="out"><span class="d">Enter a ticker and rally start date, then press Get stats.</span></div>
 <script>
 let LAST=null, API_BASE='/api';
 const $=id=>document.getElementById(id);
 
+let openTabs = {}; // t -> { ticker, start, frd, float_m, data, legs, status, error, isRunning }
+let activeTab = null;
+
 if(location.pathname.startsWith('/runner')) API_BASE='/api/runner';
 document.getElementById('backbtn').onclick=()=>{
-  // If opened as a new tab (opener exists), close this tab to return to parent
   if(window.opener && !window.opener.closed){
     window.close();
   } else if(document.referrer && document.referrer !== window.location.href){
@@ -857,21 +862,165 @@ document.getElementById('backbtn').onclick=()=>{
   }
 };
 
-async function run(){
-  const t=$('t').value.trim().toUpperCase(); if(!t) return;
-  if(!$('s').value){$('out').innerHTML='<span class="err">Enter the rally start date.</span>';return;}
-  const q=new URLSearchParams({ticker:t,start:$('s').value,frd:$('f').value,float_m:$('fl').value});
-  $('st').textContent='loading…';$('out').innerHTML='';
-  try{
-    const r=await fetch(API_BASE+'/analyze?'+q);const j=await r.json();
-    if(!r.ok){$('out').innerHTML='<span class="err">'+(j.error||'error')+'</span>';$('st').textContent='';return;}
-    LAST=j;render(j);$('st').textContent='';
-  }catch(e){$('out').innerHTML='<span class="err">'+e+'</span>';$('st').textContent='';}
+function renderTabBar(){
+  const bar = $('tab_bar');
+  const tickers = Object.keys(openTabs);
+  if(!tickers.length){
+    bar.style.display = 'none';
+    return;
+  }
+  bar.style.display = 'flex';
+
+  bar.innerHTML = tickers.map(t => {
+    const isActive = t === activeTab;
+    const tabObj = openTabs[t];
+    const isRunning = tabObj && tabObj.isRunning;
+    const bg = isActive ? '#002b24' : '#080808';
+    const borderTop = isActive ? '2px solid #00c9a7' : '2px solid transparent';
+    const color = isActive ? '#00c9a7' : '#888';
+    const border = isActive ? '1px solid #005a48' : '1px solid #1f1f1f';
+
+    return `<div class="ticker_tab" onclick="switchTab('${esc(t)}')" style="background:${bg};border:${border};border-top:${borderTop};color:${color};padding:8px 14px;border-radius:4px 4px 0 0;font-size:13px;cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none;transition:background 0.15s">`+
+      `<span style="font-weight:bold">${esc(t)}</span>`+
+      (isRunning ? '<span style="color:#ffd23f;font-size:11px" title="Analyzing...">●</span>' : '')+
+      `<span onclick="event.stopPropagation(); closeTab('${esc(t)}')" style="font-size:14px;color:#666;line-height:1;padding:0 2px" onmouseover="this.style.color='#ff5a5a'" onmouseout="this.style.color='#666'">✕</span>`+
+    `</div>`;
+  }).join('');
+}
+
+function switchTab(t){
+  if(!openTabs[t]) return;
+  if(activeTab && openTabs[activeTab] && _chartState){
+    openTabs[activeTab].legs = _chartState.legs ? [..._chartState.legs] : [];
+  }
+  activeTab = t;
+  const tab = openTabs[t];
+  $('t').value = tab.ticker;
+  $('s').value = tab.start || '';
+  $('f').value = tab.frd || '';
+  $('fl').value = tab.float_m || '';
+  $('st').textContent = tab.status || '';
+  renderTabBar();
+
+  if(tab.isRunning){
+    $('out').innerHTML = `<span class="d">Loading runner stats for <b>${esc(t)}</b>…</span>`;
+  } else if(tab.error){
+    $('out').innerHTML = '<span class="err">' + esc(tab.error) + '</span>';
+  } else if(tab.data){
+    LAST = tab.data;
+    render(tab.data, tab.legs);
+  }
+}
+
+function closeTab(t){
+  if(!openTabs[t]) return;
+  delete openTabs[t];
+
+  if(activeTab === t){
+    const remaining = Object.keys(openTabs);
+    activeTab = remaining.length ? remaining[remaining.length - 1] : null;
+    if(activeTab){
+      switchTab(activeTab);
+    } else {
+      $('t').value = '';
+      $('s').value = '';
+      $('f').value = '';
+      $('fl').value = '';
+      $('st').textContent = '';
+      $('out').innerHTML = '<span class="d">Enter a ticker and rally start date, then press Get stats.</span>';
+      LAST = null;
+      _chartState = null;
+      renderTabBar();
+    }
+  } else {
+    renderTabBar();
+  }
+}
+
+async function run(refresh){
+  let t = $('t').value.trim().toUpperCase();
+  if(!t && activeTab) t = activeTab;
+  if(!t) return;
+  if(!$('s').value){
+    $('out').innerHTML = '<span class="err">Enter the rally start date.</span>';
+    return;
+  }
+
+  if(activeTab && openTabs[activeTab] && _chartState){
+    openTabs[activeTab].legs = _chartState.legs ? [..._chartState.legs] : [];
+  }
+
+  if(!openTabs[t]){
+    openTabs[t] = {
+      ticker: t,
+      start: $('s').value,
+      frd: $('f').value,
+      float_m: $('fl').value,
+      data: null,
+      legs: [],
+      status: 'loading…',
+      error: null,
+      isRunning: true
+    };
+  }
+
+  const tab = openTabs[t];
+  tab.start = $('s').value;
+  tab.frd = $('f').value;
+  tab.float_m = $('fl').value;
+  tab.isRunning = true;
+  tab.status = 'loading…';
+  activeTab = t;
+  renderTabBar();
+
+  $('st').textContent = 'loading…';
+  if(!tab.data || refresh){
+    $('out').innerHTML = `<span class="d">Loading runner stats for <b>${esc(t)}</b>…</span>`;
+  }
+
+  const q = new URLSearchParams({
+    ticker: t,
+    start: tab.start,
+    frd: tab.frd || '',
+    float_m: tab.float_m || ''
+  });
+
+  try {
+    const r = await fetch(API_BASE + '/analyze?' + q);
+    const j = await r.json();
+    tab.isRunning = false;
+    if(!r.ok){
+      tab.error = j.error || 'error';
+      tab.status = 'Failed';
+      if(activeTab === t){
+        $('out').innerHTML = '<span class="err">' + esc(tab.error) + '</span>';
+        $('st').textContent = '';
+      }
+    } else {
+      tab.data = j;
+      tab.error = null;
+      tab.status = '';
+      if(activeTab === t){
+        LAST = j;
+        render(j, tab.legs);
+        $('st').textContent = '';
+      }
+    }
+  } catch(e) {
+    tab.isRunning = false;
+    tab.error = String(e);
+    tab.status = 'Error';
+    if(activeTab === t){
+      $('out').innerHTML = '<span class="err">' + esc(e) + '</span>';
+      $('st').textContent = '';
+    }
+  }
+  renderTabBar();
 }
 
 function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 
-function render(j){
+function render(j, restoredLegs){
   let h='<div class="hdr">'+esc(j.header)+'</div>';
   if(j.alts&&j.alts.length)h+='<div class="alt">other rallies: '+j.alts.map(esc).join(' · ')+'</div>';
   h+='<h2>Key stats</h2><div class="grid">'+j.p1.map(c=>'<div class="card" '+(c[0]==='Leg'?'id="legCard"':'')+'><div class="k">'+esc(c[0])+'</div><div class="v">'+esc(c[1])+'</div><div class="s">'+esc(c[2]||'')+'</div></div>').join('')+'</div>';
@@ -919,7 +1068,14 @@ function render(j){
   $('out').innerHTML=h;
   
   if(j.chart_15&&j.chart_15.bars&&j.chart_15.bars.length){
-    setTimeout(()=>initChart15(j.chart_15),20);
+    setTimeout(()=>{
+      initChart15(j.chart_15);
+      if(restoredLegs && restoredLegs.length && _chartState){
+        _chartState.legs = [...restoredLegs];
+        _renderFrame();
+        _updateLegPanel();
+      }
+    },20);
   }
 }
 
@@ -929,8 +1085,25 @@ function copyAll(){
   j.p2.forEach(s=>{t+='\n\n'+s[0].toUpperCase()+'\n'+s[1].map(r=>r[0]+': '+r[1]).join('\n')});
   navigator.clipboard.writeText(t);$('st').textContent='copied';setTimeout(()=>$('st').textContent='',1500);
 }
-$('go').onclick=run;$('rf').onclick=run;$('cp').onclick=copyAll;
-$('t').addEventListener('keydown',e=>{if(e.key==='Enter')run()});
+$('go').onclick=()=>run(false);
+$('rf').onclick=()=>run(true);
+$('cp').onclick=copyAll;
+['t', 's', 'f', 'fl'].forEach(id => {
+  const el = $(id);
+  if(el) el.addEventListener('keydown', e => { if(e.key === 'Enter') run(false); });
+});
+
+// Auto-read URL params if present
+const urlP = new URLSearchParams(window.location.search);
+const initT = (urlP.get('ticker') || urlP.get('symbol') || '').trim().toUpperCase();
+const initS = urlP.get('start') || '';
+if(initT){
+  $('t').value = initT;
+  if(initS) $('s').value = initS;
+  if(urlP.get('frd')) $('f').value = urlP.get('frd');
+  if(urlP.get('float_m')) $('fl').value = urlP.get('float_m');
+  if(initS) setTimeout(() => run(false), 50);
+}
 
 // ================= CANVAS CHART & INTERACTIVE DRAWING =================
 function fmtP(v){if(v==null)return '-';return v<1?'$'+v.toFixed(4):v<100?'$'+v.toFixed(2):'$'+v.toFixed(0);}
