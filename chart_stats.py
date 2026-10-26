@@ -2918,18 +2918,54 @@ $('#cm_bz').onchange = () => {
   }
 };
 
-function drawChart(ch, cvElement){
+function drawChart(ch, cvElement, hoverState){
   const cv = cvElement || (activeTab && openTabs[activeTab] ? openTabs[activeTab].container.querySelector('#cv') : $('#cv'));
-  if(!cv) return;
+  if(!cv || !ch || !ch.labels || !ch.labels.length) return;
+  cv._chartData = ch;
+  cv.style.cursor = 'crosshair';
+
+  if(!cv._hoverEventsBound){
+    cv._hoverEventsBound = true;
+    cv.addEventListener('mousemove', function(e){
+      const rect = cv.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      drawChart(cv._chartData, cv, {mx, my});
+    });
+    cv.addEventListener('mouseleave', function(){
+      drawChart(cv._chartData, cv, null);
+    });
+    cv.addEventListener('touchmove', function(e){
+      if(e.touches && e.touches[0]){
+        const rect = cv.getBoundingClientRect();
+        const mx = e.touches[0].clientX - rect.left;
+        const my = e.touches[0].clientY - rect.top;
+        drawChart(cv._chartData, cv, {mx, my});
+      }
+    }, {passive: true});
+    cv.addEventListener('touchend', function(){
+      drawChart(cv._chartData, cv, null);
+    });
+  }
+
   const parentW = (cv.parentElement && cv.parentElement.clientWidth) ? cv.parentElement.clientWidth : 0;
   const dpr=window.devicePixelRatio||1, W=Math.max(300, parentW-28), H=400;
-  cv.style.width=W+'px'; cv.style.height=H+'px'; cv.width=W*dpr; cv.height=H*dpr;
-  const x=cv.getContext('2d'); x.setTransform(dpr,0,0,dpr,0,0); x.font='12px Consolas,monospace';
+  const reqW = Math.round(W * dpr), reqH = Math.round(H * dpr);
+  if(cv.width !== reqW || cv.height !== reqH){
+    cv.style.width=W+'px'; cv.style.height=H+'px';
+    cv.width=reqW; cv.height=reqH;
+  }
+  const x=cv.getContext('2d');
+  x.setTransform(dpr,0,0,dpr,0,0);
+  x.clearRect(0,0,W,H);
+  x.font='12px Consolas,monospace';
+
   const L=52,R=14,T=12,B=26, pw=W-L-R, ph=H-T-B, n=ch.labels.length;
   const vs=[0]; [ch.med,ch.p25,ch.p75,ch.today,ch.proj,...ch.paths].forEach(a=>a.forEach(v=>{if(v!=null)vs.push(v)}));
   let lo=Math.max(Math.min(...vs),-0.95), hi=Math.min(Math.max(...vs),10);
   if(hi-lo<0.1){hi+=0.05;lo-=0.05}
   const X=i=>L+pw*i/(n-1), Y=v=>T+ph*(1-(Math.max(lo,Math.min(hi,v))-lo)/(hi-lo));
+
   // Premarket light grey background on path chart
   if(ch.open_k != null && ch.open_k > 0){
     x.fillStyle = 'rgba(255, 255, 255, 0.085)';
@@ -2953,6 +2989,159 @@ function drawChart(ch, cvElement){
   line(ch.proj,'#ffd23f',2,[6,5]);
   line(ch.today,'#ffd23f',2.5);
   if(ch.now_k!=null&&ch.today[ch.now_k]!=null){x.fillStyle='#ffd23f';x.beginPath();x.arc(X(ch.now_k),Y(ch.today[ch.now_k]),4,0,7);x.fill();}
+
+  // Interactive Hover: Crosshair, Axis Badges, and HUD Tooltip
+  if(hoverState && hoverState.mx != null && hoverState.my != null){
+    const mx = hoverState.mx;
+    const my = hoverState.my;
+    if(mx >= L && mx <= W - R && my >= T && my <= T + ph){
+      const ratio = Math.max(0, Math.min(1, (mx - L) / pw));
+      const idx = Math.min(n - 1, Math.max(0, Math.round(ratio * (n - 1))));
+      const snapX = X(idx);
+
+      // Value calculation
+      const cursorVal = lo + (1 - (my - T) / ph) * (hi - lo);
+      const cursorPctStr = (cursorVal >= 0 ? '+' : '') + (cursorVal * 100).toFixed(1) + '%';
+      const timeStr = ch.labels[idx] || '';
+
+      x.save();
+
+      // Crosshair lines
+      x.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+      x.lineWidth = 1;
+      x.setLineDash([3, 3]);
+
+      // Vertical line
+      x.beginPath();
+      x.moveTo(snapX, T);
+      x.lineTo(snapX, T + ph);
+      x.stroke();
+
+      // Horizontal line
+      x.beginPath();
+      x.moveTo(L, my);
+      x.lineTo(W - R, my);
+      x.stroke();
+      x.setLineDash([]);
+
+      // Highlight dots on data curves
+      if(ch.today && ch.today[idx] != null){
+        const ty = Y(ch.today[idx]);
+        x.fillStyle = '#ffd23f';
+        x.strokeStyle = '#fff';
+        x.lineWidth = 2;
+        x.beginPath();
+        x.arc(snapX, ty, 5, 0, Math.PI * 2);
+        x.fill();
+        x.stroke();
+      }
+      if(ch.med && ch.med[idx] != null){
+        const my_pt = Y(ch.med[idx]);
+        x.fillStyle = '#6cc4ff';
+        x.strokeStyle = '#fff';
+        x.lineWidth = 1.5;
+        x.beginPath();
+        x.arc(snapX, my_pt, 4.5, 0, Math.PI * 2);
+        x.fill();
+        x.stroke();
+      }
+      if(ch.proj && ch.proj[idx] != null){
+        const py = Y(ch.proj[idx]);
+        x.fillStyle = '#ffd23f';
+        x.beginPath();
+        x.arc(snapX, py, 3.5, 0, Math.PI * 2);
+        x.fill();
+      }
+
+      // X-Axis Badge (Bottom - Time)
+      x.font = 'bold 11px Consolas,monospace';
+      const xBadgeText = timeStr ? timeStr + ' IST' : '';
+      const xBadgeW = x.measureText(xBadgeText).width + 12;
+      const xBadgeX = Math.max(L, Math.min(W - R - xBadgeW, snapX - xBadgeW / 2));
+      const xBadgeY = H - 24;
+      x.fillStyle = '#0a101d';
+      x.fillRect(xBadgeX, xBadgeY, xBadgeW, 18);
+      x.strokeStyle = '#29a8ff';
+      x.lineWidth = 1;
+      x.strokeRect(xBadgeX, xBadgeY, xBadgeW, 18);
+      x.fillStyle = '#ffffff';
+      x.fillText(xBadgeText, xBadgeX + 6, xBadgeY + 13);
+
+      // Y-Axis Badge (Left - % from prev close)
+      const yColor = cursorVal >= 0 ? '#3ddc84' : '#ff5a5a';
+      const yBadgeText = cursorPctStr;
+      const yBadgeW = L - 4;
+      const yBadgeH = 16;
+      const yBadgeX = 2;
+      const yBadgeY = Math.max(T, Math.min(T + ph - yBadgeH, my - yBadgeH / 2));
+      x.fillStyle = '#0a101d';
+      x.fillRect(yBadgeX, yBadgeY, yBadgeW, yBadgeH);
+      x.strokeStyle = yColor;
+      x.lineWidth = 1;
+      x.strokeRect(yBadgeX, yBadgeY, yBadgeW, yBadgeH);
+      x.fillStyle = yColor;
+      x.fillText(yBadgeText, yBadgeX + 3, yBadgeY + 12);
+
+      // Tooltip HUD Card
+      const rows = [];
+      rows.push({ label: 'Time (X)', val: timeStr + ' IST', col: '#ffffff' });
+      rows.push({ label: 'Value (Y)', val: cursorPctStr, col: yColor });
+      if(ch.today && ch.today[idx] != null){
+        const v = ch.today[idx];
+        rows.push({ label: 'Today', val: (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%', col: '#ffd23f' });
+      }
+      if(ch.proj && ch.proj[idx] != null){
+        const v = ch.proj[idx];
+        rows.push({ label: 'Projected', val: (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%', col: '#ffd23f' });
+      }
+      if(ch.med && ch.med[idx] != null){
+        const v = ch.med[idx];
+        rows.push({ label: 'History Median', val: (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%', col: '#6cc4ff' });
+      }
+      if(ch.p25 && ch.p75 && ch.p25[idx] != null && ch.p75[idx] != null){
+        const v25 = (ch.p25[idx] * 100).toFixed(1);
+        const v75 = (ch.p75[idx] * 100).toFixed(1);
+        rows.push({ label: 'p25–p75 Range', val: `${v25}% to ${v75}%`, col: '#78a0c8' });
+      }
+
+      x.font = '11px Consolas,monospace';
+      let maxW = 150;
+      rows.forEach(r => {
+        const tw = x.measureText(`${r.label}: ${r.val}`).width;
+        if(tw + 20 > maxW) maxW = tw + 20;
+      });
+
+      const pad = 8, lineH = 17;
+      const boxW = maxW;
+      const boxH = rows.length * lineH + pad * 2;
+      let boxX = snapX + 16;
+      if(boxX + boxW > W - R) boxX = snapX - boxW - 16;
+      if(boxX < L + 2) boxX = L + 2;
+
+      let boxY = my - boxH / 2;
+      if(boxY < T + 4) boxY = T + 4;
+      if(boxY + boxH > T + ph) boxY = T + ph - boxH;
+
+      // Draw Tooltip Container
+      x.fillStyle = 'rgba(10, 15, 26, 0.95)';
+      x.fillRect(boxX, boxY, boxW, boxH);
+      x.strokeStyle = '#29a8ff';
+      x.lineWidth = 1;
+      x.strokeRect(boxX, boxY, boxW, boxH);
+
+      // Tooltip Rows
+      rows.forEach((r, ri) => {
+        const ry = boxY + pad + (ri + 1) * lineH - 4;
+        x.fillStyle = '#8e9aa8';
+        x.fillText(r.label + ':', boxX + 8, ry);
+        const lw = x.measureText(r.label + ': ').width;
+        x.fillStyle = r.col;
+        x.fillText(r.val, boxX + 8 + lw, ry);
+      });
+
+      x.restore();
+    }
+  }
 }
 window.addEventListener('resize',()=>{
   if($('#chart_modal').style.display === 'flex'){
