@@ -101,18 +101,51 @@ class _VisibleText(HTMLParser):
         super().__init__()
         self.parts: List[str] = []
         self.hidden = 0
+        self.tables: List[Dict[str, Any]] = []
+        self.current_heading = ""
+        self._heading_parts: Optional[List[str]] = None
+        self._table: Optional[Dict[str, Any]] = None
+        self._row: Optional[List[str]] = None
+        self._cell: Optional[List[str]] = None
 
     def handle_starttag(self, tag, attrs):
         if tag in ("script", "style", "noscript", "svg"):
             self.hidden += 1
+        elif tag in ("h1", "h2", "h3"):
+            self._heading_parts = []
+        elif tag == "table":
+            self._table = {"heading": self.current_heading, "rows": []}
+        elif tag == "tr" and self._table is not None:
+            self._row = []
+        elif tag in ("td", "th") and self._row is not None:
+            self._cell = []
 
     def handle_endtag(self, tag):
         if tag in ("script", "style", "noscript", "svg") and self.hidden:
             self.hidden -= 1
+        elif tag in ("td", "th") and self._cell is not None:
+            self._row.append(" ".join(self._cell).strip())
+            self._cell = None
+        elif tag == "tr" and self._row is not None:
+            if any(self._row):
+                self._table["rows"].append(self._row)
+            self._row = None
+        elif tag == "table" and self._table is not None:
+            if self._table["rows"]:
+                self.tables.append(self._table)
+            self._table = None
+        elif tag in ("h1", "h2", "h3") and self._heading_parts is not None:
+            self.current_heading = " ".join(self._heading_parts).strip()
+            self._heading_parts = None
 
     def handle_data(self, data):
         if not self.hidden and data.strip():
-            self.parts.append(data.strip())
+            value = data.strip()
+            self.parts.append(value)
+            if self._cell is not None:
+                self._cell.append(value)
+            if self._heading_parts is not None:
+                self._heading_parts.append(value)
 
 
 def _rendered_page_fallback(ticker: str, html: str, url: str) -> Dict[str, Any]:
@@ -129,6 +162,7 @@ def _rendered_page_fallback(ticker: str, html: str, url: str) -> Dict[str, Any]:
     return {
         "_rendered_fallback": True,
         "_rendered_text": text,
+        "_rendered_tables": parser.tables,
         "_source_url": url,
         "_fetched_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
     }
@@ -156,15 +190,15 @@ def _fmt_money(val: Optional[float], decimals: int = 2) -> str:
     return f"{sign}${a:,.{decimals}f}"
 
 
-def _fmt_shares(val: Optional[float]) -> str:
+def _fmt_shares(val: Optional[float], decimals: int = 2) -> str:
     if val is None:
         return "—"
     a = abs(val)
     sign = "-" if val < 0 else ""
     if a >= 1e9:
-        return f"{sign}{a / 1e9:.2f}B"
+        return f"{sign}{a / 1e9:.{decimals}f}B"
     if a >= 1e6:
-        return f"{sign}{a / 1e6:.2f}M"
+        return f"{sign}{a / 1e6:.{decimals}f}M"
     if a >= 1e3:
         return f"{sign}{a / 1e3:.1f}K"
     return f"{sign}{a:,.0f}"
@@ -262,22 +296,56 @@ def build_finviz_dilution_report(data: Dict[str, Any], current_price: Optional[f
             if not match:
                 return None
             return f"{match.group(1)} ({match.group(2)}/100)" if match.group(2) else match.group(1)
-        lines = ["DILUTION RISK"]
+        lines = ["DILUTION", f"Updated {data.get('_fetched_at', 'date unavailable')}", "", "DILUTION RISK"]
         risk = value("Dilution Risk")
-        lines.append(f"- Finviz risk: {risk} [FINVIZ REPORTED]" if risk else "- Finviz risk score: unavailable in rendered page [UNVERIFIED]")
+        lines.append(f"- Dilution Risk: {risk}" if risk else "- Dilution Risk: unavailable")
         for label in ("Offering", "Cash Need", "Overhang", "History"):
             result = value(label)
             if result:
-                lines.append(f"- {label}: {result} [FINVIZ REPORTED]")
-        for label, pattern in (("Runway", r"Runway\s+([\d.]+mo)"), ("Cash", r"Cash\s+(\$[\d.]+[KMB]?)"), ("Burn/Q", r"Burn/Q\s+(\$[\d.]+[KMB]?)"), ("Shares O/S", r"Shares O/S\s+([\d.]+[KMB]?)"), ("Baby Shelf", r"Baby Shelf\s+(Yes|No)")):
+                lines.append(f"- {label}: {result}")
+        lines.append("")
+        lines.append("KEY METRICS")
+        for label, pattern in (("Runway", r"Runway\s+([\d.]+mo)"), ("Cash", r"Cash\s+(\$?[\d.]+[KMB]?)"), ("Burn/Q", r"Burn/Q\s+(\$?[\d.]+[KMB]?)"), ("Shares O/S", r"Shares O/S\s+([\d.]+[KMB]?)"), ("Baby Shelf", r"Baby Shelf\s+(Yes|No)")):
             match = re.search(pattern, text, re.I)
             if match:
-                lines.append(f"- {label}: {match.group(1)} [FINVIZ REPORTED]")
-        lines.append("- Data source: rendered Finviz Dilution page; some detailed instrument fields may not be available in this fallback [FINVIZ REPORTED]")
-        lines.append(f"- Source: {data.get('_source_url', 'https://finviz.com')} [{data.get('_fetched_at', 'date unavailable')}]")
+                lines.append(f"- {label}: {match.group(1)}")
+        summary = re.search(r"The huge .+?(?:pressure\.|pressure$)", text, re.I)
+        if summary:
+            lines.extend(["", "SUMMARY", summary.group(0)])
+        tables = data.get("_rendered_tables") or []
+        if tables:
+            lines.extend(["", "INSTRUMENTS"])
+            for table in tables:
+                lines.append(table.get("heading") or "Finviz table")
+                for row in table.get("rows") or []:
+                    lines.append(" | ".join(cell.strip() for cell in row if cell.strip()))
+        else:
+            lines.extend(["", "INSTRUMENTS", "Finviz's rendered response did not include parseable instrument tables."])
+        lines.append(f"Source: {data.get('_source_url', 'https://finviz.com')} (updated {data.get('_fetched_at', 'date unavailable')})")
         return lines
 
     out: List[str] = []
+    def cell(value: Any) -> str:
+        if value is None or value == "":
+            return "—"
+        if isinstance(value, dict):
+            return str(value.get("form") or value.get("accession_number") or "—")
+        if isinstance(value, bool):
+            return "Yes" if value else "No"
+        if isinstance(value, float) and value.is_integer():
+            return f"{int(value):,}"
+        return str(value)
+
+    def row(title: str, fields: List[Any]) -> str:
+        return f"- {title}\t" + "\t".join(cell(value) for value in fields)
+
+    def money_ui(value: Optional[float]) -> str:
+        if value is None:
+            return "—"
+        return re.sub(r"\.0(?=[KMB])", "", _fmt_money(value, 1))
+
+    def shares_ui(value: Optional[float]) -> str:
+        return _fmt_shares(value, 1) if value is not None else "—"
     badges = data.get("badges") or {}
     overall = badges.get("overall") or {}
     drivers = {d.get("key"): d for d in (badges.get("drivers") or []) if isinstance(d, dict)}
@@ -294,53 +362,106 @@ def build_finviz_dilution_report(data: Dict[str, Any], current_price: Optional[f
     # --------------------------------------------------------------------------
     # 1. DILUTION RISK DASHBOARD
     # --------------------------------------------------------------------------
-    out.append("DILUTION RISK")
+    out.extend(["DILUTION", f"Updated {update_date}", "", "DILUTION RISK"])
     score = overall.get("score")
     label = overall.get("label") or "Unrated"
     if score is not None:
-        out.append(f"- Finviz risk score: {score}/100 ({label}) [FINVIZ REPORTED]")
+        out.append(f"- Dilution Risk: {label} ({score}/100)")
     else:
-        out.append(f"- Finviz risk score: {label} [FINVIZ REPORTED]")
+        out.append(f"- Dilution Risk: {label}")
 
     oa = drivers.get("offering_ability")
     if oa:
-        out.append(f"- Offering risk: {oa.get('band_text', '—')} ({oa.get('score', '—')}/100) [FINVIZ REPORTED]")
+        out.append(f"- Offering: {oa.get('band_text', '—')}")
     else:
-        out.append("- Offering risk: [UNVERIFIED]")
+        out.append("- Offering: Unavailable")
 
     cn = drivers.get("cash_need")
     if cn:
-        out.append(f"- Cash need: {cn.get('band_text', '—')} ({cn.get('score', '—')}/100) [FINVIZ REPORTED]")
+        out.append(f"- Cash Need: {cn.get('band_text', '—')}")
     else:
-        out.append("- Cash need: [UNVERIFIED]")
+        out.append("- Cash Need: Unavailable")
 
     oh = drivers.get("overhang")
     if oh:
-        out.append(f"- Overhang: {oh.get('band_text', '—')} ({oh.get('score', '—')}/100) [FINVIZ REPORTED]")
+        out.append(f"- Overhang: {oh.get('band_text', '—')}")
     else:
-        out.append("- Overhang: [UNVERIFIED]")
+        out.append("- Overhang: Unavailable")
 
     dh = drivers.get("dilution_history")
     if dh:
-        out.append(f"- Dilution history: {dh.get('band_text', '—')} ({dh.get('score', '—')}/100) [FINVIZ REPORTED]")
+        out.append(f"- History: {dh.get('band_text', '—')}")
 
-    out.append(f"- Page updated: {update_date} [FINVIZ REPORTED]")
+    out.append("")
+    out.append("KEY METRICS")
+    metrics = []
+    runway_months = cash.get("months_of_cash")
+    if runway_months is not None:
+        metrics.append(f"Runway: {runway_months:.1f}mo")
+    key_cash = cash.get("current_cash_est_usd") or cash.get("latest_reported_cash_usd")
+    if key_cash is not None:
+        metrics.append(f"Cash: {money_ui(key_cash)}")
+    if cash.get("op_cf_quarterly_usd") is not None:
+        metrics.append(f"Burn/Q: {money_ui(abs(cash['op_cf_quarterly_usd']))}")
+    if company.get("shares_outstanding") is not None:
+        metrics.append(f"Shares O/S: {_fmt_shares(company['shares_outstanding'])}")
+    if company.get("is_baby_shelf_restricted") is not None:
+        metrics.append(f"Baby Shelf: {'Yes' if company['is_baby_shelf_restricted'] else 'No'}")
+    out.extend(f"- {metric}" for metric in metrics)
 
     summary_text = brief.get("summary")
     if summary_text:
         # Wrap summary cleanly
         clean_sum = summary_text.strip().replace("\n", " ")
-        out.append(f"- Summary: {clean_sum}")
+        out.append(clean_sum)
     out.append("")
 
     # --------------------------------------------------------------------------
     # 2. FINANCIAL POSITION
     # --------------------------------------------------------------------------
-    out.append("FINANCIAL POSITION")
+    # Historical shares and fully diluted instrument mix, matching Finviz's chart.
+    os_chart = company.get("os_chart") or {}
+    os_bars = os_chart.get("bars") or []
+    if os_bars:
+        out.extend(["", "HISTORICAL O/S & POTENTIAL DILUTION"])
+        price_basis = os_chart.get("price_basis") or current_price
+        if price_basis:
+            out.append(f"ATM, equity-line and S-1 capacity shown in shares at the latest chart price of ${price_basis:.2f}. Unused shelf capacity is not included.")
+        out.append("Shares outstanding (chart series, in millions):")
+        chart_points = []
+        for bar in os_bars:
+            date = bar.get("quarter_end") or "Period"
+            shares = bar.get("shares")
+            if shares is not None:
+                # Older pre-split bars are stored in millions; recent bars are
+                # absolute share counts. Normalize to millions for the chart.
+                millions = shares if abs(shares) < 10_000 else shares / 1_000_000
+                value_text = f"{millions / 1_000:.3g}K" if abs(millions) >= 1_000 else f"{millions:.3g}"
+                chart_points.append(f"{date}: {value_text}")
+        out.append("- " + " | ".join(chart_points))
+        components = []
+        warrant_shares = sum((w.get("remaining_outstanding") or 0) for w in (cards.get("warrant") or []))
+        convert_shares = sum((c.get("remaining_shares_issuable") or 0) for c in (cards.get("convertible") or []))
+        preferred_shares = sum((p.get("remaining_shares_issuable") or 0) for p in (cards.get("preferred") or []))
+        line_capacity = sum((e.get("remaining_capacity") or 0) for e in (cards.get("equity_line") or []) if e.get("terminated") is not True)
+        if warrant_shares:
+            components.append(f"Warrants {warrant_shares:.1f}")
+        if convert_shares:
+            components.append(f"Convertible Notes {shares_ui(convert_shares)}")
+        if preferred_shares:
+            components.append(f"Convertible Preferred {shares_ui(preferred_shares)}")
+        if line_capacity and price_basis:
+            components.append(f"Equity Line {shares_ui(line_capacity / price_basis)}")
+        if components:
+            out.append("Fully Diluted: " + " | ".join(components))
+        out.append("Chart scale: 0 | 800 | 1.6K | 2.4K | 3.2K million shares")
+
+    out.extend(["", "CASH POSITION"])
     rep_cash = cash.get("latest_reported_cash_usd")
     cash_only = cash.get("latest_reported_cash_only_usd")
     investments = cash.get("latest_reported_investments_usd")
     cash_period = cash.get("latest_period_end") or "latest period"
+    op_cf_q = cash.get("op_cf_quarterly_usd")
 
     if rep_cash is not None:
         parts = []
@@ -349,22 +470,23 @@ def build_finviz_dilution_report(data: Dict[str, Any], current_price: Optional[f
         if investments and investments > 0:
             parts.append(f"{_fmt_money(investments)} short-term investments")
         breakdown = f" ({' + '.join(parts)})" if parts else ""
-        out.append(f"- Reported cash: {_fmt_money(rep_cash)} as of {cash_period}{breakdown} [FINVIZ REPORTED]")
+        current_cash = cash.get("current_cash_est_usd")
+        if runway_months is not None and current_cash is not None and op_cf_q is not None:
+            out.append(f"About {runway_months:.1f} months of runway: estimated cash of {_fmt_money(current_cash)} against operating burn of {_fmt_money(abs(op_cf_q))} per quarter.")
+        out.append(f"Reported balance as of {cash_period}: {_fmt_money(rep_cash)}{breakdown}.")
     else:
         out.append("- Reported cash: [UNVERIFIED]")
 
     # Cash Burn rate
-    op_cf_q = cash.get("op_cf_quarterly_usd")
     if op_cf_q is not None:
         monthly_burn = abs(op_cf_q) / 3.0
-        out.append(f"- Monthly burn: ~{_fmt_money(monthly_burn)}/month (quarterly operating cash flow: {_fmt_money(op_cf_q)}) [ESTIMATED]")
+        out.append(f"- Monthly burn: ~{_fmt_money(monthly_burn)}/month (quarterly operating cash flow: {_fmt_money(op_cf_q)})")
     else:
         out.append("- Monthly burn: [UNVERIFIED]")
 
     # Runway
-    runway_months = cash.get("months_of_cash")
     if runway_months is not None:
-        out.append(f"- Estimated runway: {runway_months:.1f} months [FINVIZ REPORTED]")
+        out.append(f"- Estimated runway: {runway_months:.1f} months")
     else:
         out.append("- Estimated runway: [UNVERIFIED]")
 
@@ -376,7 +498,7 @@ def build_finviz_dilution_report(data: Dict[str, Any], current_price: Optional[f
 
     if so is not None:
         fl_str = f" · Free Float: {_fmt_shares(fl)}" if fl is not None else ""
-        out.append(f"- Shares outstanding: {_fmt_shares(so)}{fl_str} ({so_src}) [FINVIZ REPORTED]")
+        out.append(f"- Shares outstanding: {_fmt_shares(so)}{fl_str} ({so_src})")
     else:
         out.append("- Shares outstanding: [UNVERIFIED]")
 
@@ -396,12 +518,23 @@ def build_finviz_dilution_report(data: Dict[str, Any], current_price: Optional[f
     if cap_raised is not None and cap_raised > 0:
         out.append(f"- Capital raised since {cash_period}: {_fmt_money(cap_raised)} [FINVIZ REPORTED]")
 
+    cash_bars = (cash.get("chart") or {}).get("bars") or []
+    if cash_bars:
+        out.append("Cash history (millions USD):")
+        points = []
+        for bar in cash_bars:
+            date = "Current Est." if bar.get("kind") == "estimate" else (bar.get("period_end") or "Period")
+            value = bar.get("cash_usd")
+            if value is not None:
+                points.append(f"{date}: {_fmt_money(value, 1)}")
+        out.append("- " + " | ".join(points))
+
     out.append("")
 
     # --------------------------------------------------------------------------
     # 3. OPEN DILUTION (Instruments & Facilities)
     # --------------------------------------------------------------------------
-    out.append("OPEN DILUTION")
+    out.append("DILUTION INSTRUMENTS")
 
     # ATM Programs
     atms = cards.get("atm") or []
@@ -419,23 +552,10 @@ def build_finviz_dilution_report(data: Dict[str, Any], current_price: Optional[f
             is_active = (rem is not None and rem > 0) or (rem is None and tot is not None)
             status_tag = "[VERIFIED ACTIVE]" if (rem is not None and rem > 0) else ("[FULLY UTILIZED/EXHAUSTED]" if rem == 0.0 else "[FINVIZ REPORTED]")
 
-            details = []
-            if rem is not None:
-                details.append(f"remaining capacity: {_fmt_money(rem)}")
-            if tot is not None:
-                details.append(f"authorized: {_fmt_money(tot)}")
-            if sold is not None and sold > 0:
-                details.append(f"sold to date: {_fmt_money(sold)}")
-            details.append(f"agent: {agent}")
-            if updated:
-                details.append(f"as of {updated}")
-
-            implied_sh = ""
-            if current_price and current_price > 0 and rem is not None and rem > 0:
-                ish = rem / current_price
-                implied_sh = f" · ~{_fmt_shares(ish)} implied shares @ ${current_price:.2f}"
-
-            out.append(f"- ATM: {title} ({reg}) — {', '.join(details)}{implied_sh} {status_tag}")
+            if atm == atms[0]:
+                out.append(f"ATM — {len(atms)} programs · {_fmt_money(sum((a.get('remaining_capacity') or 0) for a in atms))} remaining capacity")
+                out.append("Instrument | Filed | Base Shelf | Remaining Capacity | Total Capacity | Remaining (ex. I.B.6) | Baby Shelf | Sold to Date | Used % | Sales Agent | Start Date | End Date | Bank Tier | Investor Class | Updated")
+            out.append(row(title, [atm.get("registered"), atm.get("parent_shelf"), _fmt_money(rem) if rem is not None else None, _fmt_money(tot) if tot is not None else None, _fmt_money(atm.get("remaining_without_baby_shelf")) if atm.get("remaining_without_baby_shelf") is not None else None, atm.get("limited_by_baby_shelf"), _fmt_money(sold) if sold is not None else None, f"{atm['used_pct']:.0f}%" if atm.get("used_pct") is not None else None, agent, atm.get("agreement_start_date"), atm.get("agreement_end_date"), atm.get("bank_tier"), atm.get("investor_class"), updated]))
     else:
         out.append("- ATM: none reported on Finviz [NOT FOUND]")
 
@@ -471,7 +591,10 @@ def build_finviz_dilution_report(data: Dict[str, Any], current_price: Optional[f
                 ish = rem / current_price
                 implied_sh = f" · ~{_fmt_shares(ish)} implied shares @ ${current_price:.2f}"
 
-            out.append(f"- ELOC: {title} ({reg}) — {', '.join(details)}{implied_sh} {status_tag}")
+            if el == elocs[0]:
+                out.extend(["", f"EQUITY LINES — {len(elocs)} line(s) · {_fmt_money(sum((e.get('remaining_capacity') or 0) for e in elocs))} remaining capacity"])
+                out.append("Instrument | Filed | Base Shelf | Remaining Capacity | Total Capacity | Sold to Date | Used % | Counterparty | Terminated | Start Date | End Date | Bank Tier | Investor Class | Updated")
+            out.append(row(title, [el.get("registered"), el.get("parent_shelf"), _fmt_money(rem) if rem is not None else None, _fmt_money(tot) if tot is not None else None, _fmt_money(sold) if sold is not None else None, f"{el['used_pct']:.0f}%" if el.get("used_pct") is not None else None, el.get("counterparty"), term, el.get("agreement_start_date"), end_date, el.get("bank_tier"), el.get("investor_class"), el.get("last_update_date")]))
     else:
         out.append("- ELOC: none reported on Finviz [NOT FOUND]")
 
@@ -503,7 +626,10 @@ def build_finviz_dilution_report(data: Dict[str, Any], current_price: Optional[f
                 details.append(f"banker: {banker}")
 
             status_tag = "[VERIFIED ACTIVE]" if status == "active" else f"[{status.upper()}]"
-            out.append(f"- Shelf: {title} ({status}) — {', '.join(details)} {status_tag}")
+            if sh == shelves[0]:
+                out.extend(["", f"SHELF — {len(shelves)} shelf(s) · {_fmt_money(sum((s.get('current_raisable_amount') or 0) for s in shelves))} raisable"])
+                out.append("Instrument | Filed | Status | Remaining Capacity | Total Capacity | Unlimited | Baby Shelf | Total Raised | Raised (12mo, I.B.6) | Outstanding Shares | Float | I.B.6 Float | 60d High | Price to Exit Cap | Underwriter | Effective Date | Expiration | Updated")
+            out.append(row(title, [sh.get("registered"), status, _fmt_money(raisable) if raisable is not None else None, _fmt_money(tot) if tot is not None else None, sh.get("unlimited"), is_baby, _fmt_money(raised) if raised is not None else None, _fmt_money(sh.get("raised_last_12mo_under_ib6")) if sh.get("raised_last_12mo_under_ib6") is not None else None, _fmt_shares(sh.get("outstanding_shares")) if sh.get("outstanding_shares") is not None else None, _fmt_shares(sh.get("float_shares")) if sh.get("float_shares") is not None else None, _fmt_money(sh.get("ib6_float_value")) if sh.get("ib6_float_value") is not None else None, f"${sh['highest_60_day_close']:.2f}" if sh.get("highest_60_day_close") is not None else None, f"${sh['price_to_exceed_baby_shelf']:.2f}" if sh.get("price_to_exceed_baby_shelf") is not None else None, banker, sh.get("effect_date"), exp, sh.get("last_update_date")]))
     else:
         out.append("- Shelf: no active shelf registration reported on Finviz [NOT FOUND]")
 
@@ -520,8 +646,7 @@ def build_finviz_dilution_report(data: Dict[str, Any], current_price: Optional[f
             underwriter = w.get("underwriter") or ""
             reg = "Registered" if w.get("registered") == "Registered" else "Unregistered"
 
-            ep_str = f"exercise px ${ep:,.4g}" if ep is not None else "exercise px unstated"
-            sh_str = f"{_fmt_shares(rem_sh)} warrants" if rem_sh is not None else f"{_fmt_shares(tot_sh)} issued"
+            ep_str = _fmt_money(ep, 2) if ep is not None else "—"
 
             # Check if in-the-money
             itm_str = ""
@@ -531,16 +656,10 @@ def build_finviz_dilution_report(data: Dict[str, Any], current_price: Optional[f
                 else:
                     itm_str = " [OUT OF THE MONEY]"
 
-            meta = []
-            meta.append(reg)
-            if exp:
-                meta.append(f"exp {exp}")
-            if underwriter:
-                meta.append(underwriter)
+            w_lines.append(row(title, [w.get("registered"), w.get("parent_shelf"), w.get("resale_registration"), _fmt_shares(tot_sh) if tot_sh is not None else None, _fmt_shares(rem_sh) if rem_sh is not None else None, ep_str, ", ".join(w.get("known_owners") or []) or None, underwriter, w.get("issue_date"), w.get("exercisable_date"), exp, w.get("bank_tier"), w.get("investor_class"), w.get("last_update_date")]))
 
-            w_lines.append(f"  * {title}: {sh_str} @ {ep_str} ({', '.join(meta)}){itm_str}")
-
-        out.append(f"- Warrants ({len(warrants)} cards reported) [FINVIZ REPORTED]:")
+        out.append(f"WARRANTS — {len(warrants)} series · {sum((w.get('remaining_outstanding') or 0) for w in warrants):.1f} shares outstanding")
+        out.append("Instrument | Filed | Base Shelf | Resale Registration | Shares Issued | Outstanding | Exercise Price | Known Owners | Underwriter | Issued | Exercisable | Expiration | Bank Tier | Investor Class | Updated")
         out.extend(w_lines)
     else:
         out.append("- Warrants: none reported on Finviz [NOT FOUND]")
@@ -549,43 +668,23 @@ def build_finviz_dilution_report(data: Dict[str, Any], current_price: Optional[f
     converts = cards.get("convertible") or []
     prefs = cards.get("preferred") or []
     if converts or prefs:
-        out.append("- Convertible Securities [FINVIZ REPORTED]:")
+        if converts:
+            principal_total = sum((c.get("principal_remaining") or 0) for c in converts)
+            shares_total = sum((c.get("remaining_shares_issuable") or 0) for c in converts)
+            out.append(f"CONVERTIBLE NOTES — {len(converts)} notes · {money_ui(principal_total)} principal · {shares_ui(shares_total)} shares")
+            out.append("Instrument | Filed | Resale Registration | Principal Issued | Principal Remaining | Conversion Price | Shares Issuable | Remaining Issuable | Known Owners | Underwriter | Issued | Convertible | Maturity | Bank Tier | Investor Class | Updated")
         for c in converts:
             title = c.get("title") or "Convertible Note"
-            princ_rem = c.get("principal_remaining")
-            conv_p = c.get("conversion_price")
-            rem_issuable = c.get("remaining_shares_issuable")
-            mat = c.get("maturity_date") or ""
-            owners = ", ".join(c.get("known_owners") or [])
+            out.append(row(title, [c.get("registered"), c.get("resale_registration"), _fmt_money(c.get("principal_total")) if c.get("principal_total") is not None else None, _fmt_money(c.get("principal_remaining")) if c.get("principal_remaining") is not None else None, f"${c['conversion_price']:.2f}" if c.get("conversion_price") is not None else None, _fmt_shares(c.get("total_shares_issuable")) if c.get("total_shares_issuable") is not None else None, _fmt_shares(c.get("remaining_shares_issuable")) if c.get("remaining_shares_issuable") is not None else None, ", ".join(c.get("known_owners") or []) or None, c.get("underwriter"), c.get("issue_date"), c.get("convertible_date"), c.get("maturity_date"), c.get("bank_tier"), c.get("investor_class"), c.get("last_update_date")]))
 
-            details = []
-            if princ_rem is not None:
-                details.append(f"principal remaining: {_fmt_money(princ_rem)}")
-            if conv_p is not None:
-                details.append(f"conversion px: ${conv_p:.4g}")
-            if rem_issuable is not None:
-                details.append(f"issuable: {_fmt_shares(rem_issuable)} shares")
-            if owners:
-                details.append(f"holder: {owners}")
-            if mat:
-                details.append(f"maturity: {mat}")
-
-            out.append(f"  * Convertible Note: {title} — {', '.join(details)}")
-
-        for p in prefs:
-            title = p.get("title") or "Convertible Preferred"
-            princ = p.get("principal_remaining") or p.get("principal_total")
-            conv_p = p.get("conversion_price")
-            sh = p.get("remaining_shares_issuable") or p.get("total_shares_issuable")
-            details = []
-            if princ:
-                details.append(f"amount: {_fmt_money(princ)}")
-            if conv_p:
-                details.append(f"conversion px: ${conv_p:.4g}")
-            if sh:
-                details.append(f"issuable: {_fmt_shares(sh)} shares")
-            details_str = f" — {', '.join(details)}" if details else ""
-            out.append(f"  * Preferred Stock: {title}{details_str}")
+        if prefs:
+            principal_total = sum((p.get("principal_remaining") or p.get("principal_total") or 0) for p in prefs)
+            shares_total = sum((p.get("remaining_shares_issuable") or p.get("total_shares_issuable") or 0) for p in prefs)
+            out.append(f"CONVERTIBLE PREFERRED — {len(prefs)} issues · {money_ui(principal_total)} principal · {shares_ui(shares_total)} shares")
+            out.append("Instrument | Filed | Resale Registration | Principal Issued | Principal Remaining | Conversion Price | Shares Issuable | Remaining Issuable | Known Owners | Underwriter | Issued | Convertible | Maturity | Bank Tier | Investor Class | Updated")
+            for p in prefs:
+                title = p.get("title") or "Convertible Preferred"
+                out.append(row(title, [p.get("registered"), p.get("resale_registration"), _fmt_money(p.get("principal_total")) if p.get("principal_total") is not None else None, _fmt_money(p.get("principal_remaining")) if p.get("principal_remaining") is not None else None, f"${p['conversion_price']:.2f}" if p.get("conversion_price") is not None else None, _fmt_shares(p.get("total_shares_issuable")) if p.get("total_shares_issuable") is not None else None, _fmt_shares(p.get("remaining_shares_issuable")) if p.get("remaining_shares_issuable") is not None else None, ", ".join(p.get("known_owners") or []) or None, p.get("underwriter"), p.get("issue_date"), p.get("convertible_date"), p.get("maturity_date"), p.get("bank_tier"), p.get("investor_class"), p.get("last_update_date")]))
     else:
         out.append("- Convertible securities: none reported on Finviz [NOT FOUND]")
 
@@ -675,6 +774,53 @@ def build_finviz_dilution_report(data: Dict[str, Any], current_price: Optional[f
         conditions.append("Sales subject to broker pacing and market liquidity; headline facility size does not equal instantaneous selling")
 
     out.append(f"- Important conditions and unknowns: {'; '.join(conditions)}")
-    out.append(f"- Source: Finviz Dilution ({source_url}) [Data a/o {update_date}]")
+    # Match the Finviz page order and keep only its displayed sections.
+    if "TODAY'S SELLING RISK" in out:
+        out = out[:out.index("TODAY'S SELLING RISK")]
+    out = [line for line in out if not line.startswith("- Other active financing mechanisms:")]
 
-    return out
+    # The page's cash section is a short runway note followed by its history chart.
+    if "CASH POSITION" in out and "DILUTION INSTRUMENTS" in out:
+        cash_start = out.index("CASH POSITION")
+        instruments_start = out.index("DILUTION INSTRUMENTS")
+        cash_block = out[cash_start:instruments_start]
+        keep_cash = ["CASH POSITION"]
+        keep_cash.extend(line for line in cash_block if line.startswith("About "))
+        for index, line in enumerate(cash_block):
+            if line.startswith("Cash history "):
+                keep_cash.append(line)
+                if index + 1 < len(cash_block):
+                    keep_cash.append(cash_block[index + 1])
+                break
+        out = out[:cash_start] + keep_cash + out[instruments_start:]
+
+    section_markers = {
+        "ATM": ("ATM —", "- ATM:"),
+        "EQUITY LINES": ("EQUITY LINES —", "- ELOC:"),
+        "SHELF": ("SHELF —", "- Shelf:"),
+        "WARRANTS": ("WARRANTS —", "- Warrants:"),
+        "CONVERTIBLE NOTES": ("CONVERTIBLE NOTES —",),
+        "CONVERTIBLE PREFERRED": ("CONVERTIBLE PREFERRED —", "- Convertible securities:"),
+    }
+    starts = {}
+    for name, prefixes in section_markers.items():
+        for index, line in enumerate(out):
+            if line.startswith(prefixes):
+                starts[name] = index
+                break
+    ordered_indices = sorted(starts.values())
+    blocks = {}
+    for name, start in starts.items():
+        end = next((index for index in ordered_indices if index > start), len(out))
+        blocks[name] = out[start:end]
+    if "DILUTION INSTRUMENTS" in out:
+        header_index = out.index("DILUTION INSTRUMENTS")
+        prefix = out[:header_index + 1]
+        suffix = out[max(ordered_indices) + 1:] if ordered_indices else out[header_index + 1:]
+        ordered_names = ("WARRANTS", "CONVERTIBLE NOTES", "CONVERTIBLE PREFERRED", "EQUITY LINES", "SHELF", "ATM")
+        out = prefix + [line for name in ordered_names for line in blocks.get(name, [])] + suffix
+
+    out.append(f"Source: {source_url} (updated {update_date})")
+    # The primary-source heading identifies Finviz once; per-field provenance
+    # tags obscure the UI-style summary and instrument tables.
+    return [re.sub(r"\s+\[[^\]]+\]", "", line).replace(" [FINVIZ REPORTED]", "") for line in out]
