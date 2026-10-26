@@ -1962,6 +1962,59 @@ def job(jid):
     return jsonify(j)
 
 
+_scanner_cache = {"at": 0.0, "rows": []}
+_scanner_cache_lock = threading.Lock()
+
+
+@app.route("/api/scanner")
+def scanner_market_scan():
+    user = (request.args.get("user") or "").strip().lower()
+    token = (request.args.get("token") or "").strip()
+    if not user or not token or not _db_validate_session(user, token):
+        return jsonify({"error": "Session expired. Please sign in again."}), 401
+
+    now = time.time()
+    with _scanner_cache_lock:
+        if now - _scanner_cache["at"] >= 25:
+            try:
+                snapshot = poly_get("/v2/snapshot/locale/us/markets/stocks/tickers")
+                rows = []
+                for item in snapshot.get("tickers", []):
+                    day = item.get("day") or {}
+                    last_trade = item.get("lastTrade") or {}
+                    prev_day = item.get("prevDay") or {}
+                    price = last_trade.get("p") or day.get("c")
+                    prev_close = prev_day.get("c")
+                    volume = day.get("v")
+                    try:
+                        price = float(price)
+                        prev_close = float(prev_close)
+                        volume = float(volume)
+                    except (TypeError, ValueError):
+                        continue
+                    if prev_close <= 0 or price <= 0:
+                        continue
+                    gap_pct = (price / prev_close - 1) * 100
+                    try:
+                        weighted_price = float(day.get("vw") or price)
+                    except (TypeError, ValueError):
+                        weighted_price = price
+                    dollar_volume = weighted_price * volume
+                    if 0.40 < price < 20 and gap_pct > 40 and dollar_volume >= 500_000:
+                        rows.append({
+                            "ticker": str(item.get("ticker", "")).upper(),
+                            "price": round(price, 4),
+                            "gap_pct": round(gap_pct, 2),
+                            "dollar_volume": round(dollar_volume),
+                            "volume": round(volume),
+                        })
+                rows.sort(key=lambda row: (-row["gap_pct"], -row["dollar_volume"], row["ticker"]))
+                _scanner_cache.update(at=now, rows=rows)
+            except Exception as exc:
+                return jsonify({"error": str(exc)}), 502
+        return jsonify({"tickers": _scanner_cache["rows"], "updated": _scanner_cache["at"]})
+
+
 HTML = r"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Gap-Up Fade Analyzer</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -2059,6 +2112,7 @@ canvas{display:block;width:100%}
     <button id="cp">Copy all</button>
 
     <div style="margin-left:auto;display:flex;align-items:center;gap:10px;font-size:13px;color:#8a8a8a">
+      <button id="scanner_open_btn" style="height:36px;padding:0 14px;border:2px solid #29a8ff;background:#071a28;color:#6cc4ff;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Live gap-up scanner">🔎 Scanner</button>
       <button id="nav_multiday_btn" style="height:36px;padding:0 14px;border:2px solid #00c9a7;background:#002b24;color:#00c9a7;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Multi-day Rally & First Red Day (FRD) Structure Tool">📊 Runner Stats</button>
       <span>User: <span id="u_name" style="color:#29a8ff;font-weight:bold"></span><span id="u_badge"></span></span>
       <button id="logout_btn" style="height:34px;font-size:12px;padding:0 12px;border-color:#444">Exit</button>
@@ -2080,6 +2134,27 @@ canvas{display:block;width:100%}
     </div>
     <iframe id="runner_iframe" src="/runner" style="width:100%;height:calc(100vh - 120px);border:0;background:#000;display:block"></iframe>
   </div>
+</div>
+
+<!-- Live Gap-Up Scanner -->
+<div id="scanner_modal" style="position:fixed;inset:0;background:rgba(0,0,0,.86);z-index:90000;display:none;align-items:center;justify-content:center;padding:20px" onclick="if(event.target===this)closeScanner()">
+  <section style="width:min(900px,96vw);max-height:88vh;display:flex;flex-direction:column;background:#090b0e;border:1px solid #29a8ff;border-radius:6px;box-shadow:0 16px 60px #000">
+    <header style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:15px 18px;border-bottom:1px solid #252b31">
+      <div style="font-size:17px;font-weight:bold;color:#6cc4ff">🔎 Live Gap-Up Scanner</div>
+      <div style="font-size:12px;color:#999">Price &gt;$0.40 and &lt;$20 · Gap &gt;40% · Dollar volume ≥$500K</div>
+      <label style="margin-left:auto;display:flex;align-items:center;gap:8px;color:#ffd23f;font-size:13px;cursor:pointer"><input id="scanner_alarm" type="checkbox" style="width:17px;height:17px"> Voice alarm</label>
+      <button id="scanner_refresh_btn" style="height:32px;font-size:13px;padding:0 12px">Refresh</button>
+      <button id="scanner_close_btn" style="height:32px;font-size:13px;padding:0 12px" onclick="closeScanner()">Close</button>
+    </header>
+    <div style="padding:10px 18px;color:#888;font-size:12px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <span id="scanner_status">Waiting for scan…</span><span>Click a ticker to load its notes</span>
+    </div>
+    <div style="overflow:auto;padding:0 18px 18px">
+      <table style="width:100%;border-collapse:collapse"><thead><tr style="color:#aaa;text-align:left;border-bottom:1px solid #333">
+        <th style="padding:8px">Ticker</th><th style="padding:8px;text-align:right">Price</th><th style="padding:8px;text-align:right">Gap</th><th style="padding:8px;text-align:right">Volume</th><th style="padding:8px;text-align:right">$ Volume</th>
+      </tr></thead><tbody id="scanner_rows"><tr><td colspan="5" style="padding:18px;color:#777;text-align:center">No scan yet</td></tr></tbody></table>
+    </div>
+  </section>
 </div>
 
 <!-- Admin Search History View -->
@@ -2407,6 +2482,7 @@ function _showApp(){
     $('#u_name').title = '';
   }
   $('#t').focus();
+  startScannerPolling();
   // Periodically verify session (every 90s) for non-exempt users
   if(!_canRename && !PWD_USERS.includes(cur)){
     _startSessionPoll();
@@ -3751,6 +3827,105 @@ function switchMainView(mode){
 if($('#nav_intraday_btn')) $('#nav_intraday_btn').onclick = () => switchMainView('intraday');
 if($('#nav_multiday_btn')) $('#nav_multiday_btn').onclick = () => window.open('/runner', '_blank');
 if($('#open_multiday_newtab')) $('#open_multiday_newtab').onclick = () => window.open('/runner', '_blank');
+let scannerTimer = null;
+let scannerBusy = false;
+let scannerLastSpoken = new Map();
+let scannerAlarmEnabled = localStorage.getItem('gap_scanner_alarm') === '1';
+
+function startScannerPolling(){
+  if(scannerTimer) return;
+  scannerTimer = setInterval(()=>{
+    const panelOpen = $('#scanner_modal').style.display === 'flex';
+    if(panelOpen || scannerAlarmEnabled) refreshScanner();
+  }, 30000);
+  if(scannerAlarmEnabled) refreshScanner();
+}
+
+function openScanner(){
+  if(!checkAuth()) return;
+  $('#scanner_modal').style.display = 'flex';
+  $('#scanner_alarm').checked = scannerAlarmEnabled;
+  refreshScanner();
+}
+
+function closeScanner(){ $('#scanner_modal').style.display = 'none'; }
+
+function announceScannerTicker(ticker){
+  if(!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined'){
+    $('#scanner_status').textContent = 'Voice alarm is unavailable in this browser.';
+    return;
+  }
+  const spoken = ticker.split('').join(' ');
+  const utterance = new SpeechSynthesisUtterance(spoken);
+  utterance.rate = 0.9;
+  window.speechSynthesis.speak(utterance);
+}
+
+async function refreshScanner(){
+  if(scannerBusy || !currentUser || !sessionToken) return;
+  scannerBusy = true;
+  const status = $('#scanner_status');
+  try {
+    const url = '/api/scanner?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken);
+    const res = await fetch(url);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || 'Scanner request failed');
+    const tickers = data.tickers || [];
+    const current = new Set(tickers.map(row=>row.ticker));
+    for(const oldTicker of scannerLastSpoken.keys()){
+      if(!current.has(oldTicker)) scannerLastSpoken.delete(oldTicker);
+    }
+    const body = $('#scanner_rows');
+    if(!tickers.length){
+      body.innerHTML = '<tr><td colspan="5" style="padding:18px;color:#777;text-align:center">No tickers currently meet all scanner conditions.</td></tr>';
+    } else {
+      body.innerHTML = tickers.map(row=>`<tr class="scanner-result-row" data-ticker="${esc(row.ticker)}" style="border-bottom:1px solid #20242a;cursor:pointer" title="Load notes for ${esc(row.ticker)}" onmouseover="this.style.background='#101820'" onmouseout="this.style.background='transparent'">`+
+        `<td style="padding:9px;color:#6cc4ff;font-weight:bold">${esc(row.ticker)}</td>`+
+        `<td style="padding:9px;text-align:right">$${Number(row.price).toFixed(2)}</td>`+
+        `<td style="padding:9px;text-align:right;color:#3ddc84">+${Number(row.gap_pct).toFixed(1)}%</td>`+
+        `<td style="padding:9px;text-align:right">${Number(row.volume).toLocaleString()}</td>`+
+        `<td style="padding:9px;text-align:right">$${Number(row.dollar_volume).toLocaleString()}</td></tr>`).join('');
+      body.querySelectorAll('[data-ticker]').forEach(row=>row.onclick=()=>selectScannerTicker(row.dataset.ticker));
+    }
+    const stamp = new Date((data.updated || Date.now()/1000)*1000).toLocaleTimeString();
+    status.textContent = `${tickers.length} matching ticker${tickers.length===1?'':'s'} · Updated ${stamp} · Refreshes every 30 seconds`;
+    if(scannerAlarmEnabled){
+      const now = Date.now();
+      tickers.forEach(row=>{
+        const last = scannerLastSpoken.get(row.ticker);
+        if(last === undefined || now-last >= 600000){
+          announceScannerTicker(row.ticker);
+          scannerLastSpoken.set(row.ticker, now);
+        }
+      });
+    }
+  } catch(e){
+    status.textContent = 'Scanner error: ' + e.message;
+  } finally {
+    scannerBusy = false;
+  }
+}
+
+function selectScannerTicker(ticker){
+  if(!/^[A-Z0-9.\\-]{1,10}$/.test(ticker || '')) return;
+  $('#t').value = ticker;
+  closeScanner();
+  run(false);
+}
+
+if($('#scanner_open_btn')) $('#scanner_open_btn').onclick = openScanner;
+if($('#scanner_close_btn')) $('#scanner_close_btn').onclick = closeScanner;
+if($('#scanner_refresh_btn')) $('#scanner_refresh_btn').onclick = refreshScanner;
+if($('#scanner_alarm')) $('#scanner_alarm').onchange = e=>{
+  scannerAlarmEnabled = e.target.checked;
+  localStorage.setItem('gap_scanner_alarm', scannerAlarmEnabled ? '1' : '0');
+  if(scannerAlarmEnabled){
+    if('speechSynthesis' in window) window.speechSynthesis.resume();
+    refreshScanner();
+  } else if('speechSynthesis' in window){
+    window.speechSynthesis.cancel();
+  }
+};
 if($('#multiday_stats_btn')) $('#multiday_stats_btn').onclick = () => {
   $('#admin_view').style.display = 'none';
   $('#app_main').style.display = 'block';
@@ -3765,6 +3940,7 @@ window.addEventListener('keydown', e => {
   if(e.key === 'Escape'){
     closeChartModal();
     closeUserPopup();
+    closeScanner();
     if($('#pwd_modal').style.display === 'flex'){
       $('#pwd_modal').style.display = 'none';
     }
