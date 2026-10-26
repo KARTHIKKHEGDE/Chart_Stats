@@ -3867,37 +3867,25 @@ def runner_analyze():
         return jsonify({"error": str(e)}), 500
 
 
-# ----------------------------------------------------------------------------- dilution_notes integration
-# Load dilution_notes.py from the same directory so Dilution Notes runs inside
-# this process — no separate server on port 5000 needed.
-_dn = None
-try:
-    import importlib.util as _ilu
-    _spec = _ilu.spec_from_file_location(
-        "dilution_notes",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "dilution_notes.py")
-    )
-    _dn = _ilu.module_from_spec(_spec)
-    _spec.loader.exec_module(_dn)
-except Exception as _dn_err:
-    print(f"[dilution_notes] Could not load: {_dn_err}")
-
-
-@app.route("/dilution")
-@app.route("/notes")
-def dilution_index():
-    if _dn is None:
-        return "dilution_notes.py not found next to chart_stats.py", 404
-    from flask import Response as _FR
-    return _FR(_dn.PAGE, mimetype="text/html")
-
-
+# ----------------------------------------------------------------------------- Finviz Dilution API
+@app.route("/api/dilution")
 @app.route("/api/notes")
 @app.route("/api/dilution/notes")
-def api_notes():
-    if _dn is None:
-        return jsonify({"error": "dilution_notes not available"}), 404
-    return _dn.notes()
+def api_dilution():
+    t = (request.args.get("ticker") or request.args.get("t") or "").strip().upper()
+    if not t:
+        return jsonify({"error": "Missing ticker parameter"}), 400
+    try:
+        import finviz_dilution
+        refresh = request.args.get("refresh", "0") in ("1", "true", "True")
+        fdata, ferr = finviz_dilution.fetch_finviz_dilution_data(t, refresh=refresh)
+        if fdata:
+            report_lines = finviz_dilution.build_finviz_dilution_report(fdata)
+            report_text = "\n".join(report_lines) if isinstance(report_lines, list) else str(report_lines)
+            return jsonify({"ok": True, "ticker": t, "text": report_text, "lines": report_lines, "data": fdata})
+        return jsonify({"ok": False, "ticker": t, "error": ferr or "No data found"}), 404
+    except Exception as e:
+        return jsonify({"ok": False, "ticker": t, "error": str(e)}), 500
 
 
 if __name__ == "__main__":
