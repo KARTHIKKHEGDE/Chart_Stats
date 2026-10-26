@@ -19,6 +19,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+try:
+    from curl_cffi import requests as _curl_requests
+except ImportError:
+    _curl_requests = None
+
 CACHE_DIR = Path(__file__).resolve().parent / ".cache" / "finviz"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_TTL = 3600  # 1 hour cache for Finviz pages (bypassable via refresh=True)
@@ -32,15 +37,48 @@ _session.headers.update({
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://finviz.com/",
     "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
     "Sec-Ch-Ua-Mobile": "?0",
     "Sec-Ch-Ua-Platform": '"Windows"',
     "Sec-Fetch-Dest": "document",
     "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-Site": "same-origin",
     "Sec-Fetch-User": "?1",
     "Upgrade-Insecure-Requests": "1",
 })
+
+
+def _fetch_html(url: str) -> Tuple[int, str]:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://finviz.com/",
+        "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    # 1. Try curl_cffi first with Chrome TLS fingerprint impersonation (bypasses Cloudflare JA3 block on Render/AWS)
+    if _curl_requests is not None:
+        try:
+            r = _curl_requests.get(url, headers=headers, impersonate="chrome124", timeout=20)
+            return r.status_code, r.text
+        except Exception:
+            pass
+
+    # 2. Fallback to requests Session
+    r = _session.get(url, headers=headers, timeout=20)
+    return r.status_code, r.text
 
 
 def _fmt_money(val: Optional[float], decimals: int = 2) -> str:
@@ -91,15 +129,13 @@ def fetch_finviz_dilution_data(ticker: str, refresh: bool = False) -> Tuple[Opti
 
     url = f"https://finviz.com/stock?b=2&p=m&t={t}&ta=1&ty=di"
     try:
-        r = _session.get(url, timeout=18)
-        if r.status_code == 404:
+        status_code, html = _fetch_html(url)
+        if status_code == 404:
             return None, f"Ticker {t} not found on Finviz (HTTP 404)"
-        if r.status_code == 429:
+        if status_code == 429:
             return None, "Finviz rate limit reached (HTTP 429). Please try again shortly."
-        if r.status_code != 200:
-            return None, f"Finviz returned HTTP {r.status_code}"
-
-        html = r.text
+        if status_code != 200:
+            return None, f"Finviz returned HTTP {status_code}"
         # Search for schema_version JSON payload
         m = re.search(r'(\{"schema_version":\s*1.*?\})</script>', html, re.DOTALL)
         if not m:
