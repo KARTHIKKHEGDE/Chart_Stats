@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, send_file
 from urllib.parse import quote
 
 def _load_env_file():
@@ -1506,6 +1506,11 @@ def index():
     return Response(HTML, mimetype="text/html")
 
 
+@app.route("/favicon.svg")
+def favicon():
+    return send_file(Path(__file__).with_name("favicon.svg"), mimetype="image/svg+xml", max_age=86400)
+
+
 ALLOWED_USERS = {"karthik", "locke", "gunshow"}
 ADMIN_USERS = {"karthik", "locke"}
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
@@ -2420,6 +2425,7 @@ def scanner_market_scan():
 
 HTML = r"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Gap-Up Fade Analyzer</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 :root{--g:#3ddc84;--r:#ff5a5a;--y:#ffd23f;--b:#6cc4ff;--c:#29a8ff;--w:#e8e8e8;--d:#8a8a8a;--line:#333}
