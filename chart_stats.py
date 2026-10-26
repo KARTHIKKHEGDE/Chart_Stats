@@ -2237,22 +2237,26 @@ def _fetch_yahoo_news(ticker):
         r"globe.?newswire|pr\s*newswire|business\s*wire|newsfile|access\s*newswire|"
         r"the.?newswire|newsdirect|eqs.?news|cnw.?group", re.I
     )
-    try:
-        search = yf.Search(query=f"{ticker} press release", news_count=20,
-                           enable_fuzzy_query=False, timeout=8)
-        for article in (search.news or []):
-            content = article.get("content") if isinstance(article.get("content"), dict) else {}
-            provider = content.get("provider") or article.get("publisher") or ""
-            if isinstance(provider, dict):
-                provider = provider.get("displayName") or provider.get("name") or ""
-            provider = str(provider)
-            if not press_wire_pattern.search(provider):
-                continue
-            item = _normalize_yahoo_news(article, "Press release")
-            if item:
-                items.append(item)
-    except Exception:
-        pass
+    # Yahoo's ticker search returns issuer wire releases; appending "press
+    # release" can produce an empty result even when the ticker search has PRs.
+    for query in (ticker, f"{ticker} press release"):
+        try:
+            search = yf.Search(query=query, news_count=20,
+                               enable_fuzzy_query=False, timeout=8)
+            for article in (search.news or []):
+                content = article.get("content") if isinstance(article.get("content"), dict) else {}
+                provider = content.get("provider") or article.get("publisher") or ""
+                if isinstance(provider, dict):
+                    provider = provider.get("displayName") or provider.get("name") or ""
+                if not press_wire_pattern.search(str(provider)):
+                    continue
+                item = _normalize_yahoo_news(article, "Press release")
+                if item:
+                    items.append(item)
+        except Exception:
+            pass
+        if len(items) >= 2:
+            break
 
     unique, seen = [], set()
     for item in items:
@@ -4531,7 +4535,11 @@ async function refreshScanner(){
         const repeatDue = last === undefined || now-last >= 300000;
         const news = (row.news || [])[0];
         const newsKey = news ? (news.url || news.title) : '';
-        const freshNews = scannerSettings.news_enabled && !!newsKey && scannerNewsSpoken.get(row.ticker) !== newsKey;
+        const publishedAt = news ? Date.parse(news.published || '') : NaN;
+        const newsAge = now - publishedAt;
+        const newsWithin48Hours = Number.isFinite(publishedAt) && newsAge >= 0 && newsAge <= 48*60*60*1000;
+        const freshNews = scannerSettings.news_enabled && newsWithin48Hours && !!newsKey &&
+          scannerNewsSpoken.get(row.ticker) !== newsKey;
         const newEvents = (row.approaches || []).filter(event=>{
           const enabled = event.code === 'VWAP' ? scannerSettings.vwap_enabled :
             event.code === 'BONE_2M' ? scannerSettings.bone_2m_enabled :
@@ -4547,9 +4555,8 @@ async function refreshScanner(){
         });
         if(repeatDue || freshNews || newEvents.length){
           const extras = [];
-          if(scannerSettings.news_enabled && news && (freshNews || repeatDue)){
-            const label = news.kind === 'Press release' ? 'Press release' : 'News';
-            extras.push(`${label}: ${String(news.title || '').slice(0,180)}`);
+          if(freshNews && news){
+            extras.push(`Latest press release: ${String(news.title || '').slice(0,180)}`);
             scannerNewsSpoken.set(row.ticker, newsKey);
           }
           newEvents.forEach(event=>extras.push(event.label));
