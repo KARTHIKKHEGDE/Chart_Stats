@@ -283,7 +283,36 @@ def minute_df(t, day):
     return poly_frame(rows) if rows else None
 
 
-# ----------------------------------------------------------------------------- live (Yahoo)
+def _alpaca_live_df(t):
+    key = os.getenv("ALPACA_API_KEY")
+    sec = os.getenv("ALPACA_API_SECRET")
+    if not (key and sec):
+        return None
+    try:
+        now_et = dt.datetime.now(ET)
+        today_start_et = dt.datetime(now_et.year, now_et.month, now_et.day, 4, 0, tzinfo=ET)
+        start_utc = today_start_et.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        feed = os.getenv("ALPACA_FEED", "sip")
+        url = f"https://data.alpaca.markets/v2/stocks/{t.upper()}/bars?timeframe=1Min&start={start_utc}&limit=10000&feed={feed}"
+        headers = {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": sec}
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            j = r.json()
+            bars = j.get("bars") or []
+            if bars:
+                rows = []
+                for b in bars:
+                    dt_et = dt.datetime.fromisoformat(b["t"].replace("Z", "+00:00")).astimezone(ET)
+                    rows.append({"Datetime": dt_et, "o": float(b["o"]), "h": float(b["h"]), "l": float(b["l"]), "c": float(b["c"]), "v": float(b["v"])})
+                df = pd.DataFrame(rows).set_index("Datetime")
+                if not df.empty and df["v"].sum() > 0:
+                    return df
+    except Exception:
+        pass
+    return None
+
+
+# ----------------------------------------------------------------------------- live (Alpaca / Yahoo)
 def live_snapshot(t):
     tk = yf.Ticker(t.replace(".", "-"))
     df = tk.history(period="5d", interval="1m", prepost=True, auto_adjust=False)
@@ -305,45 +334,51 @@ def live_snapshot(t):
     except Exception:
         info = {}
 
-    # Extract total session volume from multiple robust fallback fields in Yahoo Finance
-    session_vol = None
-    fast = getattr(tk, "fast_info", None)
-    for v_cand in [
-        info.get("volume"),
-        info.get("regularMarketVolume"),
-        getattr(fast, "last_volume", None) if fast else None,
-        getattr(fast, "day_volume", None) if fast else None,
-        info.get("dayVolume")
-    ]:
-        if v_cand is not None:
+    # Prefer 100% exact real-time tick volume from Alpaca SIP feed if configured in .env
+    alp_df = _alpaca_live_df(t)
+    if alp_df is not None and not alp_df.empty:
+        d = alp_df
+        session_vol = float(d["v"].sum())
+    else:
+        # Fallback to Yahoo Finance total volume
+        session_vol = None
+        fast = getattr(tk, "fast_info", None)
+        for v_cand in [
+            info.get("volume"),
+            info.get("regularMarketVolume"),
+            getattr(fast, "last_volume", None) if fast else None,
+            getattr(fast, "day_volume", None) if fast else None,
+            info.get("dayVolume")
+        ]:
+            if v_cand is not None:
+                try:
+                    fv = float(v_cand)
+                    if fv > 0:
+                        session_vol = fv
+                        break
+                except Exception:
+                    pass
+
+        if not session_vol:
             try:
-                fv = float(v_cand)
-                if fv > 0:
-                    session_vol = fv
-                    break
+                today_dly = dly[dly.index.date == day]
+                if not today_dly.empty and float(today_dly["Volume"].iloc[-1]) > 0:
+                    session_vol = float(today_dly["Volume"].iloc[-1])
             except Exception:
                 pass
 
-    if not session_vol:
-        try:
-            today_dly = dly[dly.index.date == day]
-            if not today_dly.empty and float(today_dly["Volume"].iloc[-1]) > 0:
-                session_vol = float(today_dly["Volume"].iloc[-1])
-        except Exception:
-            pass
-
-    # If intraday 1-minute volume is empty/0 (common in Yahoo Finance premarket feed for microcaps),
-    # but Yahoo reports the actual session volume, distribute the volume across the session candles
-    # based on price volatility (h - l) so VWAP, candle volume, pm_vol, and pm_dv are populated accurately!
-    df_vol_sum = float(d["v"].sum()) if "v" in d.columns else 0.0
-    if (df_vol_sum == 0.0 or (session_vol and df_vol_sum < 0.2 * session_vol)) and session_vol and session_vol > 0:
-        n_bars = len(d)
-        if n_bars > 0:
-            ranges = (d["h"] - d["l"]).clip(lower=0.0001)
-            rng_sum = ranges.sum()
-            weights = (ranges / rng_sum) if rng_sum > 0 else (1.0 / n_bars)
-            d = d.copy()
-            d["v"] = (weights * session_vol).round()
+        # If intraday 1-minute volume is empty/0 (common in Yahoo Finance premarket feed for microcaps),
+        # but Yahoo reports the actual session volume, distribute the volume across the session candles
+        # based on price volatility (h - l) so VWAP, candle volume, pm_vol, and pm_dv are populated!
+        df_vol_sum = float(d["v"].sum()) if "v" in d.columns else 0.0
+        if (df_vol_sum == 0.0 or (session_vol and df_vol_sum < 0.2 * session_vol)) and session_vol and session_vol > 0:
+            n_bars = len(d)
+            if n_bars > 0:
+                ranges = (d["h"] - d["l"]).clip(lower=0.0001)
+                rng_sum = ranges.sum()
+                weights = (ranges / rng_sum) if rng_sum > 0 else (1.0 / n_bars)
+                d = d.copy()
+                d["v"] = (weights * session_vol).round()
 
     return {"date": day, "df": d, "pc": hist[-1]["c"], "hist": hist,
             "avg20": float(np.mean([r["v"] for r in hist[-20:]])), "cur": float(d["c"].iloc[-1]),
