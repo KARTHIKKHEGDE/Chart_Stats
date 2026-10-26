@@ -1650,8 +1650,6 @@ def auth_set_password():
     pwd = (data.get("password") or "").strip()
     if not u or not pwd:
         return jsonify({"error": "Username and password required"}), 400
-    if len(pwd) < 4:
-        return jsonify({"error": "Password must be at least 4 characters"}), 400
     user = _db_get_user(u)
     if not user:
         return jsonify({"error": "User not authorized"}), 404
@@ -1935,7 +1933,7 @@ canvas{display:block;width:100%}
     <!-- Step 2: Create Password -->
     <div id="gate_step_create" style="display:none">
       <div style="font-size:13px;color:#aaa;margin-bottom:14px">Welcome! Create a password for your account:</div>
-      <input id="gate_new_pwd" type="password" placeholder="New password (min 4 chars)" style="width:100%;height:44px;font-size:15px;margin-bottom:10px;padding:0 14px;background:#000;border:1px solid #444;color:#fff;text-align:center;box-sizing:border-box" autocomplete="new-password">
+      <input id="gate_new_pwd" type="password" placeholder="New password" style="width:100%;height:44px;font-size:15px;margin-bottom:10px;padding:0 14px;background:#000;border:1px solid #444;color:#fff;text-align:center;box-sizing:border-box" autocomplete="new-password">
       <input id="gate_new_pwd2" type="password" placeholder="Confirm password" style="width:100%;height:44px;font-size:15px;margin-bottom:18px;padding:0 14px;background:#000;border:1px solid #444;color:#fff;text-align:center;box-sizing:border-box" autocomplete="new-password">
       <button id="gate_create_btn" style="width:100%;height:46px;font-size:16px;background:#0a1a0a;border:1px solid #3ddc84;color:#3ddc84;cursor:pointer;font-weight:bold">Create Password & Enter</button>
     </div>
@@ -2210,7 +2208,7 @@ async function submitGate(){
 async function submitCreate(){
   const pwd  = ($('#gate_new_pwd').value||'').trim();
   const pwd2 = ($('#gate_new_pwd2').value||'').trim();
-  if(pwd.length < 4){ gateErr('Password must be at least 4 characters.'); return; }
+  if(!pwd){ gateErr('Please enter a password.'); return; }
   if(pwd !== pwd2){ gateErr('Passwords do not match.'); return; }
   gateErr('');
   gateSpinner(true);
