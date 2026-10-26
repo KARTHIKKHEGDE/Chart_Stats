@@ -4349,6 +4349,9 @@ let scannerSettingsSaveTimer = null;
 let scannerAlarmEnabled = false;
 let scannerVoiceVolume = 100;
 let scannerVoices = [];
+let scannerSpeechQueue = [];
+let scannerSpeechActive = false;
+let scannerSpeechTimer = null;
 
 function startScannerPolling(){
   if(scannerTimer) return;
@@ -4493,21 +4496,48 @@ function announceScannerTicker(ticker, extra=''){
     $('#scanner_status').textContent = 'Voice alarm is unavailable in this browser.';
     return;
   }
-  // Punctuation gives browser voices natural pauses between the ticker and
-  // each alert detail; plain spaces were often spoken as one rushed phrase.
-  const tickerSpoken = ticker.toUpperCase().split('').join(', ');
-  const details = String(extra || '').replace(/\s+/g, ' ').trim();
-  const spoken = tickerSpoken + (details ? '. ' + details.replace(/\s*\.\s*/g, '. ') : '.');
-  const utterance = new SpeechSynthesisUtterance(spoken);
-  utterance.rate = 1.0;
-  utterance.pitch = 1.08;
-  utterance.volume = scannerVoiceVolume / 100;
-  const voiceId = $('#scanner_voice_select').value;
-  const feminineVoice = scannerVoices.find(voice => /\b(aria|ava|amy|emma|jenny|june|karen|kimberly|moira|natasha|olivia|salli|samantha|sara|serena|sophie|susan|tessa|victoria|zira)\b|female/i.test(voice.name));
-  const selectedVoice = scannerVoices.find(voice => voice.voiceURI === voiceId);
-  const voice = selectedVoice || feminineVoice || scannerVoices.find(item => /^en([_-]|$)/i.test(item.lang));
-  if(voice){ utterance.voice = voice; utterance.lang = voice.lang; }
-  window.speechSynthesis.speak(utterance);
+  scannerSpeechQueue.push({ticker: ticker.toUpperCase().split('').join(' '), extra: String(extra || '').replace(/\s+/g, ' ').trim()});
+  playNextScannerAnnouncement();
+}
+
+function playNextScannerAnnouncement(){
+  if(scannerSpeechActive || !scannerSpeechQueue.length || !scannerAlarmEnabled) return;
+  const item = scannerSpeechQueue.shift();
+  scannerSpeechActive = true;
+  let voiceDone = false;
+  const finish = ()=>{
+    if(voiceDone) return;
+    voiceDone = true;
+    scannerSpeechTimer = setTimeout(()=>{
+      scannerSpeechTimer = null;
+      scannerSpeechActive = false;
+      playNextScannerAnnouncement();
+    }, 2000);
+  };
+  const speak = (text, onDone)=>{
+    const utterance = new SpeechSynthesisUtterance(text);
+    let completed = false;
+    const complete = ()=>{ if(completed) return; completed = true; onDone(); };
+    utterance.rate = 1.0;
+    utterance.pitch = 1.08;
+    utterance.volume = scannerVoiceVolume / 100;
+    const voiceId = $('#scanner_voice_select').value;
+    const feminineVoice = scannerVoices.find(voice => /\b(aria|ava|amy|emma|jenny|june|karen|kimberly|moira|natasha|olivia|salli|samantha|sara|serena|sophie|susan|tessa|victoria|zira)\b|female/i.test(voice.name));
+    const selectedVoice = scannerVoices.find(voice => voice.voiceURI === voiceId);
+    const voice = selectedVoice || feminineVoice || scannerVoices.find(candidate => /^en([_-]|$)/i.test(candidate.lang));
+    if(voice){ utterance.voice = voice; utterance.lang = voice.lang; }
+    utterance.onend = complete;
+    utterance.onerror = complete;
+    window.speechSynthesis.speak(utterance);
+  };
+  speak(item.ticker + '.', ()=>{
+    if(!item.extra || !scannerAlarmEnabled){ finish(); return; }
+    scannerSpeechTimer = setTimeout(()=>{
+      scannerSpeechTimer = null;
+      if(!scannerAlarmEnabled){ finish(); return; }
+      speak(item.extra, finish);
+    }, 1000);
+  });
 }
 
 function loadScannerApproachHistory(sessionDate){
@@ -4587,8 +4617,9 @@ async function refreshScanner(){
         const publishedAt = news ? Date.parse(news.published || '') : NaN;
         const newsAge = now - publishedAt;
         const newsWithin48Hours = Number.isFinite(publishedAt) && newsAge >= 0 && newsAge <= 48*60*60*1000;
-        const freshNews = scannerSettings.news_enabled && newsWithin48Hours && !!newsKey &&
-          scannerNewsSpoken.get(row.ticker) !== newsKey;
+        const newsState = scannerNewsSpoken.get(row.ticker);
+        const newsDue = scannerSettings.news_enabled && newsWithin48Hours && !!newsKey &&
+          (!newsState || newsState.key !== newsKey || now-newsState.at >= 15*60*1000);
         const newEvents = (row.approaches || []).filter(event=>{
           const enabled = event.code === 'VWAP' ? scannerSettings.vwap_enabled :
             event.code === 'BONE_2M' ? scannerSettings.bone_2m_enabled :
@@ -4602,11 +4633,11 @@ async function refreshScanner(){
           saveScannerApproach(id);
           return true;
         });
-        if(repeatDue || freshNews || newEvents.length){
+        if(repeatDue || newsDue || newEvents.length){
           const extras = [];
-          if(freshNews && news){
-            extras.push(`Latest press release: ${String(news.title || '').slice(0,180)}`);
-            scannerNewsSpoken.set(row.ticker, newsKey);
+          if(newsDue && news){
+            extras.push(`Latest news. ${String(news.title || '').slice(0,180)}`);
+            scannerNewsSpoken.set(row.ticker, {key: newsKey, at: now});
           }
           newEvents.forEach(event=>extras.push(event.label));
           announceScannerTicker(row.ticker, extras.join('. '));
@@ -4638,6 +4669,9 @@ if($('#scanner_alarm')) $('#scanner_alarm').onchange = e=>{
     if('speechSynthesis' in window) window.speechSynthesis.resume();
     refreshScanner();
   } else if('speechSynthesis' in window){
+    scannerSpeechQueue = [];
+    scannerSpeechActive = false;
+    if(scannerSpeechTimer){ clearTimeout(scannerSpeechTimer); scannerSpeechTimer = null; }
     window.speechSynthesis.cancel();
   }
 };
