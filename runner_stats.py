@@ -912,7 +912,7 @@ h2{font-size:12px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;ma
   <button id="go">Get stats</button>
   <button id="rf">Refresh</button>
   <button id="cp">Copy all</button>
-  <button id="nav_dilution_btn" style="height:36px;padding:0 14px;border:2px solid #a855f7;background:#240038;color:#d8b4fe;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px;margin-left:4px" title="Dilution Notes, Cash/Runway & SEC Filings Tool">📑 Dilution Notes</button>
+  <button id="nav_dilution_btn" style="height:36px;padding:0 14px;border:2px solid #a855f7;background:#240038;color:#d8b4fe;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px;margin-left:4px" title="Open the Finviz Dilution Analysis page">↗ Finviz Dilution</button>
   <span id="st" class="status"></span>
   <button class="back-btn" id="backbtn">← Back to Chart Stats</button>
 </div>
@@ -937,10 +937,10 @@ document.getElementById('backbtn').onclick=()=>{
   }
 };
 
-// Dilution Notes button - opens /dilution page in a new tab with current ticker
+// Open Finviz's native dilution analysis for the current ticker.
 document.getElementById('nav_dilution_btn').onclick=()=>{
   const t = ($('t').value||'').trim().toUpperCase() || (activeTab||'');
-  const url = t ? '/dilution?ticker='+encodeURIComponent(t) : '/dilution';
+  const url = t ? 'https://finviz.com/stock?b=2&p=m&t='+encodeURIComponent(t)+'&ta=1&ty=di' : 'https://finviz.com/';
   window.open(url, '_blank');
 };
 

@@ -32,7 +32,7 @@ import pandas as pd
 import requests
 import yfinance as yf
 from flask import Flask, request, jsonify, Response
-import finviz_dilution
+from urllib.parse import quote
 
 def _load_env_file():
     env_file = Path(__file__).resolve().parent / ".env"
@@ -1064,7 +1064,7 @@ def fdate(d):
 
 
 # ----------------------------------------------------------------------------- report
-def build_report(t, live, lm, lpath, lctx, events, S, notes, dilution=None):
+def build_report(t, live, lm, lpath, lctx, events, S, notes):
     simset = {id(e) for e in S}
     st = stats(S)
     g = grade(st)
@@ -1288,6 +1288,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, dilution=None):
         "pd": "[D] ENTRY MODELS (similar setups)",
         "pe": "[E] DILUTION & FINANCING RISK",
     }
+    dilution_url = f"https://finviz.com/stock?b=2&p=m&t={quote(t, safe='')}&ta=1&ty=di"
     text = [f"Ticker: {t}", f"Current Day: {day_display}", head["sub"], "=" * 42,
             f"Final Fade Grade:  {head['grade']}   ({head['score']})",
             f"Sample Size: {st['n']} similar setups of {len(events)} gap-ups",
@@ -1301,14 +1302,12 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, dilution=None):
         text += ["", T["pd"], tbl_text(mcols, mrows)]
     if notes:
         text += [""] + [f"Note: {n}" for n in notes]
-    if dilution:
-        text += ["", "=" * 42, T["pe"], "=" * 42, "", dilution]
-
+    text += ["", "=" * 42, T["pe"], "=" * 42, "", f"Open Finviz Dilution Analysis: {dilution_url}"]
     return {"head": head, "titles": T, "p1": {"left": left, "right": right}, "tables": tables,
             "evcharts": evch, "model_names": ["Short at open", "PM high rejection", "5m low break",
                                               "First red 5m candle", "VWAP loss (post-HOD)"],
             "pa": p3, "pb": p4, "pc": p5, "pd": {"cols": mcols, "rows": mrows},
-            "chart": chart, "dilution": dilution, "text": "\n".join(text)}
+            "chart": chart, "dilution_url": dilution_url, "text": "\n".join(text)}
 
 
 def clean(o):
@@ -1350,7 +1349,6 @@ def run_job(job, t, refresh):
         _splits_res = [None]
         _type_res   = [None]
         _sec_res    = [None]
-        _dilution_res = [None]
         _err        = [None]
 
         def _get_live():
@@ -1383,20 +1381,12 @@ def run_job(job, t, refresh):
             except Exception:
                 _sec_res[0] = []
 
-        def _get_dilution():
-            try:
-                fdata, ferr = finviz_dilution.fetch_finviz_dilution_data(t, refresh=refresh)
-                _dilution_res[0] = (fdata, ferr)
-            except Exception as ex:
-                _dilution_res[0] = (None, str(ex))
-
         stage1_threads = [
             threading.Thread(target=_get_live,      daemon=True),
             threading.Thread(target=_get_daily,     daemon=True),
             threading.Thread(target=_get_splits,    daemon=True),
             threading.Thread(target=_get_type,      daemon=True),
             threading.Thread(target=_get_sec,       daemon=True),
-            threading.Thread(target=_get_dilution,  daemon=True),
         ]
         for th in stage1_threads:
             th.start()
@@ -1505,20 +1495,7 @@ def run_job(job, t, refresh):
         notes.append("Historical data is point-in-time for tickers still listed; delisted names are missing, "
                      "which makes fades look weaker than reality (survivorship bias).")
 
-        # Automatically include Dilution Notes below technical analysis
-        finviz_data, finviz_err = _dilution_res[0] if _dilution_res[0] else (None, None)
-        dilution_lines = []
-        if finviz_data:
-            dilution_lines = finviz_dilution.build_finviz_dilution_report(finviz_data, current_price=live["cur"])
-        else:
-            dilution_lines = [
-                "DILUTION RISK",
-                f"- Finviz status: {finviz_err or 'No structured dilution data on Finviz for ' + t} [UNAVAILABLE]",
-                "- Dilution instruments were not assessed because Finviz data could not be retrieved."
-            ]
-        dilution_text = "\n".join(dilution_lines)
-
-        job["result"] = clean(build_report(t, live, lm, lpath, lctx, events, S, notes, dilution=dilution_text))
+        job["result"] = clean(build_report(t, live, lm, lpath, lctx, events, S, notes))
         job["status"] = "done"
     except Exception as ex:
         job["status"] = "error"
@@ -2805,11 +2782,11 @@ function renderTab(tab, r, isRefresh){
      `<div class="panel"><div class="ttl">${esc(T.pc)}</div>${kv(r.pc)}</div></div>`;
   if(r.pd.rows.length) o += `<div class="panel"><div class="ttl">${esc(T.pd)}</div>${table(r.pd.cols,r.pd.rows,null,false)}</div>`;
 
-  if(r.dilution) {
+  if(r.dilution_url) {
     o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">`+
          `<span>${esc(T.pe || '[E] DILUTION &amp; FINANCING RISK')}</span>`+
-         `<span style="font-size:12px;color:#a855f7;font-weight:normal">Primary Source: Finviz Dilution Analysis</span></div>`+
-         `<pre style="white-space:pre-wrap;word-break:break-word;line-height:1.6;font-size:13.5px;color:#ddd;margin:0;font-family:Consolas,'SF Mono',Menlo,monospace">${esc(r.dilution)}</pre></div>`;
+         `<a href="${esc(r.dilution_url)}" target="_blank" rel="noopener noreferrer" style="font-size:13px;color:#d8b4fe;font-weight:normal">Open Finviz Dilution Analysis ↗</a></div>`+
+         `<div style="font-size:13px;color:#aaa">View current dilution risk, cash position, history, and financing instruments on Finviz.</div></div>`;
   }
 
   tab.container.innerHTML = o;
@@ -3865,29 +3842,6 @@ def runner_analyze():
         ))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
-# ----------------------------------------------------------------------------- Finviz Dilution API
-@app.route("/api/dilution")
-@app.route("/api/notes")
-@app.route("/api/dilution/notes")
-def api_dilution():
-    t = (request.args.get("ticker") or request.args.get("t") or "").strip().upper()
-    if not t:
-        return jsonify({"error": "Missing ticker parameter"}), 400
-    try:
-        import finviz_dilution
-        refresh = request.args.get("refresh", "0") in ("1", "true", "True")
-        fdata, ferr = finviz_dilution.fetch_finviz_dilution_data(t, refresh=refresh)
-        if fdata:
-            report_lines = finviz_dilution.build_finviz_dilution_report(fdata)
-            report_text = "\n".join(report_lines) if isinstance(report_lines, list) else str(report_lines)
-            return jsonify({"ok": True, "ticker": t, "text": report_text, "lines": report_lines, "data": fdata})
-        error = ferr or "No data found"
-        status = 404 if "not found on Finviz (HTTP 404)" in error else 502
-        return jsonify({"ok": False, "ticker": t, "error": error}), status
-    except Exception as e:
-        return jsonify({"ok": False, "ticker": t, "error": str(e)}), 500
 
 
 if __name__ == "__main__":
