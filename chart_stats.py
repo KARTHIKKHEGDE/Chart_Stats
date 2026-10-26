@@ -31,6 +31,7 @@ import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
+from html.parser import HTMLParser
 from flask import Flask, request, jsonify, Response, send_file
 from urllib.parse import quote
 
@@ -2201,6 +2202,14 @@ _scanner_details = {}
 _scanner_details_lock = threading.RLock()
 _scanner_details_inflight = set()
 _scanner_details_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="scanner-details")
+_finviz_http = requests.Session()
+_finviz_http.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+})
+_finviz_session_lock = threading.Lock()
+_finviz_session_warmed = False
 
 
 def _normalize_yahoo_news(article, kind):
@@ -2268,23 +2277,75 @@ def _get_scanner_news(ticker):
 
 
 def _finviz_dilution_labels(ticker):
-    """Best-effort extraction of Finviz's displayed History and Cash Need labels."""
-    url = f"https://finviz.com/stock?b=2&p=m&t={quote(ticker, safe='')}&ta=1&ty=di"
-    response = requests.get(url, headers={
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36",
-        "Referer": "https://finviz.com/",
-    }, timeout=8)
-    if response.status_code != 200:
+    """Read the History and Cash Need labels from Finviz's rendered dilution page."""
+    global _finviz_session_warmed
+    ticker = re.sub(r"[^A-Z0-9.\-]", "", str(ticker).upper())
+    if not ticker:
         return {"history": None, "cash_need": None}
-    plain = html.unescape(re.sub(r"<[^>]+>", " ", response.text))
-    plain = re.sub(r"\s+", " ", plain)
-    result = {"history": None, "cash_need": None}
-    for label, field in (("History", "history"), ("Cash Need", "cash_need")):
-        match = re.search(rf"\b{re.escape(label)}\b\s*:?[\s\u00a0]*(High|Medium|Moderate|Low)\b", plain, re.I)
-        if match:
-            result[field] = "High" if match.group(1).lower() == "high" else "Not High"
-    return result
 
+    class _FinvizText(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.parts = []
+
+        def handle_data(self, data):
+            if data and data.strip():
+                self.parts.append(data)
+
+        def handle_starttag(self, tag, attrs):
+            for key, value in attrs:
+                if value and (key in ("aria-label", "title", "content", "alt") or key.startswith("data-")):
+                    self.parts.append(value)
+
+    # Establish a normal Finviz cookie session before requesting the stock page.
+    with _finviz_session_lock:
+        if not _finviz_session_warmed:
+            try:
+                _finviz_http.get("https://finviz.com/", timeout=8)
+            except requests.RequestException:
+                pass
+            _finviz_session_warmed = True
+    page_params = (
+        {"p": "m", "t": ticker, "ta": 1, "ty": "di"},
+        {"b": 2, "p": "m", "t": ticker, "ta": 1, "ty": "di"},
+    )
+    errors = []
+    combined = {"history": None, "cash_need": None}
+    for params in page_params:
+        with _finviz_session_lock:
+            response = _finviz_http.get(
+                "https://finviz.com/stock", params=params,
+                headers={"Referer": "https://finviz.com/", "Sec-Fetch-Dest": "document",
+                         "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "same-origin",
+                         "Upgrade-Insecure-Requests": "1"},
+                timeout=12,
+            )
+        if response.status_code != 200:
+            errors.append(f"HTTP {response.status_code}")
+            continue
+        parser = _FinvizText()
+        parser.feed(response.text)
+        plain = html.unescape(" ".join(parser.parts))
+        plain = re.sub(r"\s+", " ", plain).strip()
+        labels = (("Dilution Risk", "dilution_risk"), ("Offering", "offering"),
+                  ("Cash Need", "cash_need"), ("Overhang", "overhang"), ("History", "history"))
+        label_pattern = re.compile(r"\b(?:" + "|".join(re.escape(label) for label, _ in labels) + r")\b", re.I)
+        for label, field in labels:
+            for match in re.finditer(rf"\b{re.escape(label)}\b", plain, re.I):
+                next_label = label_pattern.search(plain, match.end())
+                end = min(match.end() + 90, next_label.start() if next_label else len(plain))
+                value = re.match(r"\s*[:\-]?\s*(Severe|High|Medium|Moderate|Low)\b", plain[match.end():end], re.I)
+                if value:
+                    level = value.group(1).lower()
+                    combined[field] = "High" if level in ("severe", "high") else "Not High"
+                    break
+        if combined["history"] is not None and combined["cash_need"] is not None:
+            return combined
+    if errors and combined["history"] is None and combined["cash_need"] is None:
+        raise RuntimeError("Finviz returned " + ", ".join(errors))
+    if combined["history"] is None or combined["cash_need"] is None:
+        raise RuntimeError("Finviz dilution labels were not found in its page")
+    return combined
 
 def _scanner_approaches(ticker, previous_close):
     """Return first-pullback approach alerts before price crosses VWAP/21 EMA."""
@@ -2353,6 +2414,7 @@ def _refresh_scanner_details(ticker, previous_close):
             cached = _scanner_details.setdefault(ticker, {})
             technical_at = cached.get("technical_at", 0)
             finviz_at = cached.get("finviz_at", 0)
+            finviz_ok = cached.get("finviz_ok", False)
             news_at = cached.get("news_at", 0)
         if now - technical_at >= 20:
             try:
@@ -2361,14 +2423,17 @@ def _refresh_scanner_details(ticker, previous_close):
                 approaches = []
             with _scanner_details_lock:
                 _scanner_details.setdefault(ticker, {}).update(approaches=approaches, technical_at=now)
-        if now - finviz_at >= 14400:
+        if now - finviz_at >= (14400 if finviz_ok else 180):
             try:
                 labels = _finviz_dilution_labels(ticker)
-            except Exception:
+            except Exception as exc:
+                app.logger.warning("Finviz dilution scrape failed for %s: %s", ticker, exc)
                 labels = {"history": None, "cash_need": None}
+            success = labels.get("history") is not None and labels.get("cash_need") is not None
             with _scanner_details_lock:
                 _scanner_details.setdefault(ticker, {}).update(
-                    history_risk=labels.get("history"), cash_need=labels.get("cash_need"), finviz_at=now
+                    history_risk=labels.get("history"), cash_need=labels.get("cash_need"),
+                    finviz_at=now, finviz_ok=success
                 )
         if now - news_at >= 300:
             try:
@@ -2386,7 +2451,7 @@ def _queue_scanner_details(row):
     with _scanner_details_lock:
         cached = _scanner_details.setdefault(ticker, {})
         due = (now - cached.get("technical_at", 0) >= 20
-               or now - cached.get("finviz_at", 0) >= 14400
+               or now - cached.get("finviz_at", 0) >= (14400 if cached.get("finviz_ok") else 180)
                or now - cached.get("news_at", 0) >= 300)
         if not due or ticker in _scanner_details_inflight:
             return
