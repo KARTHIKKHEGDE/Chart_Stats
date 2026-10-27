@@ -953,7 +953,7 @@ h2{font-size:12px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;ma
   <button id="csvDownload" disabled>Download CSV</button>
   <button id="csvDelete" disabled style="color:var(--r);border-color:var(--r)">Delete CSV</button>
   <span id="csvState" class="csvState">Loading your saved CSVs…</span>
-  <span class="csvHint">Each row contains only the requested rally and FRD summary fields, with one dollar-move column for each manually drawn leg. Your CSV autosaves privately to your account.</span>
+  <span class="csvHint">Share and dollar amounts are in millions, rounded to two decimals; prices retain four decimals. Premarket volume / float is included as a multiple. Your CSV autosaves privately to your account.</span>
 </div>
 <!-- Multi-Ticker Tab Bar -->
 <div id="tab_bar" style="display:none;padding:8px 34px 0;background:#050505;border-bottom:1px solid var(--line);gap:6px;overflow-x:auto;align-items:center;flex-wrap:nowrap"></div>
@@ -1247,6 +1247,41 @@ let csvCollections=[],selectedCsvId='',csvAccountStorage=false,csvSaveQueue=Prom
 function csvState(text,isError=false){const el=$('csvState');if(el){el.textContent=text;el.style.color=isError?'var(--r)':'var(--g)'}}
 function readLocalCsvWorkspace(){try{return JSON.parse(localStorage.getItem(CSV_LOCAL_KEY)||'{}')}catch{return {}}}
 function writeLocalCsvWorkspace(){try{localStorage.setItem(CSV_LOCAL_KEY,JSON.stringify({collections:csvCollections,selected:selectedCsvId}))}catch{}}
+function csvRound(value,digits=2){const n=Number(value);return Number.isFinite(n)?Number(n.toFixed(digits)):value}
+function migrateCsvCollection(file){
+  let changed=false;
+  const renames={
+    'Float Before Rally (Shares)':['Float Before Rally (Millions of Shares)',1e-6],
+    'Market Capitalization Before Rally (USD)':['Market Capitalization Before Rally (USD Millions)',1e-6],
+    'Market Capitalization at Rally High (USD)':['Market Capitalization at Rally High (USD Millions)',1e-6],
+    'Dollar Volume from Rally Start to High (USD)':['Dollar Volume from Rally Start to High (USD Millions)',1e-6],
+    'First Red Day Premarket Volume (Shares)':['First Red Day Premarket Volume (Millions of Shares)',1e-6],
+    'First Red Day Premarket Dollar Volume (USD)':['First Red Day Premarket Dollar Volume (USD Millions)',1e-6],
+    'First Red Day Regular-Market Volume (Shares)':['First Red Day Regular-Market Volume (Millions of Shares)',1e-6],
+    'First Red Day Regular-Market Dollar Volume (USD)':['First Red Day Regular-Market Dollar Volume (USD Millions)',1e-6],
+    'First Red Day Open-to-High Volume (Shares)':['First Red Day Open-to-High Volume (Millions of Shares)',1e-6]
+  };
+  file.rows=(file.rows||[]).map(original=>{
+    const row={...original};
+    Object.entries(renames).forEach(([old,[next,scale]])=>{
+      if(!(old in row))return;
+      if(!(next in row)){const raw=Number(row[old]);row[next]=Number.isFinite(raw)?csvRound(raw*scale):row[old]}
+      delete row[old];changed=true;
+    });
+    ['Float Rotation (Start to Rally High, Times)','Rally-High Market Cap / Pre-Rally Market Cap (Times)','First Red Day Gap Up (%)'].forEach(key=>{
+      if(key in row&&row[key]!==''&&row[key]!=null){const value=csvRound(row[key]);if(value!==row[key]){row[key]=value;changed=true}}
+    });
+    Object.keys(row).filter(key=>/^Leg \d+ Dollar Move per Share$/.test(key)).forEach(key=>{const value=csvRound(row[key]);if(value!==row[key]){row[key]=value;changed=true}});
+    if(row['First Red Day Premarket Volume (Millions of Shares)']!=null&&row['Float Before Rally (Millions of Shares)']!=null&&!('First Red Day Premarket Volume / Float (Times)' in row)){
+      const pm=Number(row['First Red Day Premarket Volume (Millions of Shares)']),flt=Number(row['Float Before Rally (Millions of Shares)']);
+      row['First Red Day Premarket Volume / Float (Times)']=Number.isFinite(pm)&&Number.isFinite(flt)&&flt>0?csvRound(pm/flt):'';changed=true;
+    }
+    return row;
+  });
+  if(changed)file.columns=[...new Set(file.rows.flatMap(row=>Object.keys(row)))];
+  return changed;
+}
+function migrateCsvCollections(){let changed=false;csvCollections.forEach(file=>{if(migrateCsvCollection(file))changed=true});return changed}
 function currentCsvSetup(){const tab=activeTab&&openTabs[activeTab];if(tab)return tab.isRunning?null:tab.data||null;return LAST||null}
 function renderCsvWorkspace(){
   const select=$('csvSelect');if(!select)return;
@@ -1257,7 +1292,7 @@ function renderCsvWorkspace(){
   $('csvDownload').disabled=!hasSelection;$('csvDelete').disabled=!hasSelection;$('csvAppend').disabled=!hasSelection||!currentCsvSetup();writeLocalCsvWorkspace();
 }
 async function loadCsvWorkspace(){
-  const local=readLocalCsvWorkspace();csvCollections=Array.isArray(local.collections)?local.collections:[];selectedCsvId=local.selected||'';renderCsvWorkspace();
+  const local=readLocalCsvWorkspace();csvCollections=Array.isArray(local.collections)?local.collections:[];selectedCsvId=local.selected||'';migrateCsvCollections();renderCsvWorkspace();
   try{
     const q=new URLSearchParams({user:CSV_USER,token:CSV_TOKEN}),response=await fetch(CSV_API+'?'+q),data=await response.json();
     if(!response.ok)throw new Error(data.error||'Account CSVs unavailable');csvAccountStorage=data.storage==='account';
@@ -1266,8 +1301,10 @@ async function loadCsvWorkspace(){
     // Keep this browser's saved collections when the server has no account
     // storage configured; an empty server response must not erase local data.
     if(csvAccountStorage||!csvCollections.length)csvCollections=remote;
+    const migrated=migrateCsvCollections();
     selectedCsvId=local.selected||csvCollections[0]?.id||'';renderCsvWorkspace();
     csvState(csvAccountStorage?'Account autosave ready':'Browser-only autosave');
+    if(migrated)await saveCsvWorkspace();
   }catch(error){csvAccountStorage=false;csvCollections=Array.isArray(local.collections)?local.collections:[];selectedCsvId=local.selected||'';renderCsvWorkspace();csvState(csvCollections.length?'Browser-only autosave · account sync unavailable':'Account sync unavailable; CSVs will save in this browser',true)}
 }
 function saveCsvWorkspace(){
@@ -1291,24 +1328,25 @@ function csvSetupRow(){
   };
   const tab=openTabs[ticker],legs=(_chartState&&activeTab===ticker&&Array.isArray(_chartState.legs))?_chartState.legs:(tab?.legs||[]);
   row['Number of Legs']=legs.length;
-  legs.forEach((leg,index)=>{row['Leg '+(index+1)+' Dollar Move per Share']=Number(leg.hiPx)-Number(leg.loPx)});
+  legs.forEach((leg,index)=>{row['Leg '+(index+1)+' Dollar Move per Share']=csvRound(Number(leg.hiPx)-Number(leg.loPx))});
   Object.assign(row,{
-    'Float Before Rally (Shares)':s.float_before_rally??'',
-    'Float Rotation (Start to Rally High, Times)':s.float_rotation_start_to_high??'',
-    'Market Capitalization Before Rally (USD)':s.market_cap_before_rally??'',
-    'Market Capitalization at Rally High (USD)':s.market_cap_at_rally_high??'',
-    'Rally-High Market Cap / Pre-Rally Market Cap (Times)':s.market_cap_high_to_before_multiple??'',
-    'Dollar Volume from Rally Start to High (USD)':s.dollar_volume_start_to_high??'',
-    'First Red Day Gap Up (%)':s.frd_gap==null?'':s.frd_gap*100,
-    'First Red Day Premarket Volume (Shares)':s.frd_premarket_volume??'',
-    'First Red Day Premarket Dollar Volume (USD)':s.frd_premarket_dollar_volume??'',
-    'First Red Day Regular-Market Volume (Shares)':s.frd_regular_market_volume??'',
-    'First Red Day Regular-Market Dollar Volume (USD)':s.frd_regular_market_dollar_volume??'',
-    'First Red Day Open-to-High Volume (Shares)':s.frd_open_to_high_volume??'',
-    'First Red Day Open Price (USD)':s.frd_open??'',
-    'First Red Day High Price (USD)':s.frd_high??'',
-    'First Red Day Low Price (USD)':s.frd_low??'',
-    'First Red Day Close Price (USD)':s.frd_close??'',
+    'Float Before Rally (Millions of Shares)':s.float_before_rally==null?'':csvRound(s.float_before_rally/1e6),
+    'Float Rotation (Start to Rally High, Times)':s.float_rotation_start_to_high==null?'':csvRound(s.float_rotation_start_to_high),
+    'Market Capitalization Before Rally (USD Millions)':s.market_cap_before_rally==null?'':csvRound(s.market_cap_before_rally/1e6),
+    'Market Capitalization at Rally High (USD Millions)':s.market_cap_at_rally_high==null?'':csvRound(s.market_cap_at_rally_high/1e6),
+    'Rally-High Market Cap / Pre-Rally Market Cap (Times)':s.market_cap_high_to_before_multiple==null?'':csvRound(s.market_cap_high_to_before_multiple),
+    'Dollar Volume from Rally Start to High (USD Millions)':s.dollar_volume_start_to_high==null?'':csvRound(s.dollar_volume_start_to_high/1e6),
+    'First Red Day Gap Up (%)':s.frd_gap==null?'':csvRound(s.frd_gap*100),
+    'First Red Day Premarket Volume (Millions of Shares)':s.frd_premarket_volume==null?'':csvRound(s.frd_premarket_volume/1e6),
+    'First Red Day Premarket Volume / Float (Times)':s.frd_premarket_volume!=null&&s.float_before_rally?csvRound(s.frd_premarket_volume/s.float_before_rally):'',
+    'First Red Day Premarket Dollar Volume (USD Millions)':s.frd_premarket_dollar_volume==null?'':csvRound(s.frd_premarket_dollar_volume/1e6),
+    'First Red Day Regular-Market Volume (Millions of Shares)':s.frd_regular_market_volume==null?'':csvRound(s.frd_regular_market_volume/1e6),
+    'First Red Day Regular-Market Dollar Volume (USD Millions)':s.frd_regular_market_dollar_volume==null?'':csvRound(s.frd_regular_market_dollar_volume/1e6),
+    'First Red Day Open-to-High Volume (Millions of Shares)':s.frd_open_to_high_volume==null?'':csvRound(s.frd_open_to_high_volume/1e6),
+    'First Red Day Open Price (USD)':s.frd_open==null?'':csvRound(s.frd_open,4),
+    'First Red Day High Price (USD)':s.frd_high==null?'':csvRound(s.frd_high,4),
+    'First Red Day Low Price (USD)':s.frd_low==null?'':csvRound(s.frd_low,4),
+    'First Red Day Close Price (USD)':s.frd_close==null?'':csvRound(s.frd_close,4),
     'First Red Day High-of-Day Time (IST)':s.frd_hod_time_ist||''
   });
   return row;
@@ -1323,7 +1361,7 @@ function downloadSelectedCsv(){
   const file=selectedCsv();if(!file)return;
   const columns=[...(file.columns||[])];(file.rows||[]).forEach(row=>Object.keys(row).forEach(key=>{if(!columns.includes(key))columns.push(key)}));
   const text=[columns.map(csvCell).join(','),...(file.rows||[]).map(row=>columns.map(col=>csvCell(row[col])).join(','))].join('\r\n');
-  const url=URL.createObjectURL(new Blob(['\ufeff'+text],{type:'text/csv;charset=utf-8'})),a=document.createElement('a');
+  const url=URL.createObjectURL(new Blob([text],{type:'text/csv;charset=utf-8'})),a=document.createElement('a');
   a.href=url;a.download=file.name.replace(/[\\/:*?"<>|]/g,'_')+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 $('csvSelect').onchange=()=>{selectedCsvId=$('csvSelect').value;renderCsvWorkspace()};
