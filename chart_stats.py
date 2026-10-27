@@ -526,15 +526,15 @@ def path_full(df, pc, full):
 
 
 def bars2(df):
-    """2-minute OHLCV + continuous VWAP, 04:00 -> 16:00 ET, for the per-event charts."""
+    """1-minute OHLCV + continuous VWAP, 04:00 -> 16:00 ET, for interactive chart timeframes."""
     mm = df.index.hour * 60 + df.index.minute
     s = df[(mm >= PM_START) & (mm < RG_END)]
     if s.empty:
         return None
     tp = (s.h + s.l + s.c) / 3
     vw = ((tp * s.v).cumsum() / s.v.cumsum().replace(0, np.nan)).ffill()
-    b = s.resample("2min").agg({"o": "first", "h": "max", "l": "min", "c": "last", "v": "sum"}).dropna(subset=["o"])
-    vb = vw.resample("2min").last().reindex(b.index)
+    b = s
+    vb = vw.reindex(b.index)
     t = (b.index.hour * 60 + b.index.minute).tolist()
     return {"t": [int(x) for x in t], "o": b.o.round(4).tolist(), "h": b.h.round(4).tolist(),
             "l": b.l.round(4).tolist(), "c": b.c.round(4).tolist(),
@@ -3099,6 +3099,12 @@ canvas{display:block;width:100%}
 .ev_zoom_hint{position:absolute;top:6px;right:8px;background:rgba(18,18,18,0.92);border:1px solid #29a8ff;color:#29a8ff;font-size:11px;padding:2px 7px;border-radius:3px;opacity:0;transition:opacity 0.15s;pointer-events:none;z-index:2}
 .evc:hover .ev_zoom_hint{opacity:1}
 .evt{font-size:13px;margin-bottom:2px}
+.evhead{display:flex;align-items:center;justify-content:space-between;gap:6px;min-height:24px;margin-bottom:2px}
+.evhead .evt{margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.evcontrols{display:flex;align-items:center;gap:3px;flex:none}
+.evnav{width:22px;height:21px;padding:0;font-size:15px;line-height:18px;border:1px solid #333;color:#aaa;background:#101010}
+.evnav:hover{color:#6cc4ff;border-color:#29a8ff}
+.evtf{height:21px;margin:0 0 0 2px;padding:0 3px;font-size:11px;border-color:#333;color:#aaa;background:#101010}
 .tag{border:1px solid var(--y);color:var(--y);padding:0 6px;font-size:11px;margin-left:8px}
 @media(max-width:1100px){.three{grid-template-columns:1fr}.two{grid-template-columns:1fr}.two>div+div{border-left:0;padding-left:14px}.evgrid{grid-template-columns:1fr}}
 #ag_tip{position:fixed;z-index:2147483647;background:#111;border:1px solid #444;color:#e0e0e0;font-size:12px;padding:7px 11px;border-radius:4px;max-width:300px;line-height:1.5;pointer-events:none;opacity:0;transition:opacity 0.15s;box-shadow:0 4px 16px rgba(0,0,0,0.7);white-space:pre-wrap;display:block}
@@ -3917,7 +3923,7 @@ function renderTab(tab, r, isRefresh){
      `<div style="display:flex;align-items:center;flex-wrap:wrap">${esc(T.p6)}<select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
      (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/20 EMA cloud + BB)</label></div>`+
      `<span style="font-size:12px;color:#29a8ff;font-weight:normal">🔍 Click any chart to enlarge</span></div>`+
-     `<div class="evgrid">`+tab.EV.map((c,i)=>`<div class="evc" onclick="openChartModal(${i})" title="Click to view large"><div class="ev_zoom_hint">🔍 Click to enlarge</div><div class="evt">${esc(c.title)}${c.sim?'':'<span class="d"> (not in similar set)</span>'}</div><canvas id="ev${i}"></canvas></div>`).join('')+
+  `<div class="evgrid">`+tab.EV.map((c,i)=>`<div class="evc" data-ev-slot="${i}" onclick="openChartModal(${i})" title="Click to view large"><div class="ev_zoom_hint">🔍 Click to enlarge</div><div class="evhead"><div class="evt" id="evtitle${i}"></div><div class="evcontrols"><button class="evnav" data-step="-1" title="Previous chart">‹</button><button class="evnav" data-step="1" title="Next chart">›</button><select class="evtf" title="Timeframe"><option>1m</option><option selected>2m</option><option>5m</option><option>15m</option></select></div></div><canvas id="ev${i}"></canvas></div>`).join('')+
      `<\/div><div class="foot"><span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance.">━ VWAP<\/span>  <span class="y" data-tip="Pre-market High — highest price before the US market open. Common fade target.">┅ PM high<\/span>  <span class="d" data-tip="Previous Close — yesterday’s close. Gap % is measured from here.">┅ prev close<\/span> &nbsp; <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period EMA on 2-min closes. Fast trend line.">━ EMA9<\/span> <span style="color:#ffa500" data-tip="EMA 20 — 20-period EMA on 2-min closes. Slower trend line. Bearish when EMA9 drops below it.">━ EMA20<\/span> <span class="g" data-tip="Bone Zone cloud — shaded between EMA9 &amp; EMA20. Green = bullish. Red = bearish.">▒<\/span><span class="r">▒<\/span> cloud <span class="d" data-tip="Bollinger Bands (20-period, 2 std dev). Shows expected volatility range on the 2-min chart.">━ BB(20,2)<\/span> &nbsp; <span data-tip="SELL signal — short entry triggered by an entry model.">▼ SELL<\/span> &nbsp; <span data-tip="BUY / Cover signal — close the short here. P&amp;L % shown next to it.">▲ BUY<\/span>. <span data-tip="Lighter shaded background = pre-market session (before 9:30 ET / 19:00 IST).">Shaded = premarket<\/span>. X axis = IST.<\/div><\/div>`;
 
   const pmGapText = Number.isFinite(r.chart.premarket_gap_pct)
@@ -3981,9 +3987,36 @@ function drawEvAll(evList, containerEl){
   const sel = selEl ? selEl.value : 'none';
   const bzEl = cEl.querySelector('#bz');
   const bzChecked = bzEl ? bzEl.checked : false;
-  list.forEach((c,i)=>{const cv=cEl.querySelector('#ev'+i); if(cv) drawEv(cv,c.chart,sel,bzChecked);});
+  list.forEach((c,i)=>{
+    const card=cEl.querySelector(`[data-ev-slot="${i}"]`), cv=cEl.querySelector('#ev'+i);
+    if(!card || !cv) return;
+    if(!Number.isInteger(card._chartIndex)) card._chartIndex=i;
+    if(!card._chartTf) card._chartTf='2m';
+    const item=list[card._chartIndex] || c;
+    const title=card.querySelector(`#evtitle${i}`), tf=card.querySelector('.evtf');
+    if(title) title.innerHTML=esc(item.title)+(item.sim?'':'<span class="d"> (not in similar set)</span>');
+    card.querySelectorAll('.evnav').forEach(btn=>{const next=card._chartIndex+Number(btn.dataset.step);btn.disabled=next<0||next>=list.length;btn.style.opacity=btn.disabled?'.35':'1';});
+    if(tf){tf.value=card._chartTf;tf.onclick=e=>e.stopPropagation();tf.onchange=e=>{e.stopPropagation();card._chartTf=tf.value;drawEvAll(list,cEl);};}
+    card.querySelectorAll('.evnav').forEach(btn=>{btn.onclick=e=>{e.stopPropagation();const next=card._chartIndex+Number(btn.dataset.step);if(next>=0&&next<list.length){card._chartIndex=next;drawEvAll(list,cEl);}};});
+    drawEv(cv,item.chart,sel,bzChecked,undefined,card._chartTf);
+  });
 }
-function drawEv(cv, c, sel, bzChecked, targetH){
+function aggregateEvBars(source, tf){
+  if(!source || !source.t || tf===1) return source;
+  const out={t:[],o:[],h:[],l:[],c:[],v:[],vw:[]}, groups=new Map();
+  for(let i=0;i<source.t.length;i++){
+    const start=Math.floor(source.t[i]/tf)*tf;
+    if(!groups.has(start)) groups.set(start,[]);
+    groups.get(start).push(i);
+  }
+  for(const [start,ids] of groups){
+    out.t.push(start);out.o.push(source.o[ids[0]]);out.h.push(Math.max(...ids.map(i=>source.h[i])));
+    out.l.push(Math.min(...ids.map(i=>source.l[i])));out.c.push(source.c[ids[ids.length-1]]);
+    out.v.push(ids.reduce((sum,i)=>sum+(source.v[i]||0),0));out.vw.push(source.vw[ids[ids.length-1]]);
+  }
+  return out;
+}
+function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m'){
   const parentW = (cv.parentElement && cv.parentElement.clientWidth) ? cv.parentElement.clientWidth : 0;
   const dpr = window.devicePixelRatio || 1;
   const W = Math.max(300, parentW - (targetH ? 0 : 16));
@@ -3997,7 +4030,7 @@ function drawEv(cv, c, sel, bzChecked, targetH){
   x.clearRect(0, 0, W, H);
   const isLarge = H > 450;
   x.font = (isLarge ? '13px' : '11px') + ' Consolas,monospace';
-  const b = c.bars;
+  const tf=parseInt(timeframe,10)||2, b=aggregateEvBars(c.bars,tf);
   if(!b || !b.t.length){
     x.fillStyle = '#8a8a8a';
     x.fillText('No intraday data', 10, 20);
@@ -4066,7 +4099,7 @@ function drawEv(cv, c, sel, bzChecked, targetH){
     let on = false;
     for(let i = 0; i < a.length; i++){
       if(a[i] == null){ on = false; continue; }
-      const xx = X(b.t[i] + 1), yy = Y(a[i]);
+      const xx = X(b.t[i] + tf / 2), yy = Y(a[i]);
       if(!on){ x.moveTo(xx, yy); on = true; } else x.lineTo(xx, yy);
     }
     x.stroke();
@@ -4088,9 +4121,9 @@ function drawEv(cv, c, sel, bzChecked, targetH){
     poly(BZ.bl, '#7a7a7a', 1);
     x.restore();
   }
-  const bw = Math.max(1, pw / 360 * 0.72), vmax = Math.max(...b.v) || 1;
+  const bw = Math.max(1, pw / (720 / tf) * 0.72), vmax = Math.max(...b.v) || 1;
   for(let i = 0; i < b.t.length; i++){
-    const xx = X(b.t[i] + 1), up = b.c[i] >= b.o[i], col = up ? '#3ddc84' : '#ff5a5a';
+    const xx = X(b.t[i] + tf / 2), up = b.c[i] >= b.o[i], col = up ? '#3ddc84' : '#ff5a5a';
     x.fillStyle = up ? 'rgba(61,220,132,0.55)' : 'rgba(255,90,90,0.55)';
     const vh = VH * b.v[i] / vmax;
     x.fillRect(xx - bw / 2, vy1 - vh, bw, vh);
@@ -4116,7 +4149,7 @@ function drawEv(cv, c, sel, bzChecked, targetH){
   for(let i = 0; i < b.t.length; i++){
     const v = b.vw[i];
     if(v == null){ on = false; continue; }
-    const xx = X(b.t[i] + 1), yy = Y(Math.min(hi, Math.max(lo, v)));
+    const xx = X(b.t[i] + tf / 2), yy = Y(Math.min(hi, Math.max(lo, v)));
     if(!on){ x.moveTo(xx, yy); on = true; } else x.lineTo(xx, yy);
   }
   x.stroke();
@@ -4152,12 +4185,15 @@ function drawEv(cv, c, sel, bzChecked, targetH){
 }
 
 let currentModalIndex = 0;
+let currentModalSlot = 0;
 
 window.openChartModal = function(i){
   if(!activeTab || !openTabs[activeTab]) return;
   const list = openTabs[activeTab].EV || [];
   if(!list.length || i < 0 || i >= list.length) return;
-  currentModalIndex = i;
+  currentModalSlot = i;
+  const card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${i}"]`);
+  currentModalIndex = card && Number.isInteger(card._chartIndex) ? card._chartIndex : i;
 
   const mainSig = openTabs[activeTab].container.querySelector('#sig');
   const mainBz = openTabs[activeTab].container.querySelector('#bz');
@@ -4196,7 +4232,8 @@ window.renderModalChart = function(){
   const sel = $('#cm_sig').value;
   const bzChecked = $('#cm_bz').checked;
 
-  drawEv(cv, item.chart, sel, bzChecked, targetH);
+  const card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);
+  drawEv(cv, item.chart, sel, bzChecked, targetH, card?card._chartTf:'2m');
 };
 
 window.nextModalChart = function(){
@@ -4204,6 +4241,9 @@ window.nextModalChart = function(){
   const list = openTabs[activeTab].EV || [];
   if(currentModalIndex < list.length - 1){
     currentModalIndex++;
+    const card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);
+    if(card) card._chartIndex=currentModalIndex;
+    drawEvAll(list,openTabs[activeTab].container);
     renderModalChart();
   }
 };
@@ -4211,6 +4251,11 @@ window.nextModalChart = function(){
 window.prevModalChart = function(){
   if(currentModalIndex > 0){
     currentModalIndex--;
+    if(activeTab && openTabs[activeTab]){
+      const list=openTabs[activeTab].EV||[], card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);
+      if(card) card._chartIndex=currentModalIndex;
+      drawEvAll(list,openTabs[activeTab].container);
+    }
     renderModalChart();
   }
 };
