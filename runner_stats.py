@@ -1286,11 +1286,17 @@ function toggleEnlarge(){
 async function copyChartImage(){
   const s = _chartState;
   if(!s || !s.cv) return;
-  const scale = Math.max(1, Math.min(3, 16000 / Math.max(s.TW, s.TH))), image = document.createElement('canvas');
-  image.width = Math.round(s.TW * scale); image.height = Math.round(s.TH * scale);
+  const wrap = document.getElementById('c15wrap');
+  const visibleW = Math.max(1, Math.min(s.TW, wrap?.clientWidth || s.TW));
+  const visibleH = Math.max(1, Math.min(s.TH, wrap?.clientHeight || s.TH));
+  const scrollX = wrap?.scrollLeft || 0, scrollY = wrap?.scrollTop || 0;
+  const scale = Math.max(1, Math.min(4, 16000 / Math.max(visibleW, visibleH)));
+  const image = document.createElement('canvas');
+  image.width = Math.ceil(visibleW * scale); image.height = Math.ceil(visibleH * scale);
   const imageCtx = image.getContext('2d');
   if(!imageCtx){_setStatus('Could not create the chart image.');return;}
   imageCtx.scale(scale, scale);
+  imageCtx.translate(-scrollX, -scrollY);
   const liveCtx = s.ctx;
   try{
     s.ctx = imageCtx;
@@ -1300,7 +1306,7 @@ async function copyChartImage(){
     if(!navigator.clipboard?.write || !window.ClipboardItem) throw new Error('Image clipboard is unavailable in this browser');
     const png = new Promise(resolve => image.toBlob(resolve, 'image/png'));
     await navigator.clipboard.write([new ClipboardItem({'image/png':png})]);
-    _setStatus(`Copied ${image.width} × ${image.height} high-resolution PNG.`);
+    _setStatus(`Copied visible chart · ${image.width} × ${image.height}px.`);
     setTimeout(()=>_setStatus(''),2500);
   }catch(error){
     s.ctx = liveCtx;
