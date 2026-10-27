@@ -714,8 +714,8 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
          ("HOD -> lowest low after HOD" + (f"  (close {pct(mb['close_from_h'])} from HOD)" if mb else "")) if frd else ""],
         ["Gap up (FRD)", pct(mb["gap"]) if mb else (pct(div(frd["o"] - prev_close, prev_close)) if frd else "-"),
          f"open {px(mb['o'] if mb else (frd['o'] if frd else None))} vs prev close {px(prev_close)}" if frd else ""],
-        ["Pre-mkt vol (FRD)", big(mb["pm_vol"]) if mb else "-", "04:00-09:30 ET / 13:30-19:00 IST"],
-        ["Pre-mkt $ vol (FRD)", usd(mb["pm_dv"]) if mb else "-", f"PM high {px(mb['pm_high'])} @ {mb['pm_high_t']} IST" if mb and mb.get("pm_high") else ""],
+        ["Pre-mkt vol (FRD)", big(mb["pm_vol"]) if mb else "-", (f"FRD total {big(mb['tot_vol'])} · PM $Vol {usd(mb['pm_dv'])}") if mb else "04:00-09:30 ET / 13:30-19:00 IST"],
+        ["Pre-mkt $ vol (FRD)", usd(mb["pm_dv"]) if mb else "-", (f"FRD total $Vol {usd(mb['tot_dv'])} · PM {pct(div(mb['pm_dv'], mb['tot_dv']), 0)} of day" + (f" · PM high {px(mb['pm_high'])} @ {mb['pm_high_t']} IST" if mb.get("pm_high") else "")) if mb else ""],
         ["O->H vol (FRD)", big(mb["o2h_vol"]) if mb else "-", (usd(mb["o2h_dv"]) + " dollar volume · Float rotation " + rot(div(mb["o2h_vol"], flt)) + " · Market cap @ HOD " + usd(shares * mb["h"] if shares else None)) if mb else ""],
         ["Date of First Red Day", dstr(frd["d"]) if frd else "none yet", ("rally high " + dstr(D[pi]["d"])) + (" (same day)" if fi == pi else "") if frd else ""],
     ]
