@@ -864,6 +864,7 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Runner Stats 
 *{box-sizing:border-box}
 body{margin:0;background:#000;color:var(--w);font:15px/1.45 Consolas,"SF Mono",Menlo,monospace}
 .bar{display:flex;gap:10px;padding:18px 34px;flex-wrap:wrap;align-items:center;border-bottom:1px solid var(--line)}
+.csvManager{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 34px;border-bottom:1px solid var(--line);background:#080a0d}.csvManager strong{color:var(--c);margin-right:6px}.csvManager select{min-width:190px}.csvManager input{width:180px}.csvManager .csvHint{color:var(--d);font-size:11px;flex-basis:100%;margin-left:0}.csvManager .csvState{color:var(--g);font-size:11px;min-width:120px}
 input[type=text],input[type=number]{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:17px;padding:0 12px;height:46px}
 input[type=date]{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:14px;padding:0 10px;height:46px;color-scheme:dark}
 #t{width:130px;text-transform:uppercase;font-size:19px;font-weight:bold}
@@ -917,6 +918,16 @@ h2{font-size:12px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;ma
 
   <span id="st" class="status"></span>
   <button class="back-btn" id="backbtn">← Back to Chart Stats</button>
+</div>
+<div class="csvManager" id="csvManager">
+  <strong>My setup CSVs</strong>
+  <select id="csvSelect" title="Choose the CSV to append to"><option value="">Select a CSV</option></select>
+  <input id="csvNewName" type="text" maxlength="80" placeholder="Name a new CSV">
+  <button id="csvCreate">Create CSV</button>
+  <button id="csvAppend" disabled>Append current setup</button>
+  <button id="csvDownload" disabled>Download CSV</button>
+  <span id="csvState" class="csvState">Loading your saved CSVs…</span>
+  <span class="csvHint">Collections are private to your account and autosave when you create a CSV or append a setup. Each row includes summary stats, deep stats, manual legs, and rally-day data.</span>
 </div>
 <!-- Multi-Ticker Tab Bar -->
 <div id="tab_bar" style="display:none;padding:8px 34px 0;background:#050505;border-bottom:1px solid var(--line);gap:6px;overflow-x:auto;align-items:center;flex-wrap:nowrap"></div>
@@ -987,6 +998,7 @@ function switchTab(t){
     LAST = tab.data;
     render(tab.data, tab.legs);
   }
+  renderCsvWorkspace();
 }
 
 function closeTab(t){
@@ -1051,6 +1063,7 @@ async function run(refresh){
   renderTabBar();
 
   $('st').textContent = 'loading…';
+  renderCsvWorkspace();
   if(!tab.data || refresh){
     $('out').innerHTML = `<span class="d">Loading runner stats for <b>${esc(t)}</b>…</span>`;
   }
@@ -1080,6 +1093,7 @@ async function run(refresh){
       if(activeTab === t){
         LAST = j;
         render(j, tab.legs);
+        renderCsvWorkspace();
         $('st').textContent = '';
       }
     }
@@ -1200,10 +1214,89 @@ async function copySectionImage(sectionId,label){
   }catch(error){$('st').textContent=`Could not copy ${label}: ${error.message||'check clipboard permissions'}`}
 }
 document.addEventListener('click',e=>{const button=e.target.closest('[data-copy-section]');if(button)copySectionImage(button.dataset.copySection,button.dataset.copyLabel||button.dataset.copySection)});
+const CSV_USER=(typeof ACCESS_USER!=='undefined'&&ACCESS_USER)||localStorage.getItem('gap_user')||'guest';
+const CSV_TOKEN=(typeof ACCESS_TOKEN!=='undefined'&&ACCESS_TOKEN)||localStorage.getItem('gap_token')||'';
+const CSV_API=API_BASE+'/csv-collections',CSV_LOCAL_KEY='runner_csv_workspace_'+CSV_USER.toLowerCase();
+let csvCollections=[],selectedCsvId='',csvAccountStorage=false,csvSaveQueue=Promise.resolve();
+function csvState(text,isError=false){const el=$('csvState');if(el){el.textContent=text;el.style.color=isError?'var(--r)':'var(--g)'}}
+function readLocalCsvWorkspace(){try{return JSON.parse(localStorage.getItem(CSV_LOCAL_KEY)||'{}')}catch{return {}}}
+function writeLocalCsvWorkspace(){try{localStorage.setItem(CSV_LOCAL_KEY,JSON.stringify({collections:csvCollections,selected:selectedCsvId}))}catch{}}
+function currentCsvSetup(){const tab=activeTab&&openTabs[activeTab];if(tab)return tab.isRunning?null:tab.data||null;return LAST||null}
+function renderCsvWorkspace(){
+  const select=$('csvSelect');if(!select)return;
+  select.replaceChildren(new Option('Select a CSV',''));
+  csvCollections.forEach(c=>select.add(new Option(c.name+' ('+(c.rows?.length||0)+')',c.id)));
+  if(!csvCollections.some(c=>c.id===selectedCsvId))selectedCsvId=csvCollections[0]?.id||'';
+  select.value=selectedCsvId;const hasSelection=!!csvCollections.find(c=>c.id===selectedCsvId);
+  $('csvDownload').disabled=!hasSelection;$('csvAppend').disabled=!hasSelection||!currentCsvSetup();writeLocalCsvWorkspace();
+}
+async function loadCsvWorkspace(){
+  const local=readLocalCsvWorkspace();csvCollections=Array.isArray(local.collections)?local.collections:[];selectedCsvId=local.selected||'';renderCsvWorkspace();
+  try{
+    const q=new URLSearchParams({user:CSV_USER,token:CSV_TOKEN}),response=await fetch(CSV_API+'?'+q),data=await response.json();
+    if(!response.ok)throw new Error(data.error||'Account CSVs unavailable');csvAccountStorage=data.storage==='account';
+    const remote=Array.isArray(data.collections)?data.collections:[];
+    if(!remote.length&&csvCollections.length&&csvAccountStorage){csvState('Migrating saved browser CSVs…');await saveCsvWorkspace();return}
+    // Keep this browser's saved collections when the server has no account
+    // storage configured; an empty server response must not erase local data.
+    if(csvAccountStorage||!csvCollections.length)csvCollections=remote;
+    selectedCsvId=local.selected||csvCollections[0]?.id||'';renderCsvWorkspace();
+    csvState(csvAccountStorage?'Account autosave ready':'Browser-only autosave');
+  }catch(error){csvAccountStorage=false;csvCollections=Array.isArray(local.collections)?local.collections:[];selectedCsvId=local.selected||'';renderCsvWorkspace();csvState(csvCollections.length?'Browser-only autosave · account sync unavailable':'Account sync unavailable; CSVs will save in this browser',true)}
+}
+function saveCsvWorkspace(){
+  csvCollections.forEach(c=>{c.updated_at=new Date().toISOString()});writeLocalCsvWorkspace();
+  const snapshot=JSON.stringify({user:CSV_USER,token:CSV_TOKEN,collections:csvCollections});
+  csvSaveQueue=csvSaveQueue.catch(()=>{}).then(async()=>{
+    try{const response=await fetch(CSV_API,{method:'POST',headers:{'Content-Type':'application/json'},body:snapshot}),data=await response.json();if(!response.ok)throw new Error(data.error||'Account save failed');csvAccountStorage=data.storage==='account';csvState(csvAccountStorage?'Autosaved to your account':'Autosaved in this browser')}
+    catch(error){csvAccountStorage=false;csvState('Saved in this browser only · '+(error.message||'account sync unavailable'),true)}
+  });
+  return csvSaveQueue;
+}
+function selectedCsv(){return csvCollections.find(c=>c.id===selectedCsvId)||null}
+function csvSetupRow(){
+  const j=currentCsvSetup();if(!j)return null;
+  const row={'Ticker':j.ticker||activeTab||$('t').value.trim().toUpperCase(),'Report summary':j.header||'','Rally start input':$('s').value,'FRD input':$('f').value,'Float override (M)':$('fl').value,'Added at':new Date().toLocaleString()};
+  (j.p1||[]).forEach(item=>{const label=String(item[0]||'').trim();if(!label)return;row['Key stat - '+label]=item[1]??'';if(item[2])row['Key stat details - '+label]=item[2]});
+  (j.p2||[]).forEach(section=>(section[1]||[]).forEach(metric=>{row['Deep stat - '+section[0]+' - '+metric[0]]=metric[1]??''}));
+  const legCard=$('legCard');if(legCard){row['Key stat - Leg']=legCard.querySelector('.v')?.textContent||row['Key stat - Leg'];row['Key stat details - Leg']=legCard.querySelector('.s')?.textContent||row['Key stat details - Leg']||''}
+  const cols=j.table?.cols||[],dailyRows=j.table?.rows||[];
+  dailyRows.forEach((values,index)=>cols.forEach((column,colIndex)=>{const name=String(column||'Row tag').trim();row['Rally day '+(index+1)+' - '+name]=values[colIndex]??''}));
+  if(_chartState&&activeTab===row.Ticker&&Array.isArray(_chartState.legs)){
+    const bars=_chartState.bars||[],flt=_chartState.data?.float_val,shares=_chartState.data?.shares_out;
+    _chartState.legs.forEach((leg,index)=>{
+      const lo=Math.min(leg.loI,leg.hiI),hi=Math.max(leg.loI,leg.hiI),subset=bars.slice(lo,hi+1),prefix='Manual leg '+(index+1)+' - ';
+      const vol=subset.reduce((sum,b)=>sum+(Number(b.v)||0),0),dvol=subset.reduce((sum,b)=>sum+(Number(b.dv??((Number(b.v)||0)*(Number(b.c)||Number(b.h))))||0),0);
+      row[prefix+'Price low']=fmtP(leg.loPx);row[prefix+'Price high']=fmtP(leg.hiPx);row[prefix+'Gain']=((leg.hiPx/leg.loPx-1)*100).toFixed(1)+'%';row[prefix+'Dollar move/share']=fmtP(leg.hiPx-leg.loPx);row[prefix+'Volume']=fmtV(vol);row[prefix+'Dollar volume']=fmtDv(dvol);row[prefix+'Float rotation']=fmtRot(vol,flt);row[prefix+'Market cap at high']=shares?fmtDv(shares*leg.hiPx):'-';row[prefix+'Duration']=subset.length+' bars (15min)';row[prefix+'Time window']=((bars[lo]?.t)||'')+' → '+((bars[hi]?.t)||'');
+    });
+  }
+  return row;
+}
+function csvCell(value){const text=String(value??'');return /[",\r\n]/.test(text)?'"'+text.replace(/"/g,'""')+'"':text}
+function downloadSelectedCsv(){
+  const file=selectedCsv();if(!file)return;
+  const columns=[...(file.columns||[])];(file.rows||[]).forEach(row=>Object.keys(row).forEach(key=>{if(!columns.includes(key))columns.push(key)}));
+  const text=[columns.map(csvCell).join(','),...(file.rows||[]).map(row=>columns.map(col=>csvCell(row[col])).join(','))].join('\r\n');
+  const url=URL.createObjectURL(new Blob(['\ufeff'+text],{type:'text/csv;charset=utf-8'})),a=document.createElement('a');
+  a.href=url;a.download=file.name.replace(/[\\/:*?"<>|]/g,'_')+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+$('csvSelect').onchange=()=>{selectedCsvId=$('csvSelect').value;renderCsvWorkspace()};
+$('csvCreate').onclick=async()=>{
+  const name=$('csvNewName').value.trim();if(!name){csvState('Enter a name for the CSV',true);return}
+  if(csvCollections.some(c=>c.name.toLowerCase()===name.toLowerCase())){csvState('A CSV with that name already exists',true);return}
+  const id=(crypto.randomUUID?crypto.randomUUID():'csv-'+Date.now()+'-'+Math.random().toString(36).slice(2));
+  csvCollections.push({id,name,columns:[],rows:[],updated_at:new Date().toISOString()});selectedCsvId=id;$('csvNewName').value='';renderCsvWorkspace();await saveCsvWorkspace();
+};
+$('csvAppend').onclick=async()=>{
+  const file=selectedCsv(),row=csvSetupRow();if(!file||!row){csvState('Load a setup and select a CSV first',true);return}
+  Object.keys(row).forEach(key=>{if(!file.columns.includes(key))file.columns.push(key)});file.rows.push(row);renderCsvWorkspace();await saveCsvWorkspace();
+};
+$('csvDownload').onclick=downloadSelectedCsv;
 ['t', 's', 'f', 'fl'].forEach(id => {
   const el = $(id);
   if(el) el.addEventListener('keydown', e => { if(e.key === 'Enter') run(false); });
 });
+loadCsvWorkspace();
 
 // Auto-read URL params if present
 const urlP = new URLSearchParams(window.location.search);

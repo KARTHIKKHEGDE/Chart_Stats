@@ -2236,8 +2236,11 @@ def _save_user_scanner_settings(username, settings):
     clean_settings = _normalize_scanner_settings(settings)
     existing = _db_get_user(username) or {}
     preserved = _parse_admin_scanner_settings(existing.get("scanner_settings"))
-    for visibility_key in (_APP_UI_VISIBILITY_KEY, _APP_UI_VISIBILITY_USER_KEY, _APP_UI_VISIBILITY_DEFAULT_KEY):
+    for visibility_key in (_APP_UI_VISIBILITY_KEY, _APP_UI_VISIBILITY_USER_KEY, _APP_UI_VISIBILITY_DEFAULT_KEY,
+                           "runner_csv_collections"):
         if isinstance(preserved.get(visibility_key), dict):
+            clean_settings[visibility_key] = preserved[visibility_key]
+        elif visibility_key == "runner_csv_collections" and isinstance(preserved.get(visibility_key), list):
             clean_settings[visibility_key] = preserved[visibility_key]
     local_error = None
     try:
@@ -6871,6 +6874,76 @@ def runner_analyze():
         ))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/runner/csv-collections", methods=["GET", "POST"])
+def runner_csv_collections():
+    body = request.get_json(silent=True) or {}
+    username = (request.args.get("user") or body.get("user") or "").strip().lower()
+    token = (request.args.get("token") or body.get("token") or "").strip()
+    if not username or not token or not _db_validate_session(username, token):
+        return jsonify({"error": "Session expired. Please sign in again."}), 401
+
+    record = _db_get_user(username) or {}
+    settings = record.get("scanner_settings")
+    if isinstance(settings, str):
+        try:
+            settings = json.loads(settings)
+        except Exception:
+            settings = {}
+    if not isinstance(settings, dict):
+        settings = {}
+
+    if request.method == "GET":
+        collections = settings.get("runner_csv_collections", [])
+        if not isinstance(collections, list):
+            collections = []
+        configured = bool((os.getenv("SUPABASE_URL") or SUPABASE_URL) and
+                          (os.getenv("SUPABASE_KEY") or SUPABASE_KEY))
+        return jsonify({"collections": collections, "storage": "account" if configured else "unavailable"})
+
+    if len(request.get_data(cache=True)) > 4_000_000:
+        return jsonify({"error": "CSV workspace exceeds the 4 MB account-storage limit."}), 413
+    collections = body.get("collections")
+    if not isinstance(collections, list) or len(collections) > 100:
+        return jsonify({"error": "CSV workspace must contain no more than 100 named files."}), 400
+    clean = []
+    ids = set()
+    for item in collections:
+        if not isinstance(item, dict):
+            return jsonify({"error": "Invalid CSV file entry."}), 400
+        collection_id = str(item.get("id") or "")[:80]
+        name = str(item.get("name") or "").strip()[:80]
+        columns, rows = item.get("columns"), item.get("rows")
+        if (not collection_id or collection_id in ids or not name or
+                not isinstance(columns, list) or len(columns) > 1000 or
+                not isinstance(rows, list) or len(rows) > 2000):
+            return jsonify({"error": "Invalid CSV file name, columns, or row count."}), 400
+        ids.add(collection_id)
+        clean_columns = list(dict.fromkeys(str(col)[:250] for col in columns if str(col).strip()))
+        clean_rows = []
+        for row in rows:
+            if not isinstance(row, dict):
+                return jsonify({"error": "CSV rows must be objects."}), 400
+            clean_rows.append({str(key)[:250]: str(value)[:5000] for key, value in row.items()})
+        clean.append({"id": collection_id, "name": name, "columns": clean_columns,
+                      "rows": clean_rows, "updated_at": str(item.get("updated_at") or "")[:40]})
+
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if not (sub_url and sub_key):
+        return jsonify({"error": "Account autosave is unavailable; use browser-local storage."}), 503
+    settings["runner_csv_collections"] = clean
+    try:
+        response = requests.patch(
+            f"{sub_url}/rest/v1/app_users?username=eq.{quote(username, safe='')}",
+            json={"scanner_settings": settings}, headers=_supabase_headers(), timeout=12
+        )
+        if response.status_code not in (200, 204):
+            return jsonify({"error": f"Account autosave failed (HTTP {response.status_code})."}), 502
+    except Exception as exc:
+        return jsonify({"error": f"Account autosave failed: {exc}"}), 502
+    return jsonify({"ok": True, "collections": clean, "storage": "account"})
 
 
 if __name__ == "__main__":
