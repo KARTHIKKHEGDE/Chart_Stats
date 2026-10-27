@@ -3945,8 +3945,8 @@ function renderTab(tab, r, isRefresh){
         const iso=/^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
         publishedDate=iso?`${iso[2]}/${iso[3]}/${iso[1]}`:(!Number.isNaN(parsed.getTime())?`${String(parsed.getUTCMonth()+1).padStart(2,'0')}/${String(parsed.getUTCDate()).padStart(2,'0')}/${parsed.getUTCFullYear()}`:'');
       }
-      const dateTag=publishedDate?`<span style="display:inline-block;margin-left:8px;padding:1px 6px;border:1px solid #294458;border-radius:3px;background:#0b151c;color:#9fc5dc;font-size:11px;white-space:nowrap">${esc(publishedDate)}</span>`:'';
-      return `<div style="padding:7px 0;border-bottom:1px solid #222"><span style="color:#ffd23f;font-size:12px">${esc(item.kind || 'News')}</span> · ${link}<span style="color:#777;font-size:12px"> — ${esc(item.publisher || 'Yahoo Finance')}</span>${dateTag}</div>`;
+      const dateTag=publishedDate?`<span style="display:inline-block;margin-right:8px;padding:1px 6px;border:1px solid #294458;border-radius:3px;background:#0b151c;color:#9fc5dc;font-size:11px;white-space:nowrap">${esc(publishedDate)}</span>`:'';
+      return `<div style="padding:7px 0;border-bottom:1px solid #222">${dateTag}${link}<span style="color:#777;font-size:12px"> — ${esc(item.publisher || 'Yahoo Finance')}</span></div>`;
     }).join('') : `<div class="foot">${esc(r.news_status || 'No press releases found on Yahoo Finance.')}</div>`) + `</div>`;
   o += `<div class="panel two"><div><div class="ttl">${esc(T.p1)}</div>${kv(r.p1.left)}</div><div>${kv(r.p1.right)}</div></div>`;
   if(r.open_hod_stats){
