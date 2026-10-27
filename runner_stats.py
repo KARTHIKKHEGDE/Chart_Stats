@@ -893,6 +893,7 @@ h2{font-size:12px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;ma
 .back-btn{margin-left:auto;border-color:var(--c);color:var(--c);font-size:13px;height:40px;padding:0 16px}.back-btn:hover{background:#001a33}
 #c15wrap{overflow-x:auto;border:1px solid var(--line);background:#070709;position:relative;margin-top:8px;user-select:none;scrollbar-color:#333 #070709}
 .btn-tool{font-size:12px;padding:2px 10px;height:28px;line-height:1;border-radius:2px;display:inline-flex;align-items:center;gap:4px}
+.copyHeading{display:flex;align-items:center;gap:12px}.copyHeading h2,.copyHeading h3{flex:1}.copyHeading .btn-tool{flex:none}
 .btn-tool:hover{filter:brightness(1.2)}
 .leg-pill{border:1px solid #444;padding:4px 10px;font-size:12px;background:#0a0a0c;display:inline-flex;align-items:center;gap:8px;border-radius:2px}
 
@@ -912,8 +913,8 @@ h2{font-size:12px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;ma
   <label>Float M (optional)<input id="fl" type="number" step="any" style="width:110px"></label>
   <button id="go">Get stats</button>
   <button id="rf">Refresh</button>
-  <button id="cp">Copy all</button>
-  <button id="cpimg" title="Copy the full report as a high-resolution PNG">Copy Details Image</button>
+
+
   <span id="st" class="status"></span>
   <button class="back-btn" id="backbtn">← Back to Chart Stats</button>
 </div>
@@ -1097,9 +1098,9 @@ async function run(refresh){
 function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 
 function render(j, restoredLegs){
-  let h='<div class="hdr">'+esc(j.header)+'</div>';
+  let h='<section class="copySection" id="keyStatsCopy"><div class="hdr">'+esc(j.header)+'</div>';
   if(j.alts&&j.alts.length)h+='<div class="alt">other rallies: '+j.alts.map(esc).join(' · ')+'</div>';
-  h+='<h2>Key stats</h2><div class="grid">'+j.p1.map(c=>'<div class="card" '+(c[0]==='Leg'?'id="legCard"':'')+'><div class="k">'+esc(c[0])+'</div><div class="v">'+esc(c[1])+'</div><div class="s">'+esc(c[2]||'')+'</div></div>').join('')+'</div>';
+  h+='<div class="copyHeading"><h2>Key stats</h2><button class="btn-tool" data-copy-section="keyStatsCopy" data-copy-label="Key Stats">Copy image</button></div><div class="grid">'+j.p1.map(c=>'<div class="card" '+(c[0]==='Leg'?'id="legCard"':'')+'><div class="k">'+esc(c[0])+'</div><div class="v">'+esc(c[1])+'</div><div class="s">'+esc(c[2]||'')+'</div></div>').join('')+'</div></section>';
   
   if(j.chart_15&&j.chart_15.bars&&j.chart_15.bars.length){
     h+='<div id="c15section">'
@@ -1126,11 +1127,11 @@ function render(j, restoredLegs){
     h+='<div id="legRibbon" style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap"></div>';
     h+='<div id="c15wrap"></div>';
     h+='</div>'; // end c15section
-    h+='<div id="legPanel" style="margin-top:14px"></div>';
+    h+='<div id="legPanel" class="copySection" style="margin-top:14px"></div>';
   }
   
-  h+='<h2>Deep stats</h2><div class="g2">'+j.p2.map(s=>'<div class="sec"><h3>'+esc(s[0])+'</h3>'+s[1].map(r=>'<div class="row"><span>'+esc(r[0])+'</span><span>'+esc(r[1])+'</span></div>').join('')+'</div>').join('')+'</div>';
-  h+='<h2>Rally days (start → FRD)</h2><div class="scroll"><table><thead><tr>'+j.table.cols.map(c=>'<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>';
+  h+='<section class="copySection" id="deepStatsCopy"><div class="copyHeading"><h2>Deep stats</h2><button class="btn-tool" data-copy-section="deepStatsCopy" data-copy-label="Deep Stats">Copy image</button></div><div class="g2">'+j.p2.map(s=>'<div class="sec"><h3>'+esc(s[0])+'</h3>'+s[1].map(r=>'<div class="row"><span>'+esc(r[0])+'</span><span>'+esc(r[1])+'</span></div>').join('')+'</div>').join('')+'</div></section>';
+  h+='<section class="copySection" id="rallyDaysCopy"><div class="copyHeading"><h2>Rally days (start → FRD)</h2><button class="btn-tool" data-copy-section="rallyDaysCopy" data-copy-label="Rally Days">Copy image</button></div><div class="scroll"><table><thead><tr>'+j.table.cols.map(c=>'<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>';
   j.table.rows.forEach(r=>{
     const tag=(r[r.length-1]||'').trim();
     let rc='';
@@ -1139,8 +1140,7 @@ function render(j, restoredLegs){
     else if(tag.includes('FRD'))rc='style="color:var(--r)"';
     h+='<tr '+rc+'>'+r.map(c=>'<td>'+esc(c)+'</td>').join('')+'</tr>';
   });
-  h+='</tbody></table></div>';
-  h+=j.notes.map(n=>'<div class="note">* '+esc(n)+'</div>').join('');
+  h+='</tbody></table>'+j.notes.map(n=>'<div class="note">* '+esc(n)+'</div>').join('')+'</div></section>';
   $('out').innerHTML=h;
   
   if(j.chart_15&&j.chart_15.bars&&j.chart_15.bars.length){
@@ -1155,54 +1155,30 @@ function render(j, restoredLegs){
   }
 }
 
-function copyAll(){
-  if(!LAST)return;const j=LAST;let t=j.header+'\n\nKEY STATS\n';
-  t+=j.p1.map(c=>c[0]+': '+c[1]+(c[2]?'  ('+c[2]+')':'')).join('\n');
-  j.p2.forEach(s=>{t+='\n\n'+s[0].toUpperCase()+'\n'+s[1].map(r=>r[0]+': '+r[1]).join('\n')});
-  navigator.clipboard.writeText(t);$('st').textContent='copied';setTimeout(()=>$('st').textContent='',1500);
-}
 $('go').onclick=()=>run(false);
 $('rf').onclick=()=>run(true);
-$('cp').onclick=copyAll;
-async function copyDetailsImage(){
-  const source = document.getElementById('out');
-  if(!LAST || !source){$('st').textContent='Load a report first.';return;}
-  const clone = source.cloneNode(true);
-  const sourceCanvases = source.querySelectorAll('canvas'), clonedCanvases = clone.querySelectorAll('canvas');
-  sourceCanvases.forEach((canvas,i)=>{
-    const target = clonedCanvases[i];
-    if(!target) return;
-    const image = document.createElement('img');
-    try{image.src=canvas.toDataURL('image/png');}catch{return;}
-    image.width=canvas.width; image.height=canvas.height;
-    image.style.cssText=canvas.getAttribute('style')||'display:block;max-width:100%;height:auto';
-    target.replaceWith(image);
-  });
+async function copySectionImage(sectionId,label){
+  const source=document.getElementById(sectionId);
+  if(!LAST||!source){$('st').textContent='Load a report first.';return;}
+  const clone=source.cloneNode(true);
+  const sourceCanvases=source.querySelectorAll('canvas'),clonedCanvases=clone.querySelectorAll('canvas');
+  sourceCanvases.forEach((canvas,i)=>{const target=clonedCanvases[i];if(!target)return;const image=document.createElement('img');try{image.src=canvas.toDataURL('image/png')}catch{return}image.width=canvas.width;image.height=canvas.height;image.style.cssText=canvas.getAttribute('style')||'display:block;max-width:100%;height:auto';target.replaceWith(image)});
   clone.querySelectorAll('button,input,select').forEach(el=>el.remove());
-  const css = [...document.querySelectorAll('style')].map(style=>style.textContent).join('\n').replace(/&/g,'&amp;').replace(/</g,'&lt;');
-  const width = Math.ceil(Math.max(source.scrollWidth,source.getBoundingClientRect().width));
-  const height = Math.ceil(source.scrollHeight);
-  const scale = Math.max(1,Math.min(2,16000/Math.max(width,height)));
-  const markup = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;min-height:${height}px;background:#000;color:#e8e8e8"><style>${css}</style>${clone.outerHTML}</div></foreignObject></svg>`;
-  const svgUrl = URL.createObjectURL(new Blob([markup],{type:'image/svg+xml;charset=utf-8'}));
+  const css=[...document.querySelectorAll('style')].map(style=>style.textContent).join(' ').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const width=Math.ceil(Math.max(source.scrollWidth,source.getBoundingClientRect().width)),height=Math.ceil(source.scrollHeight);
+  const scale=Math.max(1,Math.min(3,16000/Math.max(width,height)));
+  const markup=`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;min-height:${height}px;background:#000;color:#e8e8e8"><style>${css}</style>${clone.outerHTML}</div></foreignObject></svg>`;
+  const svgUrl=URL.createObjectURL(new Blob([markup],{type:'image/svg+xml;charset=utf-8'}));
   try{
-    const image = new Image();
-    image.src=svgUrl;
-    await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=reject});
-    const output=document.createElement('canvas');
-    output.width=Math.ceil(width*scale);output.height=Math.ceil(height*scale);
-    const ctx=output.getContext('2d');if(!ctx)throw new Error('Canvas unavailable');
-    ctx.fillStyle='#000';ctx.fillRect(0,0,output.width,output.height);ctx.scale(scale,scale);ctx.drawImage(image,0,0,width,height);
+    const image=new Image();image.src=svgUrl;await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=reject});
+    const output=document.createElement('canvas');output.width=Math.ceil(width*scale);output.height=Math.ceil(height*scale);
+    const ctx=output.getContext('2d');if(!ctx)throw new Error('Canvas unavailable');ctx.fillStyle='#000';ctx.fillRect(0,0,output.width,output.height);ctx.scale(scale,scale);ctx.drawImage(image,0,0,width,height);
     const blob=await new Promise(resolve=>output.toBlob(resolve,'image/png'));
-    if(!blob||!navigator.clipboard?.write||!window.ClipboardItem)throw new Error('Clipboard image support unavailable');
-    await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
-    $('st').textContent=`Copied full report image · ${output.width} × ${output.height}px`;
-    setTimeout(()=>$('st').textContent='',3000);
-  }catch(error){
-    $('st').textContent='Could not copy image. Check clipboard permissions and try again.';
-  }finally{URL.revokeObjectURL(svgUrl);}
+    if(!blob||!navigator.clipboard?.write||!window.ClipboardItem)throw new Error('Image clipboard unavailable');
+    await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);$('st').textContent=`Copied ${label} · ${output.width} × ${output.height}px`;setTimeout(()=>$('st').textContent='',3000);
+  }catch(error){$('st').textContent='Could not copy image. Check clipboard permissions and try again.'}finally{URL.revokeObjectURL(svgUrl)}
 }
-$('cpimg').onclick=copyDetailsImage;
+document.addEventListener('click',e=>{const button=e.target.closest('[data-copy-section]');if(button)copySectionImage(button.dataset.copySection,button.dataset.copyLabel||button.dataset.copySection)});
 ['t', 's', 'f', 'fl'].forEach(id => {
   const el = $(id);
   if(el) el.addEventListener('keydown', e => { if(e.key === 'Enter') run(false); });
@@ -2018,11 +1994,11 @@ function _updateLegPanel(){
   const el = document.getElementById('legPanel');
   if(!el) return;
   if(!s.legs.length){
-    el.innerHTML = '<div style="color:var(--d);font-size:12px;padding:12px;text-align:center;border:1px dashed #222;background:#050505">No legs drawn yet. Click "Draw Leg" above and mark the LOW and HIGH bars on the chart.</div>';
+    el.innerHTML = '<div class="copyHeading"><h3 style="margin:14px 0 8px;font-size:13px;color:var(--c);text-transform:uppercase;letter-spacing:.08em">Manually Drawn Legs (0)</h3><button class="btn-tool" data-copy-section="legPanel" data-copy-label="Manually Drawn Legs">Copy image</button></div><div style="color:var(--d);font-size:12px;padding:12px;text-align:center;border:1px dashed #222;background:#050505">No legs drawn yet. Click "Draw Leg" above and mark the LOW and HIGH bars on the chart.</div>';
     return;
   }
 
-  let h = '<h3 style="margin:14px 0 8px;font-size:13px;color:var(--c);text-transform:uppercase;letter-spacing:.08em">Manually Drawn Legs (' + s.legs.length + ')</h3>';
+  let h = '<div class="copyHeading"><h3 style="margin:14px 0 8px;font-size:13px;color:var(--c);text-transform:uppercase;letter-spacing:.08em">Manually Drawn Legs (' + s.legs.length + ')</h3><button class="btn-tool" data-copy-section="legPanel" data-copy-label="Manually Drawn Legs">Copy image</button></div>';
   h += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">';
 
   s.legs.forEach((lg, li) => {
