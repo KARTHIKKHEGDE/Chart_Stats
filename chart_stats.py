@@ -3137,7 +3137,7 @@ tr.dim td{opacity:.4}
 .foot{color:var(--d);font-size:12px;margin-top:6px}
 canvas{display:block;width:100%}
 .evgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.evc{border:1px solid #222;padding:6px 8px;min-width:0;position:relative;cursor:pointer;transition:border-color 0.15s, background 0.15s}
+.evc{border:1px solid #222;padding:8px 10px;min-width:0;position:relative;cursor:pointer;transition:border-color 0.15s, background 0.15s}
 .evc:hover{border-color:#29a8ff;background:#0d0d0d}
 .ev_zoom_hint{position:absolute;top:6px;right:8px;background:rgba(18,18,18,0.92);border:1px solid #29a8ff;color:#29a8ff;font-size:11px;padding:2px 7px;border-radius:3px;opacity:0;transition:opacity 0.15s;pointer-events:none;z-index:2}
 .evc:hover .ev_zoom_hint{opacity:1}
@@ -3357,7 +3357,7 @@ canvas{display:block;width:100%}
 
 <!-- Big Chart Zoom Modal -->
 <div id="chart_modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:99999;display:none;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px)" onclick="if(event.target===this)closeChartModal()">
-  <div style="background:#0c0c0c;border:1px solid #333;width:96vw;max-width:1440px;height:92vh;max-height:860px;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.95);border-radius:6px;overflow:hidden">
+  <div style="background:#0c0c0c;border:1px solid #333;width:98vw;max-width:1900px;height:96vh;max-height:1000px;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.95);border-radius:6px;overflow:hidden">
     <!-- Header -->
     <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 18px;border-bottom:1px solid #222;background:#131313;flex-wrap:wrap;gap:10px">
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -3390,7 +3390,7 @@ canvas{display:block;width:100%}
     </div>
 
     <!-- Canvas Body -->
-    <div id="cm_body" style="flex:1;padding:12px 16px;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#050505">
+    <div id="cm_body" style="flex:1;padding:8px 10px;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#050505">
       <canvas id="cm_canvas" style="display:block;width:100%;height:100%"></canvas>
     </div>
 
@@ -4102,7 +4102,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m'){
   const parentW = (cv.parentElement && cv.parentElement.clientWidth) ? cv.parentElement.clientWidth : 0;
   const dpr = window.devicePixelRatio || 1;
   const W = Math.max(300, parentW - (targetH ? 0 : 16));
-  const H = targetH || 330;
+  const H = targetH || 390;
   cv.style.width = W + 'px';
   cv.style.height = H + 'px';
   cv.width = W * dpr;
@@ -4134,8 +4134,8 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m'){
   x.font = 'bold 10px Consolas,monospace';
   x.fillText('PRE-MARKET', X(240) + 6, T + 13);
   x.lineWidth = 1;
-  x.strokeStyle = '#1f1f1f';
-  x.fillStyle = '#8a8a8a';
+  x.strokeStyle = '#292d32';
+  x.fillStyle = '#b3b8be';
   for(let k = 0; k <= 5; k++){
     const v = lo + (hi - lo) * k / 5, y = Y(v);
     x.beginPath();
@@ -4203,20 +4203,22 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m'){
     poly(BZ.bl, '#7a7a7a', 1);
     x.restore();
   }
-  const bw = Math.max(1, pw / (720 / tf) * 0.72), vmax = Math.max(...b.v) || 1;
+  const bw = Math.max(1.4, pw / (720 / tf) * 0.84), vmax = Math.max(...b.v) || 1;
   for(let i = 0; i < b.t.length; i++){
     const xx = X(b.t[i] + tf / 2), up = b.c[i] >= b.o[i], col = up ? '#3ddc84' : '#ff5a5a';
     x.fillStyle = up ? 'rgba(61,220,132,0.55)' : 'rgba(255,90,90,0.55)';
     const vh = VH * b.v[i] / vmax;
     x.fillRect(xx - bw / 2, vy1 - vh, bw, vh);
     x.strokeStyle = col;
+    x.lineWidth = Math.max(1.1, Math.min(1.8, tf / 2));
     x.beginPath();
     x.moveTo(xx, Y(b.h[i]));
     x.lineTo(xx, Y(b.l[i]));
     x.stroke();
     x.fillStyle = col;
     const yt = Y(Math.max(b.o[i], b.c[i]));
-    x.fillRect(xx - bw / 2, yt, bw, Math.max(1, Math.abs(Y(b.o[i]) - Y(b.c[i]))));
+    x.fillRect(xx - bw / 2, yt, bw, Math.max(1.5, Math.abs(Y(b.o[i]) - Y(b.c[i]))));
+    x.lineWidth = 1;
   }
   if(BZ){
     clipP();
