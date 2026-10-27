@@ -809,7 +809,7 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
         cum += r["v"]
         chg = (r["c"] / D[k - 1]["c"] - 1) if k > 0 else None
         tag = ("LOW" if k == si else "") + (" HIGH" if k == pi else "") + (" FRD" if k == fi else "")
-        trows.append([dstr(r["d"]), px(r["o"]), px(r["h"]), px(r["l"]), px(r["c"]), pct(chg, 0) if chg is not None else "-",
+        trows.append([dstr(r["d"]), px(r["o"]), px(r["h"]), px(r["l"]), px(r["c"]), usd(shares * r["c"] if shares else None), pct(chg, 0) if chg is not None else "-",
                       big(r["v"]), usd(r["dv"]), (rot(div(cum, flt)) if k <= pi else "-"), tag.strip()])
     trows = trows[-80:]
 
@@ -834,7 +834,7 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
         header=f"{tkr}  |  rally {dstr(D[si]['d'])} -> {dstr(D[pi]['d'])}  |  FRD {dstr(frd['d']) if frd else 'none yet'}",
         alts=alts_txt, p1=p1, p2=p2,
         chart_15=chart_15,
-        table=dict(cols=["Date", "Open", "High", "Low", "Close", "Chg", "Volume", "$ Vol", "Cum float rot", ""], rows=trows),
+        table=dict(cols=["Date", "Open", "High", "Low", "Close", "Market Cap (close)", "Chg", "Volume", "$ Vol", "Cum float rot", ""], rows=trows),
         notes=notes,
     )
 
