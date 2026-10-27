@@ -218,6 +218,63 @@ def load_daily(t, force=False):
     return d
 
 
+def recent_open_hod_stats(daily):
+    """Summarize daily open-to-high moves for the last 30/90 sessions."""
+    rows = daily[-252:]
+    if not rows:
+        return {"rows": [], "volume_multiple": 2.0}
+    moves = []
+    for i, row in enumerate(rows):
+        prev_close = rows[i - 1]["c"] if i else None
+        o, h = row.get("o"), row.get("h")
+        moves.append({**row, "move": (h / o - 1) if o and h and o > 0 else None,
+                      "gap": (o / prev_close - 1) if prev_close and o else None,
+                      "avg_vol20": (float(np.mean([x["v"] for x in rows[max(0, i-20):i]]))
+                                    if i and rows[max(0, i-20):i] else None)})
+    def summarize(group):
+        vals_ = [x["move"] for x in group if x["move"] is not None]
+        return {"n": len(vals_), "median": med(vals_), "avg": float(np.mean(vals_)) if vals_ else None}
+    rows30 = moves[-30:]
+    volume_multiple = 10.0
+    last30 = summarize([x for x in rows30 if x["move"] is not None])
+    last90 = summarize([x for x in moves if x["move"] is not None])
+    gapups = summarize([x for x in moves if x["gap"] is not None and x["gap"] >= .05 and x["move"] is not None])
+    highvol = summarize([x for x in moves if x["move"] is not None and x["avg_vol20"] and x["v"] >= volume_multiple*x["avg_vol20"]])
+    return {"date_from": rows30[0]["date"], "date_to": rows30[-1]["date"],
+            "last30": last30, "last90": last90, "gapup5": gapups,
+            "highvol": highvol, "volume_multiple": volume_multiple}
+
+
+def recent_hod_times(t, daily, sessions=7):
+    """Find approximate HOD time from 15-minute regular-session bars."""
+    days = [r["date"] for r in daily[-sessions:]]
+    if not days:
+        return {"date_from": None, "date_to": None, "rows": []}
+    start = (dt.date.fromisoformat(days[0]) - dt.timedelta(days=1)).isoformat()
+    end = days[-1]
+    key = f"{t}_{start}_{end}_15m_hod"
+    data = cget(key, 6 * 3600)
+    if data is None:
+        try:
+            j = poly_get(f"/v2/aggs/ticker/{t}/range/15/minute/{start}/{end}",
+                         {"adjusted": "false", "sort": "asc", "limit": 50000})
+            data = j.get("results") or []
+            cput(key, data)
+        except Exception:
+            data = []
+    best = {}
+    for bar in data:
+        stamp = dt.datetime.fromtimestamp(bar["t"] / 1000, dt.timezone.utc).astimezone(ET)
+        if stamp.date().isoformat() not in days or not (dt.time(9, 30) <= stamp.time() < dt.time(16, 0)):
+            continue
+        day = stamp.date().isoformat()
+        if day not in best or bar["h"] > best[day]["high"]:
+            best[day] = {"date": day, "high": bar["h"], "time": stamp.astimezone(IST).strftime("%H:%M")}
+    rows = [best[d] for d in days if d in best]
+    return {"date_from": days[0], "date_to": days[-1], "rows": rows,
+            "median_time": (sorted(x["time"] for x in rows)[len(rows)//2] if rows else None)}
+
+
 def load_splits(t):
     d = cget(f"{t}_splits", 7 * 86400)
     if d is None:
@@ -1056,9 +1113,11 @@ def fdate(d):
 
 
 # ----------------------------------------------------------------------------- report
-def build_report(t, live, lm, lpath, lctx, events, S, notes):
+def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     simset = {id(e) for e in S}
     st = stats(S)
+    open_hod = recent_open_hod_stats(daily)
+    hod_times = recent_hod_times(t, daily)
     g = grade(st)
     pc, cur = live["pc"], live["cur"]
     fl_now = live["float"] or live["so"]
@@ -1337,13 +1396,22 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes):
             T["p1"], kv_text(left), kv_text(right)]
     for tb in tables:
         text += ["", tb["title"], tbl_text(tb["cols"], tb["rows"]), tb["foot"]]
-    text += ["", T["p7"], kv_text(ptext, 40), "",
+    stat_line = lambda x: f"median {pct(x['median'], 0)}  avg {pct(x['avg'], 0)}  ({x['n']} days)"
+    text += ["", "Open → HOD (daily bars; 12 mo for gap-up / volume rows)",
+             f"Last 30 sessions  {stat_line(open_hod['last30'])}",
+             f"Last 90 sessions  {stat_line(open_hod['last90'])}",
+             f"Gap-up days ≥5%  {stat_line(open_hod['gapup5'])}",
+             f"High-volume days  {stat_line(open_hod['highvol'])}",
+             f"HOD time (15m bars, {hod_times['date_from']} to {hod_times['date_to']})",
+             f"All sessions  median {hod_times['median_time'] or '—'} IST ({len(hod_times['rows'])} days)",
+             "", T["p7"], kv_text(ptext, 40), "",
              T["pa"], kv_text(p3), "", T["pb"], kv_text(p4), "", T["pc"], kv_text(p5)]
     if mrows:
         text += ["", T["pd"], tbl_text(mcols, mrows)]
     if notes:
         text += [""] + [f"Note: {n}" for n in notes]
-    return {"head": head, "titles": T, "p1": {"left": left, "right": right}, "tables": tables,
+    return {"head": head, "titles": T, "p1": {"left": left, "right": right},
+            "open_hod_stats": open_hod, "hod_times": hod_times, "tables": tables,
             "evcharts": evch, "model_names": ["Short at open", "PM high rejection", "5m low break",
                                               "First red 5m candle", "VWAP loss (post-HOD)"],
             "pa": p3, "pb": p4, "pc": p5, "pd": {"cols": mcols, "rows": mrows},
@@ -1535,7 +1603,7 @@ def run_job(job, t, refresh):
         notes.append("Historical data is point-in-time for tickers still listed; delisted names are missing, "
                      "which makes fades look weaker than reality (survivorship bias).")
 
-        report = clean(build_report(t, live, lm, lpath, lctx, events, S, notes))
+        report = clean(build_report(t, live, lm, lpath, lctx, events, S, notes, daily))
         recent_news = _get_scanner_news(t)
         report["news"] = recent_news
         report["news_status"] = (_scanner_details.get(t, {}).get("news_status") or
@@ -3828,6 +3896,20 @@ function renderTab(tab, r, isRefresh){
       return `<div style="padding:5px 0;border-bottom:1px solid #222"><span style="color:#ffd23f;font-size:12px">${esc(item.kind || 'News')}</span> · ${link}<span style="color:#777;font-size:12px"> — ${esc(item.publisher || 'Yahoo Finance')}${item.published?' · '+esc(item.published):''}</span></div>`;
     }).join('') + `</div>`;
   o += `<div class="panel two"><div><div class="ttl">${esc(T.p1)}</div>${kv(r.p1.left)}</div><div>${kv(r.p1.right)}</div></div>`;
+  if(r.open_hod_stats){
+    const s=r.open_hod_stats, fmt=x=>x==null?'—':`${x>=0?'+':''}${(x*100).toFixed(0)}%`, line=x=>`${fmt(x.median)}   avg ${fmt(x.avg)}   (${x.n} ${x.n===1?'day':'days'})`;
+    o += `<div class="panel"><div class="ttl">Open → HOD (daily bars; 12 mo for gap-up / volume rows)</div>`+
+      `<div class="kv"><span>Last 30 sessions</span><span>${line(s.last30)}</span><span>Last 90 sessions</span><span>${line(s.last90)}</span>`+
+      `<span>Gap-up days ≥5%</span><span>${line(s.gapup5)}</span><span data-tip="High-volume days have daily volume at least 10× the average of the prior 20 sessions.">High-volume days</span><span>${line(s.highvol)}</span></div>`+
+      `<div class="foot">${esc(s.date_from||'')} to ${esc(s.date_to||'')} · high volume = ≥${s.volume_multiple}× prior 20-session average</div></div>`;
+  }
+  if(r.hod_times){
+    const h=r.hod_times;
+    o += `<div class="panel"><div class="ttl">HOD time (from chart, 15m bars, ${esc(h.date_from||'')} to ${esc(h.date_to||'')})</div>`+
+      `<div class="kv"><span>All sessions</span><span>median ${esc(h.median_time||'—')} IST (${(h.rows||[]).length} days)</span>`+
+      `${(h.rows||[]).length?`<span>Daily HOD times</span><span>${h.rows.map(x=>`${esc(x.date)} ${esc(x.time)}`).join(' · ')}</span>`:''}</div>`+
+      `${(h.rows||[]).length?'<div class="foot">Approximate HOD time is the timestamp of the 15-minute bar containing the session high.</div>':'<div class="foot">15-minute HOD bars are unavailable for this range.</div>'}</div>`;
+  }
   (r.tables||[]).forEach(t=>{
     o += `<div class="panel"><div class="ttl">${esc(t.title)}</div>${table(t.cols,t.rows,t.dim,true)}<div class="foot">${esc(t.foot||'')}</div></div>`;
   });
