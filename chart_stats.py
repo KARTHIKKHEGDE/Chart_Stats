@@ -1229,10 +1229,10 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     # ---- [6] per-event 2-min charts (today first)
     evch = []
     if live["df"] is not None and len(live["df"]):
-        evch.append({"title": f"TODAY {day_str}  gap {pct(gap_live, 0)}  (live)", "sim": True,
+        evch.append({"title": f"TODAY {day_str}  gap {pct(gap_live, 0)}  (live)", "date": live["date"], "sim": True,
                      "chart": chart_pack(live["df"], lm, pc, day_obj)})
     for i, e in enumerate(events, 1):
-        evch.append({"title": f"#{i}  {fdate(e['date'])}  gap {pct(e['gap'], 0)}  O→C {pct(e['o2c'], 0)}",
+        evch.append({"title": f"#{i}  {fdate(e['date'])}  gap {pct(e['gap'], 0)}  O→C {pct(e['o2c'], 0)}", "date": e["date"],
                      "sim": id(e) in simset, "chart": e["chart"]})
 
     # ---- extras: stats / patterns / rating
@@ -1412,7 +1412,13 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
         text += [""] + [f"Note: {n}" for n in notes]
     return {"head": head, "titles": T, "p1": {"left": left, "right": right},
             "open_hod_stats": open_hod, "hod_times": hod_times, "tables": tables,
-            "evcharts": evch, "model_names": ["Short at open", "PM high rejection", "5m low break",
+            "evcharts": evch, "session_dates": [r["date"] for r in daily] + [
+                live["date"],
+                (dt.date.fromisoformat(live["date"]) + dt.timedelta(days=1)).isoformat()
+                if (dt.date.fromisoformat(live["date"]) + dt.timedelta(days=1)).weekday() < 5 else
+                (dt.date.fromisoformat(live["date"]) + dt.timedelta(days=(7-dt.date.fromisoformat(live["date"]).weekday()))).isoformat()
+            ],
+            "model_names": ["Short at open", "PM high rejection", "5m low break",
                                               "First red 5m candle", "VWAP loss (post-HOD)"],
             "pa": p3, "pb": p4, "pc": p5, "pd": {"cols": mcols, "rows": mrows},
             "chart": chart, "dilution_url": dilution_url, "text": "\n".join(text)}
@@ -2451,6 +2457,43 @@ def job(jid):
     if not j:
         return jsonify({"status": "error", "error": "Unknown job"}), 404
     return jsonify(j)
+
+
+@app.route("/api/session-chart")
+def session_chart():
+    """Load any trading session on demand so chart arrows can visit non-gap-up days."""
+    user = (request.args.get("user") or "").strip().lower()
+    token = (request.args.get("token") or "").strip()
+    ticker = (request.args.get("ticker") or "").strip().upper()
+    day = (request.args.get("date") or "").strip()
+    if user not in ALLOWED_USERS or not _db_validate_session(user, token):
+        return jsonify({"error": "Unauthorized"}), 401
+    if not re.fullmatch(r"[A-Z.\-]{1,10}", ticker):
+        return jsonify({"error": "Invalid ticker"}), 400
+    try:
+        dt.date.fromisoformat(day)
+    except ValueError:
+        return jsonify({"error": "Invalid session date"}), 400
+    try:
+        daily = load_daily(ticker)
+        index = next((i for i, row in enumerate(daily) if row["date"] == day), None)
+        if index is None:
+            daily = load_daily(ticker, force=True)
+            index = next((i for i, row in enumerate(daily) if row["date"] == day), None)
+        if index is None or index == 0:
+            return jsonify({"error": f"No daily session data for {day}"}), 404
+        row, pc = daily[index], float(daily[index - 1]["c"])
+        df = minute_df(ticker, day)
+        if df is None or df.empty:
+            return jsonify({"error": f"No intraday bars are available for {day}"}), 404
+        m = metrics(df, pc, True)
+        gap = (m.get("open") / pc - 1) if m.get("open") and pc else None
+        o2c = (m.get("close") / m.get("open") - 1) if m.get("close") and m.get("open") else None
+        title = f"{day}  gap {pct(gap, 0)}  O→C {pct(o2c, 0)}"
+        return jsonify({"date": day, "title": title, "sim": False,
+                        "chart": chart_pack(df, m, pc, dt.date.fromisoformat(day))})
+    except Exception as exc:
+        return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 502
 
 
 _scanner_cache = {"at": 0.0, "rows": []}
@@ -3881,6 +3924,9 @@ function renderTab(tab, r, isRefresh){
   tab.lastChart.normalization = tab.pathNormalization;
   tab.EV = r.evcharts || [];
   tab.result = r;
+  tab.sessionDates = r.session_dates || [];
+  tab.sessionChartCache = tab.sessionChartCache || {};
+  tab.EV.forEach(item=>{if(item.date) tab.sessionChartCache[item.date]=item;});
 
   const h = r.head, T = r.titles;
   let o = '';
@@ -3991,19 +4037,51 @@ function drawEvAll(evList, containerEl){
   const sel = selEl ? selEl.value : 'none';
   const bzEl = cEl.querySelector('#bz');
   const bzChecked = bzEl ? bzEl.checked : false;
+  const tabForCharts=Object.values(openTabs).find(tab=>tab.container===cEl);
   list.forEach((c,i)=>{
     const card=cEl.querySelector(`[data-ev-slot="${i}"]`), cv=cEl.querySelector('#ev'+i);
     if(!card || !cv) return;
-    if(!Number.isInteger(card._chartIndex)) card._chartIndex=i;
+    if(!card._chartItem) card._chartItem=c;
+    if(!card._sessionDate) card._sessionDate=card._chartItem.date||c.date;
     if(!card._chartTf) card._chartTf='2m';
-    const item=list[card._chartIndex] || c;
+    const item=card._chartItem || c;
+    const dateList=tabForCharts?tabForCharts.sessionDates:[];
+    card._sessionPos=dateList.indexOf(card._sessionDate);
     const title=card.querySelector(`#evtitle${i}`), tf=card.querySelector('.evtf');
     if(title) title.innerHTML=esc(item.title)+(item.sim?'':'<span class="d"> (not in similar set)</span>');
-    card.querySelectorAll('.evnav').forEach(btn=>{const next=card._chartIndex+Number(btn.dataset.step);btn.disabled=next<0||next>=list.length;btn.style.opacity=btn.disabled?'.35':'1';});
+    card.querySelectorAll('.evnav').forEach(btn=>{const next=card._sessionPos+Number(btn.dataset.step);btn.disabled=card._sessionPos<0||next<0||next>=dateList.length;btn.style.opacity=btn.disabled?'.35':'1';});
     if(tf){tf.value=card._chartTf;tf.onclick=e=>e.stopPropagation();tf.onchange=e=>{e.stopPropagation();card._chartTf=tf.value;drawEvAll(list,cEl);};}
-    card.querySelectorAll('.evnav').forEach(btn=>{btn.onclick=e=>{e.stopPropagation();const next=card._chartIndex+Number(btn.dataset.step);if(next>=0&&next<list.length){card._chartIndex=next;drawEvAll(list,cEl);}};});
+    card.querySelectorAll('.evnav').forEach(btn=>{btn.onclick=e=>{e.stopPropagation();navigateEvCard(card,Number(btn.dataset.step),tabForCharts);};});
     drawEv(cv,item.chart,sel,bzChecked,undefined,card._chartTf);
   });
+}
+async function navigateEvCard(card, step, tab){
+  if(!tab || !card || card._sessionPos==null || card._sessionPos<0) return;
+  const nextPos=card._sessionPos+step, dates=tab.sessionDates||[];
+  if(nextPos<0||nextPos>=dates.length) return;
+  const day=dates[nextPos];
+  card._sessionPos=nextPos;card._sessionDate=day;
+  const list=tab.EV||[];
+  let item=tab.sessionChartCache[day] || list.find(x=>x.date===day);
+  const requestId=(card._loadRequestId||0)+1;card._loadRequestId=requestId;
+  if(!item){
+    const title=card.querySelector('.evt');if(title) title.textContent=`${day} · loading…`;
+    const query=new URLSearchParams({ticker:tab.result?.head?.ticker||'',date:day,user:currentUser||'',token:sessionToken||''});
+    try{
+      const response=await fetch('/api/session-chart?'+query.toString()), data=await response.json();
+      if(requestId!==card._loadRequestId)return;
+      if(!response.ok) throw new Error(data.error||'Could not load session chart');
+      item={date:data.date,title:data.title,sim:false,chart:data.chart};
+      tab.sessionChartCache[day]=item;
+    }catch(error){
+      if(requestId!==card._loadRequestId)return;
+      item={date:day,title:`${day} · ${error.message}`,sim:false,chart:{bars:{t:[]}}};
+    }
+  }
+  if(requestId!==card._loadRequestId)return;
+  card._chartItem=item;
+  drawEvAll(tab.EV,tab.container);
+  if($('#chart_modal').style.display==='flex'&&currentModalSlot===Number(card.dataset.evSlot))renderModalChart();
 }
 function aggregateEvBars(source, tf){
   if(!source || !source.t || tf===1) return source;
@@ -4197,7 +4275,7 @@ window.openChartModal = function(i){
   if(!list.length || i < 0 || i >= list.length) return;
   currentModalSlot = i;
   const card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${i}"]`);
-  currentModalIndex = card && Number.isInteger(card._chartIndex) ? card._chartIndex : i;
+  currentModalIndex = card && Number.isInteger(card._sessionPos) ? card._sessionPos : i;
 
   const mainSig = openTabs[activeTab].container.querySelector('#sig');
   const mainBz = openTabs[activeTab].container.querySelector('#bz');
@@ -4217,19 +4295,21 @@ window.openChartModal = function(i){
 
 window.renderModalChart = function(){
   if(!activeTab || !openTabs[activeTab]) return;
-  const list = openTabs[activeTab].EV || [];
-  if(!list[currentModalIndex]) return;
-  const item = list[currentModalIndex];
+  const tab=openTabs[activeTab], list=tab.EV||[];
+  const card=tab.container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);
+  const item=card&&card._chartItem;
+  if(!item) return;
 
   $('#cm_title').textContent = item.title;
   $('#cm_badge').innerHTML = item.sim 
     ? '<span style="color:#3ddc84;background:#141414;border:1px solid #333;padding:2px 8px;border-radius:2px;font-size:11px">SIMILAR SETUP</span>' 
     : '<span style="color:#777;font-size:11px">(not in similar set)</span>';
-  $('#cm_counter').textContent = `${currentModalIndex + 1} of ${list.length}`;
-  $('#cm_prev').disabled = (currentModalIndex === 0);
-  $('#cm_next').disabled = (currentModalIndex === list.length - 1);
-  $('#cm_prev').style.opacity = (currentModalIndex === 0) ? '0.35' : '1';
-  $('#cm_next').style.opacity = (currentModalIndex === list.length - 1) ? '0.35' : '1';
+  const sessionCount=(tab.sessionDates||[]).length, sessionPos=card?card._sessionPos:-1;
+  $('#cm_counter').textContent = `${sessionPos+1} of ${sessionCount}`;
+  $('#cm_prev').disabled = (sessionPos <= 0);
+  $('#cm_next').disabled = (sessionPos < 0 || sessionPos >= sessionCount-1);
+  $('#cm_prev').style.opacity = (sessionPos <= 0) ? '0.35' : '1';
+  $('#cm_next').style.opacity = (sessionPos < 0 || sessionPos >= sessionCount-1) ? '0.35' : '1';
 
   const cv = $('#cm_canvas');
   const body = $('#cm_body');
@@ -4237,32 +4317,21 @@ window.renderModalChart = function(){
   const sel = $('#cm_sig').value;
   const bzChecked = $('#cm_bz').checked;
 
-  const card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);
   drawEv(cv, item.chart, sel, bzChecked, targetH, $('#cm_tf').value || (card?card._chartTf:'2m'));
 };
 
 window.nextModalChart = function(){
   if(!activeTab || !openTabs[activeTab]) return;
-  const list = openTabs[activeTab].EV || [];
-  if(currentModalIndex < list.length - 1){
-    currentModalIndex++;
-    const card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);
-    if(card) card._chartIndex=currentModalIndex;
-    drawEvAll(list,openTabs[activeTab].container);
-    renderModalChart();
-  }
+  const tab=openTabs[activeTab],card=tab.container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);
+  currentModalIndex=card?card._sessionPos+1:currentModalIndex;
+  navigateEvCard(card,1,tab);
 };
 
 window.prevModalChart = function(){
-  if(currentModalIndex > 0){
-    currentModalIndex--;
-    if(activeTab && openTabs[activeTab]){
-      const list=openTabs[activeTab].EV||[], card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);
-      if(card) card._chartIndex=currentModalIndex;
-      drawEvAll(list,openTabs[activeTab].container);
-    }
-    renderModalChart();
-  }
+  if(!activeTab||!openTabs[activeTab])return;
+  const tab=openTabs[activeTab],card=tab.container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);
+  currentModalIndex=card?card._sessionPos-1:currentModalIndex;
+  navigateEvCard(card,-1,tab);
 };
 
 window.closeChartModal = function(){
@@ -4287,7 +4356,7 @@ $('#cm_tf').onchange = () => {
     card._chartTf=$('#cm_tf').value;
     const cardSelect=card.querySelector('.evtf');
     if(cardSelect) cardSelect.value=card._chartTf;
-    const item=(openTabs[activeTab].EV||[])[currentModalIndex];
+    const item=card._chartItem;
     if(item) drawEv(card.querySelector(`#ev${currentModalSlot}`),item.chart,
       openTabs[activeTab].container.querySelector('#sig')?.value||'none',
       openTabs[activeTab].container.querySelector('#bz')?.checked||false,undefined,card._chartTf);
