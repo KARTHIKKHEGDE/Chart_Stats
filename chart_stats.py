@@ -5060,7 +5060,7 @@ function drawEvAll(evList, containerEl){
     card._sessionPos=dateList.indexOf(card._sessionDate);
     const title=card.querySelector(`#evtitle${i}`), tf=card.querySelector('.evtf');
     if(title) title.innerHTML=esc(item.title)+(item.sim?'':'<span class="d"> (not in similar set)</span>');
-    if(tf){tf.value=card._chartTf;tf.onclick=e=>e.stopPropagation();tf.onchange=e=>{e.stopPropagation();card._chartTf=tf.value;card._panOffset=0;if(tf.value==='1d'&&card._chartDays===1)card._chartDays=20;else if(['15m','30m'].includes(tf.value)&&card._chartDays===1)card._chartDays=5;loadChartContext(card,tabForCharts);};}
+    if(tf){tf.value=card._chartTf;tf.onclick=e=>e.stopPropagation();tf.onchange=e=>{e.stopPropagation();card._chartTf=tf.value;card._panOffset=0;if(tf.value==='1d'&&card._chartDays===1)card._chartDays=20;else if(['15m','30m'].includes(tf.value)&&card._chartDays===1)card._chartDays=5;if(card._chartDays===1&&tf.value!=='1d')loadChartContext(card,tabForCharts);else if((tf.value==='1d')!==!!card._contextDaily||!card._contextChart)loadChartContext(card,tabForCharts);else drawEvAll(tabForCharts.EV,tabForCharts.container);};}
     const days=card.querySelector('.evdays');if(days){days.value=String(card._chartDays);days.onclick=e=>e.stopPropagation();days.onchange=e=>{e.stopPropagation();card._chartDays=Number(days.value);card._panOffset=0;loadChartContext(card,tabForCharts);};}
     card.querySelectorAll('.evzoom').forEach(btn=>btn.onclick=e=>{e.stopPropagation();card._zoom=Math.max(.5,Math.min(8,(card._zoom||1)*(btn.dataset.zoom==='in'?1.25:.8)));drawEvAll(list,cEl);});
     card._onPanEdge=side=>{
@@ -5084,11 +5084,11 @@ function drawEvAll(evList, containerEl){
 async function loadChartContext(card,tab,anchorDate){
   if(!card||!tab)return;
   const days=card._chartDays||1, tf=card._chartTf||'2m';
-  if(days===1&&tf!=='1d'){card._contextChart=null;card._contextDates=[];card._contextError='';card._contextLoading=false;drawEvAll(tab.EV,tab.container);return;}
+  if(days===1&&tf!=='1d'){card._contextChart=null;card._contextDates=[];card._contextDaily=false;card._contextError='';card._contextLoading=false;drawEvAll(tab.EV,tab.container);return;}
   card._contextLoading=true;card._contextError='';
   const requestId=(card._contextRequestId||0)+1;card._contextRequestId=requestId;
   const query=new URLSearchParams({ticker:tab.result?.head?.ticker||'',date:anchorDate||card._sessionDate,days:String(days),tf,user:currentUser||'',token:sessionToken||''});
-  try{const response=await fetch('/api/chart-context?'+query.toString()),data=await response.json();if(requestId!==card._contextRequestId)return;if(!response.ok)throw new Error(data.error||'Could not load chart range');card._contextChart=data.bars;card._contextDates=data.dates;if(anchorDate)card._sessionDate=anchorDate;}
+  try{const response=await fetch('/api/chart-context?'+query.toString()),data=await response.json();if(requestId!==card._contextRequestId)return;if(!response.ok)throw new Error(data.error||'Could not load chart range');card._contextChart=data.bars;card._contextDates=data.dates;card._contextDaily=!!data.daily;if(anchorDate)card._sessionDate=anchorDate;}
   catch(error){card._contextChart=null;card._contextError=error.message;}
   card._contextLoading=false;
   drawEvAll(tab.EV,tab.container);
@@ -5155,10 +5155,14 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   const isLarge = H > 450;
   x.font = (isLarge ? '13px' : '11px') + ' Consolas,monospace';
   const daily=timeframe==='1d', tf=parseInt(timeframe,10)||2, source=c.bars;
-  let b=daily?source:aggregateEvBars(source,tf);
-  const dates=[...new Set(b?.d||[])];
-  const multi=!daily&&dates.length>1;
-  if(multi){let last='';let n=-1;b={...b,t:b.t.map((t,i)=>{if(b.d[i]!==last){last=b.d[i];n++;}return 240+n*720+t-240;})};}
+  let b,dates,multi;const cached=cv._seriesCache;
+  if(cached?.source===source&&cached.tf===timeframe){b=cached.bars;dates=cached.dates;multi=cached.multi;}
+  else{
+    b=daily?source:aggregateEvBars(source,tf);
+    dates=[...new Set(b?.d||[])];multi=!daily&&dates.length>1;
+    if(multi){let last='',n=-1;b={...b,t:b.t.map((t,i)=>{if(b.d[i]!==last){last=b.d[i];n++;}return 240+n*720+t-240;})};}
+    cv._seriesCache={source,tf:timeframe,bars:b,dates,multi};
+  }
   if(!b || !b.t.length){
     x.fillStyle = '#8a8a8a';
     x.fillText('No intraday data', 10, 20);
@@ -5168,14 +5172,15 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   const VH = Math.round(H * 0.18), B = isLarge ? 24 : 18;
   const ph = H - T - VH - B - 6, pw = W - L - R, vy0 = T + ph + 6, vy1 = vy0 + VH;
   const sg = sel === 'none' ? [] : (c.sig || []).filter(s => sel === 'all' || s.name === sel);
-  let lo = Math.min(...b.l), hi = Math.max(...b.h);
-  const pad = (hi - lo) * 0.05 || hi * 0.02;
-  lo -= pad;
-  hi += pad;
   const span=daily?Math.max(1,b.t.length):multi?dates.length*720:720, fullStart=daily?-.5:240;
   const viewSpan=Math.min(span,(daily?span:720)/Math.max(1,zoom)),panLimit=Math.max(0,span-viewSpan)/2;
   cv._panOffset=Math.max(-panLimit,Math.min(panLimit,cv._panOffset||0));
-  const viewStart=fullStart+panLimit+cv._panOffset,X=m=>L+pw*(m-viewStart)/viewSpan,Y=v=>T+ph*(1-(v-lo)/(hi-lo));
+  const viewStart=fullStart+panLimit+cv._panOffset,X=m=>L+pw*(m-viewStart)/viewSpan;
+  let visible=Array.from({length:b.t.length},(_,i)=>i).filter(i=>b.t[i]>=viewStart-tf&&b.t[i]<=viewStart+viewSpan+tf);
+  if(!visible.length){let nearest=0,distance=Infinity;for(let i=0;i<b.t.length;i++){const d=Math.abs(b.t[i]-(viewStart+viewSpan/2));if(d<distance){nearest=i;distance=d;}}visible=[nearest];}
+  let lo=Math.min(...visible.map(i=>b.l[i])),hi=Math.max(...visible.map(i=>b.h[i]));
+  const pad=(hi-lo)*0.05||hi*0.02;lo-=pad;hi+=pad;
+  const Y=v=>T+ph*(1-(v-lo)/(hi-lo));
   cv._viewSpan=viewSpan;cv._panSpan=span;cv._plotWidth=pw;cv._drawEvArgs=[c,sel,bzChecked,targetH,timeframe,zoom];
   if(!cv._panBound){
     cv._panBound=true;cv.style.cursor='grab';
@@ -5260,8 +5265,9 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
     poly(BZ.bl, '#7a7a7a', 1);
     x.restore();
   }
-  const bw = daily?Math.max(3,Math.min(24,pw/b.t.length*.65)):Math.max(1.4, pw / (span / tf) * 0.84), vmax = Math.max(...b.v) || 1;
+  const bw = daily?Math.max(3,Math.min(24,pw/b.t.length*.65)):Math.max(1.4, pw / (viewSpan / tf) * 0.84), vmax = Math.max(...visible.map(i=>b.v[i]||0)) || 1;
   for(let i = 0; i < b.t.length; i++){
+    if(b.t[i]<viewStart-tf||b.t[i]>viewStart+viewSpan+tf)continue;
     const xx = X(b.t[i] + (daily?.5:tf / 2)), up = b.c[i] >= b.o[i], col = up ? '#3ddc84' : '#ff5a5a';
     x.fillStyle = up ? 'rgba(61,220,132,0.55)' : 'rgba(255,90,90,0.55)';
     const vh = VH * b.v[i] / vmax;
@@ -5421,7 +5427,9 @@ $('#cm_tf').onchange = () => {
     if(item) drawEv(card.querySelector(`#ev${currentModalSlot}`),item.chart,
       openTabs[activeTab].container.querySelector('#sig')?.value||'none',
       openTabs[activeTab].container.querySelector('#bz')?.checked||false,undefined,card._chartTf);
-    loadChartContext(card,openTabs[activeTab]);
+    if(card._chartDays===1&&card._chartTf!=='1d')loadChartContext(card,openTabs[activeTab]);
+    else if((card._chartTf==='1d')!==!!card._contextDaily||!card._contextChart)loadChartContext(card,openTabs[activeTab]);
+    else drawEvAll(openTabs[activeTab].EV,openTabs[activeTab].container);
   }
   renderModalChart();
 };
@@ -6618,16 +6626,16 @@ function renderEvents(root,data,filings=[]){
    cv._event={...e,ticker:data.ticker};cv._timeframe='2m';cv._chartDays=5;cv._activeDate=e.date;cv._zoom=1;cv._panOffset=0;cv._onPanChange=value=>card._panOffset=value;cv._onPanEdge=side=>{if(cv._contextLoading)return;const dates=cv._contextDates||[];const edge=dates[side>0?dates.length-1:0];if(!edge)return;cv._chartDays=[1,3,5,10,20,60].find(value=>value>cv._chartDays)||60;cv._panOffset=card._panOffset=0;const daysSelect=card.querySelector('.evdays');if(daysSelect)daysSelect.value=String(cv._chartDays);loadKWContext(cv,edge,cv._chartDays)};chartObserver.observe(cv);
    card.onclick=ev=>{if(ev.target.closest('.evcontrols'))return;openKWModal(cv)};
    card.querySelectorAll('.evcontrols').forEach(el=>el.onclick=ev=>ev.stopPropagation());
-   const tf=card.querySelector('.evtf');tf.onchange=ev=>{ev.stopPropagation();cv._timeframe=tf.value;cv._panOffset=card._panOffset=0;if(tf.value==='1d'&&cv._chartDays===1)cv._chartDays=20;else if(['15m','30m'].includes(tf.value)&&cv._chartDays===1)cv._chartDays=5;card.querySelector('.evdays').value=String(cv._chartDays);loadKWContext(cv,cv._activeDate||e.date,cv._chartDays)};
+   const tf=card.querySelector('.evtf');tf.onchange=ev=>{ev.stopPropagation();cv._timeframe=tf.value;cv._panOffset=card._panOffset=0;if(tf.value==='1d'&&cv._chartDays===1)cv._chartDays=20;else if(['15m','30m'].includes(tf.value)&&cv._chartDays===1)cv._chartDays=5;card.querySelector('.evdays').value=String(cv._chartDays);if((tf.value==='1d')!==!!cv._contextDaily||!cv._contextBars)loadKWContext(cv,cv._activeDate||e.date,cv._chartDays);else drawKWChart(cv)};
    const days=card.querySelector('.evdays');days.onchange=ev=>{ev.stopPropagation();cv._chartDays=Number(days.value);cv._panOffset=card._panOffset=0;loadKWContext(cv,cv._activeDate||e.date,cv._chartDays)};
    card.querySelectorAll('.evzoom').forEach(btn=>btn.onclick=ev=>{ev.stopPropagation();cv._zoom=Math.max(.5,Math.min(8,(cv._zoom||1)*(btn.dataset.zoom==='in'?1.25:.8)));drawKWChart(cv)});
  });
 }
-async function loadKWContext(cv,anchor,days){if(!cv?._chart)return;cv._activeDate=anchor;cv._contextLoading=true;const requestId=(cv._contextRequestId||0)+1;cv._contextRequestId=requestId;const q=new URLSearchParams({ticker:cv._event.ticker,date:anchor,days:String(days||5),tf:(cv._timeframe||'2m').toLowerCase()==='1d'?'1d':(cv._timeframe||'2m').toLowerCase(),user,token});try{const r=await fetch('/api/chart-context?'+q),data=await r.json();if(requestId!==cv._contextRequestId)return;if(!r.ok)throw Error(data.error||'Chart data unavailable');cv._contextBars=data.bars;cv._contextDates=data.dates;cv._contextMetrics=data.metrics||{};if(cv._chart)cv._chart.bars=data.bars;cv._contextError='';}catch(e){if(requestId!==cv._contextRequestId)return;cv._contextBars=null;cv._contextError=e.message;}cv._contextLoading=false;const card=cv.closest('.evc,.event');if(card){const title=card.querySelector('.evt,.eventtitle');if(title)title.textContent=`${cv._event.ticker} · ${fmtDate(anchor)}`;const metrics=cv._contextMetrics?.[anchor];if(metrics){const gap=card.querySelector('[data-gap-tag]'),dvol=card.querySelector('[data-dvol-tag]');if(gap)gap.textContent=`Gap ${fmtPct(metrics.gap_pct)}`;if(dvol)dvol.textContent=`Vol $${fmtNum(metrics.dollar_volume)}`}if(cv._contextError){let msg=card.querySelector('.chartError');if(!msg){msg=document.createElement('div');msg.className='noevents chartError';card.appendChild(msg)}msg.textContent=cv._contextError}else card.querySelector('.chartError')?.remove()}drawKWChart(cv);if(kwModalSource===cv)renderKWModal()}
+async function loadKWContext(cv,anchor,days){if(!cv?._chart)return;cv._activeDate=anchor;cv._contextLoading=true;const requestId=(cv._contextRequestId||0)+1;cv._contextRequestId=requestId;const q=new URLSearchParams({ticker:cv._event.ticker,date:anchor,days:String(days||5),tf:(cv._timeframe||'2m').toLowerCase()==='1d'?'1d':(cv._timeframe||'2m').toLowerCase(),user,token});try{const r=await fetch('/api/chart-context?'+q),data=await r.json();if(requestId!==cv._contextRequestId)return;if(!r.ok)throw Error(data.error||'Chart data unavailable');cv._contextBars=data.bars;cv._contextDates=data.dates;cv._contextDaily=!!data.daily;cv._contextMetrics=data.metrics||{};if(cv._chart)cv._chart.bars=data.bars;cv._contextError='';}catch(e){if(requestId!==cv._contextRequestId)return;cv._contextBars=null;cv._contextError=e.message;}cv._contextLoading=false;const card=cv.closest('.evc,.event');if(card){const title=card.querySelector('.evt,.eventtitle');if(title)title.textContent=`${cv._event.ticker} · ${fmtDate(anchor)}`;const metrics=cv._contextMetrics?.[anchor];if(metrics){const gap=card.querySelector('[data-gap-tag]'),dvol=card.querySelector('[data-dvol-tag]');if(gap)gap.textContent=`Gap ${fmtPct(metrics.gap_pct)}`;if(dvol)dvol.textContent=`Vol $${fmtNum(metrics.dollar_volume)}`}if(cv._contextError){let msg=card.querySelector('.chartError');if(!msg){msg=document.createElement('div');msg.className='noevents chartError';card.appendChild(msg)}msg.textContent=cv._contextError}else card.querySelector('.chartError')?.remove()}drawKWChart(cv);if(kwModalSource===cv)renderKWModal()}
 function openKWModal(cv){kwModalSource=cv;const group=cv.closest('.stock,.compareMatch')||document;kwModalSeries=[...group.querySelectorAll('.priceChart')].filter(c=>c._chart);kwModalIndex=Math.max(0,kwModalSeries.indexOf(cv));$('#chartModal').classList.add('open');requestAnimationFrame(renderKWModal)}
 function renderKWModal(){const src=kwModalSeries[kwModalIndex];if(!src)return;const cv=$('#kwModalCanvas');cv._chart=src._chart;cv._event=src._event;cv._timeframe=src._timeframe||'2m';cv._contextBars=src._contextBars;cv._contextDates=src._contextDates;cv._contextMetrics=src._contextMetrics;cv._panOffset=src._panOffset||0;cv._onPanChange=value=>{src._panOffset=value;src._onPanChange?.(value)};cv._onPanEdge=side=>src._onPanEdge?.(side);cv._activeDate=src._activeDate;cv._chartDays=src._chartDays;cv._zoom=src._zoom||1;$('#kwModalTitle').textContent=src._event.ticker+' · '+fmtDate(src._activeDate||src._event.date);const activeMetrics=src._contextMetrics?.[src._activeDate||src._event.date],gapPct=activeMetrics?.gap_pct??src._event.gap_pct,dvol=activeMetrics?.dollar_volume??src._event.dollar_volume;$('#kwModalTags').innerHTML=`<span class="evtag gap">Gap ${fmtPct(gapPct)}</span><span class="evtag dvol">Vol $${fmtNum(dvol)}</span>`;$('#kwModalTf').value=cv._timeframe.toLowerCase()==='1d'?'1d':cv._timeframe;$('#kwModalDays').value=String(cv._chartDays||5);const card=src.closest('.evc,.event'),sig=card?.closest('.stock')?.querySelector('.kwSig'),boneCheck=card?.closest('.stock')?.querySelector('.kwBone');$('#kwModalSig').innerHTML=sig?.innerHTML||'<option value="none">No signals</option><option value="all">All entry models</option>';$('#kwModalSig').value=sig?.value||'none';$('#kwModalBone').checked=!!boneCheck?.checked;cv.setAttribute('height',String(Math.max(350,window.innerHeight-110)));drawKWChart(cv)}
 function closeKWModal(){$('#chartModal').classList.remove('open');kwModalSource=null}
-$('#kwModalTf').onchange=()=>{const src=kwModalSeries[kwModalIndex];if(!src)return;src._timeframe=$('#kwModalTf').value;if(src._timeframe==='1d'&&src._chartDays===1)src._chartDays=20;else if(['15m','30m'].includes(src._timeframe)&&src._chartDays===1)src._chartDays=5;const card=src.closest('.evc,.event'),tf=card?.querySelector('.evtf,.eventTf'),days=card?.querySelector('.evdays,.eventDays');if(tf)tf.value=src._timeframe;if(days)days.value=String(src._chartDays);src._panOffset=0;loadKWContext(src,src._activeDate||src._event.date,src._chartDays||5)};
+$('#kwModalTf').onchange=()=>{const src=kwModalSeries[kwModalIndex];if(!src)return;src._timeframe=$('#kwModalTf').value;if(src._timeframe==='1d'&&src._chartDays===1)src._chartDays=20;else if(['15m','30m'].includes(src._timeframe)&&src._chartDays===1)src._chartDays=5;const card=src.closest('.evc,.event'),tf=card?.querySelector('.evtf,.eventTf'),days=card?.querySelector('.evdays,.eventDays');if(tf)tf.value=src._timeframe;if(days)days.value=String(src._chartDays);src._panOffset=0;if((src._timeframe==='1d')!==!!src._contextDaily||!src._contextBars)loadKWContext(src,src._activeDate||src._event.date,src._chartDays||5);else{drawKWChart(src);renderKWModal()}};
 $('#kwModalDays').onchange=()=>{const src=kwModalSeries[kwModalIndex];if(!src)return;src._chartDays=Number($('#kwModalDays').value);const card=src.closest('.evc,.event'),days=card?.querySelector('.evdays,.eventDays');if(days)days.value=String(src._chartDays);loadKWContext(src,src._activeDate||src._event.date,src._chartDays)};
 $('#kwZoomOut').onclick=()=>{const src=kwModalSeries[kwModalIndex];if(src){src._zoom=Math.max(.5,(src._zoom||1)*.8);renderKWModal()}};$('#kwZoomIn').onclick=()=>{const src=kwModalSeries[kwModalIndex];if(src){src._zoom=Math.min(8,(src._zoom||1)*1.25);renderKWModal()}};
 $('#kwModalSig').onchange=()=>{const src=kwModalSeries[kwModalIndex];if(!src)return;const group=src.closest('.stock');if(group){const sig=group.querySelector('.kwSig');if(sig)sig.value=$('#kwModalSig').value;group.querySelectorAll('.priceChart').forEach(drawKWChart)}else drawKWChart($('#kwModalCanvas'))};
