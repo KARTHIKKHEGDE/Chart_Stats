@@ -2249,6 +2249,49 @@ def _load_tc2000_scanner_symbols():
     return symbols
 
 
+def _alpaca_premarket_volumes(tickers, session_date):
+    """Return cumulative 04:00–09:30 ET volume for candidate symbols from Alpaca bars."""
+    key = os.getenv("ALPACA_API_KEY")
+    secret = os.getenv("ALPACA_API_SECRET")
+    if not key or not secret:
+        raise RuntimeError("Alpaca API credentials are not configured")
+
+    start_et = dt.datetime.combine(dt.date.fromisoformat(session_date), dt.time(4, 0), tzinfo=ET)
+    start_utc = start_et.astimezone(dt.timezone.utc)
+    headers = {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret}
+    feed = os.getenv("ALPACA_FEED", "sip")
+    volumes = {ticker: 0.0 for ticker in tickers}
+    batch_size = 40
+    for offset in range(0, len(tickers), batch_size):
+        params = {
+            "symbols": ",".join(tickers[offset:offset + batch_size]),
+            "timeframe": "1Min",
+            "start": start_utc.isoformat().replace("+00:00", "Z"),
+            "limit": 10000,
+            "feed": feed,
+            "adjustment": "raw",
+            "sort": "asc",
+        }
+        while True:
+            response = requests.get("https://data.alpaca.markets/v2/stocks/bars",
+                                    headers=headers, params=params, timeout=20)
+            if response.status_code != 200:
+                raise RuntimeError(f"Alpaca bars request failed ({response.status_code}): "
+                                   f"{response.text[:300]}")
+            payload = response.json()
+            for ticker, bars in (payload.get("bars") or {}).items():
+                for bar in bars:
+                    stamp = dt.datetime.fromisoformat(bar["t"].replace("Z", "+00:00")).astimezone(ET)
+                    if (stamp.date() == start_et.date() and
+                            dt.time(4, 0) <= stamp.time() < dt.time(9, 30)):
+                        volumes[ticker] = volumes.get(ticker, 0.0) + max(0.0, float(bar.get("v") or 0))
+            page_token = payload.get("next_page_token")
+            if not page_token:
+                break
+            params["page_token"] = page_token
+    return volumes
+
+
 def _yahoo_scanner_rows():
     """Fetch Yahoo's free gainers screener and apply the scanner's local filters."""
     query = yf.EquityQuery("and", [
@@ -2340,16 +2383,17 @@ def _yahoo_all_premarket_rows(session_date):
         _scanner_scan_state["done"] = 0
 
     today = dt.date.fromisoformat(session_date)
-    rows_by_ticker = {}
+    candidates = {}
     counts = {"history_with_bars": 0, "history_without_today": 0,
-              "history_errors": 0, "history_not_gap": 0, "history_error_types": {}}
+              "history_without_previous_close": 0, "history_errors": 0,
+              "history_not_gap": 0, "history_error_types": {}, "alpaca_errors": 0}
 
     def scan_symbol(ticker):
         try:
             yahoo_ticker = ticker.replace(".", "-")
             bars = yf.Ticker(yahoo_ticker).history(period="2d", interval="1m", prepost=True,
                                              auto_adjust=False, timeout=10)
-            if bars is None or bars.empty or "Close" not in bars or "Volume" not in bars or bars.index.tz is None:
+            if bars is None or bars.empty or "Close" not in bars or bars.index.tz is None:
                 return ticker, None, "history_without_today"
             eastern_index = bars.index.tz_convert(ET)
             current_mask = eastern_index.date == today
@@ -2364,19 +2408,16 @@ def _yahoo_all_premarket_rows(session_date):
                              for d, t in zip(eastern_index.date, eastern_index.time)]
             previous = bars.loc[previous_mask]
             previous_close = float(previous["Close"].iloc[-1]) if not previous.empty else None
-            if not previous_close or previous_close <= 0:
-                return ticker, None, "history_without_today"
+            if previous_close is None or previous_close <= 0:
+                return ticker, None, "history_without_previous_close"
             price = float(current["Close"].iloc[-1])
-            volume = float(current["Volume"].fillna(0).clip(lower=0).sum())
-            if price <= 0 or volume <= 0:
+            if price <= 0:
                 return ticker, None, "history_without_today"
             gap_pct = (price / previous_close - 1) * 100
-            dollar_volume = price * volume
-            if 0.40 < price < 20 and gap_pct > 40 and dollar_volume >= 500_000:
+            if 0.40 < price < 20 and gap_pct > 40:
                 return ticker, {"ticker": ticker, "price": round(price, 4),
                                 "previous_close": round(previous_close, 4),
-                                "gap_pct": round(gap_pct, 2), "dollar_volume": round(dollar_volume),
-                                "volume": round(volume)}, "match"
+                                "gap_pct": round(gap_pct, 2)}, "candidate"
             return ticker, None, "history_not_gap"
         except Exception as exc:
             return ticker, None, ("history_error", type(exc).__name__)
@@ -2390,42 +2431,68 @@ def _yahoo_all_premarket_rows(session_date):
             for future in as_completed(futures):
                 ticker, row, outcome = future.result()
                 if row:
-                    rows_by_ticker[ticker] = row
+                    candidates[ticker] = row
                 elif isinstance(outcome, tuple) and outcome[0] == "history_error":
                     counts["history_errors"] += 1
                     error_type = outcome[1]
                     counts["history_error_types"][error_type] = counts["history_error_types"].get(error_type, 0) + 1
                 elif outcome == "history_without_today":
                     counts["history_without_today"] += 1
+                elif outcome == "history_without_previous_close":
+                    counts["history_without_previous_close"] += 1
                 else:
                     counts["history_not_gap"] += 1
-                counts["history_with_bars"] += outcome == "history_not_gap" or outcome == "match"
+                counts["history_with_bars"] += outcome in ("history_not_gap", "candidate")
                 with _scanner_cache_lock:
                     _scanner_scan_state["symbols_done"] += 1
                     done = _scanner_scan_state["symbols_done"]
                 if done % 250 == 0 or done == total:
                     _scanner_log(f"Yahoo history tested {done}/{total} TC2000 tickers; "
-                                 f"current gap matches={len(rows_by_ticker)}; "
+                                 f"Yahoo gap candidates={len(candidates)}; "
                                  f"request errors={counts['history_errors']}")
-            with _scanner_cache_lock:
-                if (_scanner_cache.get("session_date") == session_date and
-                        _scanner_cache.get("source") == "premarket"):
-                    partial = sorted(rows_by_ticker.values(),
-                                     key=lambda row: (-row["gap_pct"], -row["dollar_volume"], row["ticker"]))
-                    _scanner_cache.update(at=time.time(), rows=partial)
 
-    rows = sorted(rows_by_ticker.values(),
-                  key=lambda row: (-row["gap_pct"], -row["dollar_volume"], row["ticker"]))
-    _scanner_log(f"TC2000 Yahoo scan finished in {time.monotonic() - scan_started:.1f}s; "
-                 f"universe={total}, histories tested={_scanner_scan_state['symbols_done']}, "
+    _scanner_log(f"Yahoo gap scan finished; universe={total}, "
+                 f"histories tested={_scanner_scan_state['symbols_done']}, "
                  f"histories with today's PM bars={counts['history_with_bars']}, "
                  f"no current bars={counts['history_without_today']}, "
+                 f"no previous close={counts['history_without_previous_close']}, "
                  f"request errors={counts['history_errors']} {counts['history_error_types']}, "
-                 f"nonmatching quotes={counts['history_not_gap']}, matches={len(rows)}")
+                 f"nonmatching tickers={counts['history_not_gap']}, "
+                 f"gap candidates={len(candidates)}")
+
     with _scanner_cache_lock:
+        _scanner_scan_state.update(phase="alpaca", candidates=len(candidates))
+    _scanner_log(f"Checking Alpaca {os.getenv('ALPACA_FEED', 'sip')} premarket volume "
+                 f"for {len(candidates)} Yahoo gap candidates only")
+    rows = []
+    if candidates:
+        try:
+            volumes = _alpaca_premarket_volumes(list(candidates), session_date)
+            for ticker, candidate in candidates.items():
+                volume = float(volumes.get(ticker, 0.0))
+                dollar_volume = candidate["price"] * volume
+                if volume > 0 and dollar_volume >= 500_000:
+                    rows.append({**candidate, "volume": round(volume),
+                                 "dollar_volume": round(dollar_volume)})
+                else:
+                    _scanner_log(f"Filtered {ticker}: Alpaca premarket volume={volume:,.0f}; "
+                                 f"dollar volume=${dollar_volume:,.0f}")
+        except Exception as exc:
+            counts["alpaca_errors"] = len(candidates)
+            _scanner_log(f"Alpaca premarket volume check failed for {len(candidates)} candidates: "
+                         f"{type(exc).__name__}: {exc}")
+    rows.sort(key=lambda row: (-row["gap_pct"], -row["dollar_volume"], row["ticker"]))
+    _scanner_log(f"TC2000 hybrid scan finished in {time.monotonic() - scan_started:.1f}s; "
+                 f"universe={total}, Yahoo histories checked={_scanner_scan_state['symbols_done']}, "
+                 f"Yahoo candidates={len(candidates)}, Alpaca volume errors={counts['alpaca_errors']}, "
+                 f"qualified matches={len(rows)}")
+    with _scanner_cache_lock:
+        issues = []
         if counts["history_errors"]:
-            _scanner_scan_state["error"] = (f"Yahoo history failed for {counts['history_errors']} of "
-                                             f"{total} TC2000 symbols; see local [gap-scanner] log")
+            issues.append(f"Yahoo history failed for {counts['history_errors']}/{total} symbols")
+        if counts["alpaca_errors"]:
+            issues.append(f"Alpaca volume failed for {counts['alpaca_errors']}/{len(candidates)} candidates")
+        _scanner_scan_state["error"] = "; ".join(issues)
         _scanner_scan_state["done"] = 1
     for row in rows:
         _scanner_log(f"MATCH {row['ticker']} gap=+{row['gap_pct']:.1f}% "
@@ -2712,7 +2779,7 @@ def scanner_market_scan():
             if scan_due:
                 _scanner_scan_state.update(running=True, session_date=session_date,
                                            done=0, total=0, symbols_done=0, symbols_total=0,
-                                           universe_total=0, phase="history", error="")
+                                           universe_total=0, phase="history", candidates=0, error="")
                 _scanner_scan_pool.submit(_refresh_yahoo_premarket_universe, session_date)
         elif (_scanner_cache.get("source") != "regular" or
               now - _scanner_cache["at"] >= 25):
@@ -2739,6 +2806,7 @@ def scanner_market_scan():
                         "scan_symbols_total": _scanner_scan_state.get("symbols_total", 0),
                         "scan_universe_total": _scanner_scan_state.get("universe_total", 0),
                         "scan_phase": _scanner_scan_state.get("phase", ""),
+                        "scan_candidates": _scanner_scan_state.get("candidates", 0),
                         "scan_error": _scanner_scan_state.get("error", "")})
 
 
@@ -2888,7 +2956,7 @@ canvas{display:block;width:100%}
       <span id="scanner_settings_status" style="margin-left:auto;color:#777">Settings save per user</span>
     </div>
     <div style="padding:10px 18px;color:#888;font-size:12px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
-      <span id="scanner_status">Waiting for scan…</span><span>Yahoo Finance · quotes may be delayed · Click a ticker to load its notes</span>
+      <span id="scanner_status">Waiting for scan…</span><span>Yahoo premarket prices · Alpaca SIP volume (up to 15-min delay) · Click a ticker to load its notes</span>
     </div>
     <div style="overflow:auto;padding:0 18px 18px">
       <table style="width:100%;border-collapse:collapse"><thead><tr style="color:#aaa;text-align:left;border-bottom:1px solid #333">
@@ -4916,7 +4984,9 @@ async function refreshScanner(){
     }
     const stamp = new Date((data.updated || Date.now()/1000)*1000).toLocaleTimeString();
     status.textContent = data.scanning
-      ? `Scanning TC2000 US Common Stocks · ${Number(data.scan_symbols_done||0).toLocaleString()} / ${Number(data.scan_universe_total||0).toLocaleString()} tickers checked`
+      ? (data.scan_phase === 'alpaca'
+        ? `Checking Alpaca premarket volume · ${Number(data.scan_candidates||0).toLocaleString()} Yahoo gap candidates`
+        : `Checking Yahoo premarket gaps · ${Number(data.scan_symbols_done||0).toLocaleString()} / ${Number(data.scan_universe_total||0).toLocaleString()} TC2000 tickers`)
       : `${tickers.length} matching ticker${tickers.length===1?'':'s'} · ${data.scan_error ? 'Coverage incomplete: '+esc(data.scan_error)+' · ' : ''}Updated ${stamp} · Full scan refreshes every 60 seconds`;
     if(scannerAlarmEnabled){
       const now = Date.now();
