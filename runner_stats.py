@@ -953,7 +953,7 @@ h2{font-size:12px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;ma
   <button id="csvDownload" disabled>Download CSV</button>
   <button id="csvDelete" disabled style="color:var(--r);border-color:var(--r)">Delete CSV</button>
   <span id="csvState" class="csvState">Loading your saved CSVs…</span>
-  <span class="csvHint">Share and dollar amounts are in millions, rounded to two decimals; prices retain four decimals. Premarket volume / float is included as a multiple. Your CSV autosaves privately to your account.</span>
+  <span class="csvHint">Share and dollar amounts are in millions. All numeric values are rounded to two decimals. Premarket volume / float is included as a multiple. Your CSV autosaves privately to your account.</span>
 </div>
 <!-- Multi-Ticker Tab Bar -->
 <div id="tab_bar" style="display:none;padding:8px 34px 0;background:#050505;border-bottom:1px solid var(--line);gap:6px;overflow-x:auto;align-items:center;flex-wrap:nowrap"></div>
@@ -1272,6 +1272,9 @@ function migrateCsvCollection(file){
       if(key in row&&row[key]!==''&&row[key]!=null){const value=csvRound(row[key]);if(value!==row[key]){row[key]=value;changed=true}}
     });
     Object.keys(row).filter(key=>/^Leg \d+ Dollar Move per Share$/.test(key)).forEach(key=>{const value=csvRound(row[key]);if(value!==row[key]){row[key]=value;changed=true}});
+    ['First Red Day Open Price (USD)','First Red Day High Price (USD)','First Red Day Low Price (USD)','First Red Day Close Price (USD)'].forEach(key=>{
+      if(key in row&&row[key]!==''&&row[key]!=null){const value=csvRound(row[key]);if(value!==row[key]){row[key]=value;changed=true}}
+    });
     if(row['First Red Day Premarket Volume (Millions of Shares)']!=null&&row['Float Before Rally (Millions of Shares)']!=null&&!('First Red Day Premarket Volume / Float (Times)' in row)){
       const pm=Number(row['First Red Day Premarket Volume (Millions of Shares)']),flt=Number(row['Float Before Rally (Millions of Shares)']);
       row['First Red Day Premarket Volume / Float (Times)']=Number.isFinite(pm)&&Number.isFinite(flt)&&flt>0?csvRound(pm/flt):'';changed=true;
@@ -1343,10 +1346,10 @@ function csvSetupRow(){
     'First Red Day Regular-Market Volume (Millions of Shares)':s.frd_regular_market_volume==null?'':csvRound(s.frd_regular_market_volume/1e6),
     'First Red Day Regular-Market Dollar Volume (USD Millions)':s.frd_regular_market_dollar_volume==null?'':csvRound(s.frd_regular_market_dollar_volume/1e6),
     'First Red Day Open-to-High Volume (Millions of Shares)':s.frd_open_to_high_volume==null?'':csvRound(s.frd_open_to_high_volume/1e6),
-    'First Red Day Open Price (USD)':s.frd_open==null?'':csvRound(s.frd_open,4),
-    'First Red Day High Price (USD)':s.frd_high==null?'':csvRound(s.frd_high,4),
-    'First Red Day Low Price (USD)':s.frd_low==null?'':csvRound(s.frd_low,4),
-    'First Red Day Close Price (USD)':s.frd_close==null?'':csvRound(s.frd_close,4),
+    'First Red Day Open Price (USD)':s.frd_open==null?'':csvRound(s.frd_open),
+    'First Red Day High Price (USD)':s.frd_high==null?'':csvRound(s.frd_high),
+    'First Red Day Low Price (USD)':s.frd_low==null?'':csvRound(s.frd_low),
+    'First Red Day Close Price (USD)':s.frd_close==null?'':csvRound(s.frd_close),
     'First Red Day High-of-Day Time (IST)':s.frd_hod_time_ist||''
   });
   return row;
