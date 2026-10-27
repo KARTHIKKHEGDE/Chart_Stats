@@ -5184,9 +5184,13 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   const ph = H - T - VH - B - 6, pw = W - L - R, vy0 = T + ph + 6, vy1 = vy0 + VH;
   const sg = sel === 'none' ? [] : (c.sig || []).filter(s => sel === 'all' || s.name === sel);
   const span=daily?Math.max(1,b.t.length):multi?dates.length*720:720, fullStart=daily?-.5:240;
-  const viewSpan=Math.min(span,(daily?span:720)/Math.max(1,zoom)),panLimit=Math.max(0,span-viewSpan)/2;
+  // Keep intraday zoom centered on the selected session.  Do not clamp zoom
+  // to 1x: that made every zoom-out click a no-op.  The loaded date range is
+  // still the upper limit, so zooming out reveals neighboring sessions.
+  const baseViewSpan=daily?span:720;
+  const viewSpan=Math.min(span,baseViewSpan/Math.max(.125,zoom)),panLimit=Math.max(0,span-viewSpan)/2;
   let viewBase=fullStart+panLimit,panMin=-panLimit,panMax=panLimit;
-  if(multi){const anchorIndex=dates.indexOf(cv._anchorDate||c.date);if(anchorIndex>=0){viewBase=fullStart+anchorIndex*720;panMin=fullStart-viewBase;panMax=fullStart+span-viewSpan-viewBase;}}
+  if(multi){const anchorIndex=dates.indexOf(cv._anchorDate||c.date);if(anchorIndex>=0){viewBase=fullStart+anchorIndex*720+360-viewSpan/2;panMin=fullStart-viewBase;panMax=fullStart+span-viewSpan-viewBase;}}
   cv._panMinOffset=panMin;cv._panMaxOffset=panMax;
   cv._panOffset=Math.max(panMin,Math.min(panMax,cv._panOffset||0));
   const viewStart=viewBase+cv._panOffset,X=m=>L+pw*(m-viewStart)/viewSpan;
