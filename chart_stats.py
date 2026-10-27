@@ -3326,6 +3326,10 @@ canvas{display:block;width:100%}
         <span id="cm_counter" style="font-size:12px;color:#888;min-width:70px;text-align:center"></span>
         <button id="cm_next" onclick="nextModalChart()" style="height:32px;font-size:13px;padding:0 12px;background:#1a1a1a;border:1px solid #444;color:#ddd;cursor:pointer;border-radius:3px" title="Next chart (Right Arrow)">Next →</button>
 
+        <select id="cm_tf" title="Chart timeframe" style="height:32px;font-size:12px;padding:0 8px;background:#181818;border:1px solid #444;color:#fff;margin:0">
+          <option>1m</option><option>2m</option><option>5m</option><option>15m</option>
+        </select>
+
         <div style="width:1px;height:20px;background:#333;margin:0 4px"></div>
 
         <select id="cm_sig" style="height:32px;font-size:12px;padding:0 8px;background:#181818;border:1px solid #444;color:#fff;margin:0">
@@ -4205,6 +4209,7 @@ window.openChartModal = function(i){
 
   if(mainSig) $('#cm_sig').value = mainSig.value;
   if(mainBz) $('#cm_bz').checked = mainBz.checked;
+  $('#cm_tf').value = card && card._chartTf ? card._chartTf : '2m';
 
   $('#chart_modal').style.display = 'flex';
   setTimeout(renderModalChart, 30);
@@ -4233,7 +4238,7 @@ window.renderModalChart = function(){
   const bzChecked = $('#cm_bz').checked;
 
   const card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);
-  drawEv(cv, item.chart, sel, bzChecked, targetH, card?card._chartTf:'2m');
+  drawEv(cv, item.chart, sel, bzChecked, targetH, $('#cm_tf').value || (card?card._chartTf:'2m'));
 };
 
 window.nextModalChart = function(){
@@ -4273,6 +4278,21 @@ $('#cm_sig').onchange = () => {
       drawEvAll(openTabs[activeTab].EV, openTabs[activeTab].container);
     }
   }
+};
+
+$('#cm_tf').onchange = () => {
+  if(!activeTab || !openTabs[activeTab]) return;
+  const card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);
+  if(card){
+    card._chartTf=$('#cm_tf').value;
+    const cardSelect=card.querySelector('.evtf');
+    if(cardSelect) cardSelect.value=card._chartTf;
+    const item=(openTabs[activeTab].EV||[])[currentModalIndex];
+    if(item) drawEv(card.querySelector(`#ev${currentModalSlot}`),item.chart,
+      openTabs[activeTab].container.querySelector('#sig')?.value||'none',
+      openTabs[activeTab].container.querySelector('#bz')?.checked||false,undefined,card._chartTf);
+  }
+  renderModalChart();
 };
 
 $('#cm_bz').onchange = () => {
