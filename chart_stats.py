@@ -2918,10 +2918,9 @@ def _fetch_yahoo_news(ticker):
             return 0
     unique.sort(key=published_at, reverse=True)
     now_ts = time.time()
-    # Only display press releases published in the last 48 hours; undated and
-    # future-dated Yahoo items cannot be reliably checked and are excluded.
-    unique = [item for item in unique
-              if now_ts - 48 * 60 * 60 <= published_at(item) <= now_ts]
+    # Show the latest dated releases regardless of age; ignore undated and
+    # future-dated items so every displayed release can carry a useful date tag.
+    unique = [item for item in unique if 0 < published_at(item) <= now_ts]
     if not unique:
         app.logger.warning("No press releases found for %s. News fetch diagnostics: %s",
                            ticker, " | ".join(errors) if errors else "sources returned no matching press releases")
