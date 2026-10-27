@@ -6608,6 +6608,7 @@ input[type=text]{width:min(420px,70vw)}input[type=date]{width:140px}select{min-w
 <script>
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const user=localStorage.getItem('gap_user')||'', token=localStorage.getItem('gap_token')||'';
+const RG_START=9*60+30;
 let rows=[],offset=0,total=0,observer=null,chartObserver=null,searchGeneration=0,eventScreenGeneration=0,kwModalSource=null,kwModalSeries=[],kwModalIndex=0;
 const now=new Date(), isoDate=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 $('#endDate').value=isoDate(now);const oneYear=new Date(now);oneYear.setFullYear(oneYear.getFullYear()-1);$('#startDate').value=isoDate(oneYear);updateCriteriaLabels();$('#gapFilterEnabled').onchange=()=>{$('#gapMinPct').disabled=!$('#gapFilterEnabled').checked;updateCriteriaLabels();if(rows.length)search(true)};$('#gapMinPct').onchange=()=>{updateCriteriaLabels();if($('#gapFilterEnabled').checked&&rows.length)search(true)};
