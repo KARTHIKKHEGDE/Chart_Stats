@@ -1138,6 +1138,9 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     day_str = str(day_obj)
     day_name = day_obj.strftime("%A") if hasattr(day_obj, "strftime") else ""
     day_display = f"{day_str} ({day_name})" if day_name else day_str
+    next_session = day_obj + dt.timedelta(days=1)
+    while next_session.weekday() >= 5:
+        next_session += dt.timedelta(days=1)
 
     # ---- [1] current day
     pm_fade = (open_ / lm["pm_high"] - 1) if open_ and lm.get("pm_high") else None
@@ -1229,7 +1232,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     # ---- [6] per-event 2-min charts (today first)
     evch = []
     if live["df"] is not None and len(live["df"]):
-        evch.append({"title": f"TODAY {day_str}  gap {pct(gap_live, 0)}  (live)", "date": live["date"], "sim": True,
+        evch.append({"title": f"TODAY {day_str}  gap {pct(gap_live, 0)}  (live)", "date": day_str, "sim": True,
                      "chart": chart_pack(live["df"], lm, pc, day_obj)})
     for i, e in enumerate(events, 1):
         evch.append({"title": f"#{i}  {fdate(e['date'])}  gap {pct(e['gap'], 0)}  O→C {pct(e['o2c'], 0)}", "date": e["date"],
@@ -1412,12 +1415,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
         text += [""] + [f"Note: {n}" for n in notes]
     return {"head": head, "titles": T, "p1": {"left": left, "right": right},
             "open_hod_stats": open_hod, "hod_times": hod_times, "tables": tables,
-            "evcharts": evch, "session_dates": [r["date"] for r in daily] + [
-                live["date"],
-                (dt.date.fromisoformat(live["date"]) + dt.timedelta(days=1)).isoformat()
-                if (dt.date.fromisoformat(live["date"]) + dt.timedelta(days=1)).weekday() < 5 else
-                (dt.date.fromisoformat(live["date"]) + dt.timedelta(days=(7-dt.date.fromisoformat(live["date"]).weekday()))).isoformat()
-            ],
+            "evcharts": evch, "session_dates": [r["date"] for r in daily] + [day_str, next_session.isoformat()],
             "model_names": ["Short at open", "PM high rejection", "5m low break",
                                               "First red 5m candle", "VWAP loss (post-HOD)"],
             "pa": p3, "pb": p4, "pc": p5, "pd": {"cols": mcols, "rows": mrows},
