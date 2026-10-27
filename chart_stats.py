@@ -1956,32 +1956,27 @@ def clear_old_searches():
 
 
 DEFAULT_SCANNER_SETTINGS = {
-    "version": 2,
+    "version": 3,
     "voice_enabled": False,
     "voice_volume": 100,
     "voice_uri": "",
     "approach_pct": 2.0,
     "vwap_enabled": True,
-    "bone_2m_enabled": False,
-    "bone_5m_enabled": False,
     "news_enabled": True,
 }
 _scanner_user_settings_lock = threading.RLock()
 _scanner_user_settings_file = Path(__file__).resolve().parent / ".scanner_user_settings.json"
 _APP_UI_VISIBILITY_KEY = "app_ui_visibility"
+_APP_UI_VISIBILITY_USER_KEY = "app_ui_visibility_user"
+_APP_UI_VISIBILITY_DEFAULT_KEY = "app_ui_visibility_default"
 _APP_UI_VISIBILITY_DEFAULTS = {"scanner": True, "runner_stats": True}
 _app_ui_visibility_file = Path(__file__).resolve().parent / ".app_ui_visibility.json"
+_app_ui_user_visibility_file = Path(__file__).resolve().parent / ".app_ui_user_visibility.json"
 _app_ui_visibility_lock = threading.RLock()
 
 
 def _normalize_scanner_settings(value):
     source = value if isinstance(value, dict) else {}
-    try:
-        version = int(source.get("version", 0))
-    except (TypeError, ValueError):
-        version = 0
-    if version < 2:
-        source = {**source, "bone_2m_enabled": False, "bone_5m_enabled": False, "version": 2}
     try:
         approach_pct = float(source.get("approach_pct", DEFAULT_SCANNER_SETTINGS["approach_pct"]))
     except (TypeError, ValueError):
@@ -1991,14 +1986,12 @@ def _normalize_scanner_settings(value):
     except (TypeError, ValueError):
         voice_volume = DEFAULT_SCANNER_SETTINGS["voice_volume"]
     return {
-        "version": 2,
+        "version": 3,
         "voice_enabled": bool(source.get("voice_enabled", DEFAULT_SCANNER_SETTINGS["voice_enabled"])),
         "voice_volume": max(0, min(100, voice_volume)),
         "voice_uri": str(source.get("voice_uri") or "")[:300],
         "approach_pct": round(max(0.1, min(10.0, approach_pct)), 2),
         "vwap_enabled": bool(source.get("vwap_enabled", DEFAULT_SCANNER_SETTINGS["vwap_enabled"])),
-        "bone_2m_enabled": bool(source.get("bone_2m_enabled", DEFAULT_SCANNER_SETTINGS["bone_2m_enabled"])),
-        "bone_5m_enabled": bool(source.get("bone_5m_enabled", DEFAULT_SCANNER_SETTINGS["bone_5m_enabled"])),
         "news_enabled": bool(source.get("news_enabled", DEFAULT_SCANNER_SETTINGS["news_enabled"])),
     }
 
@@ -2054,7 +2047,36 @@ def _write_local_app_ui_visibility(visibility):
         temp_path.replace(_app_ui_visibility_file)
 
 
-def _get_app_ui_visibility():
+def _read_local_user_ui_visibility(username):
+    try:
+        with _app_ui_visibility_lock:
+            saved = json.loads(_app_ui_user_visibility_file.read_text(encoding="utf-8"))
+        value = saved.get(username) if isinstance(saved, dict) else None
+        return _normalize_app_ui_visibility(value) if isinstance(value, dict) else None
+    except Exception:
+        return None
+
+
+def _write_local_user_ui_visibility(username, visibility):
+    with _app_ui_visibility_lock:
+        try:
+            saved = json.loads(_app_ui_user_visibility_file.read_text(encoding="utf-8"))
+            if not isinstance(saved, dict):
+                saved = {}
+        except Exception:
+            saved = {}
+        saved[username] = _normalize_app_ui_visibility(visibility)
+        temp_path = _app_ui_user_visibility_file.with_suffix(".tmp")
+        temp_path.write_text(json.dumps(saved, indent=2), encoding="utf-8")
+        temp_path.replace(_app_ui_user_visibility_file)
+
+
+def _get_app_ui_visibility(username=None):
+    target = (username or "").strip().lower()
+    if target:
+        local_user = _read_local_user_ui_visibility(target)
+        if local_user is not None:
+            return local_user
     sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
     sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
     if sub_url and sub_key:
@@ -2065,11 +2087,19 @@ def _get_app_ui_visibility():
             )
             if response.status_code == 200:
                 rows = response.json()
-                admins = [row for row in rows if row.get("is_admin") or row.get("can_rename")]
-                admins.sort(key=lambda row: (row.get("username", "").lower() not in ("karthik", "locke"),
-                                             row.get("username", "").lower()))
-                for row in admins:
-                    saved = _parse_admin_scanner_settings(row.get("scanner_settings")).get(_APP_UI_VISIBILITY_KEY)
+                row = next((item for item in rows if (item.get("username") or "").lower() == target), None)
+                if row:
+                    saved = _parse_admin_scanner_settings(row.get("scanner_settings")).get(_APP_UI_VISIBILITY_USER_KEY)
+                    if isinstance(saved, dict):
+                        return _normalize_app_ui_visibility(saved)
+                admins = [item for item in rows if item.get("is_admin") or item.get("can_rename")]
+                admins.sort(key=lambda item: ((item.get("username") or "").lower() not in ("karthik", "locke"),
+                                             (item.get("username") or "").lower()))
+                for admin_row in admins:
+                    admin_settings = _parse_admin_scanner_settings(admin_row.get("scanner_settings"))
+                    saved = admin_settings.get(_APP_UI_VISIBILITY_DEFAULT_KEY)
+                    if not isinstance(saved, dict):  # retain settings saved by older versions
+                        saved = admin_settings.get(_APP_UI_VISIBILITY_KEY)
                     if isinstance(saved, dict):
                         return _normalize_app_ui_visibility(saved)
         except Exception:
@@ -2097,7 +2127,7 @@ def _save_app_ui_visibility(visibility):
             if not username:
                 continue
             settings = _parse_admin_scanner_settings(row.get("scanner_settings"))
-            settings[_APP_UI_VISIBILITY_KEY] = clean
+            settings[_APP_UI_VISIBILITY_DEFAULT_KEY] = clean
             result = requests.patch(
                 f"{sub_url}/rest/v1/app_users?username=eq.{quote(username, safe='')}",
                 json={"scanner_settings": settings}, headers=_supabase_headers(), timeout=6
@@ -2129,8 +2159,9 @@ def _save_user_scanner_settings(username, settings):
     clean_settings = _normalize_scanner_settings(settings)
     existing = _db_get_user(username) or {}
     preserved = _parse_admin_scanner_settings(existing.get("scanner_settings"))
-    if isinstance(preserved.get(_APP_UI_VISIBILITY_KEY), dict):
-        clean_settings[_APP_UI_VISIBILITY_KEY] = preserved[_APP_UI_VISIBILITY_KEY]
+    for visibility_key in (_APP_UI_VISIBILITY_KEY, _APP_UI_VISIBILITY_USER_KEY, _APP_UI_VISIBILITY_DEFAULT_KEY):
+        if isinstance(preserved.get(visibility_key), dict):
+            clean_settings[visibility_key] = preserved[visibility_key]
     local_error = None
     try:
         _write_local_scanner_settings(username, clean_settings)
@@ -2156,7 +2187,44 @@ def _save_user_scanner_settings(username, settings):
 
 @app.route("/api/ui-visibility")
 def app_ui_visibility():
-    return jsonify(_get_app_ui_visibility())
+    username = (request.args.get("user") or "").strip().lower()
+    token = (request.args.get("token") or "").strip()
+    if not username or not token or not _db_validate_session(username, token):
+        return jsonify({"error": "Unauthorized"}), 401
+    return jsonify(_get_app_ui_visibility(username))
+
+
+@app.route("/api/admin/users/<target>/ui-visibility", methods=["GET", "POST"])
+def admin_user_ui_visibility(target):
+    admin = (request.args.get("user") or (request.get_json(silent=True) or {}).get("user") or "").strip().lower()
+    token = (request.args.get("token") or (request.get_json(silent=True) or {}).get("token") or "").strip()
+    password = (request.args.get("pwd") or (request.get_json(silent=True) or {}).get("pwd") or "").strip()
+    if admin not in {"karthik", "locke"} or password != "500" or not token or not _db_validate_session(admin, token):
+        return jsonify({"error": "Unauthorized"}), 401
+    target = (target or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9_]{2,20}", target) or not _db_get_user(target):
+        return jsonify({"error": "User not found"}), 404
+    if request.method == "GET":
+        return jsonify({"visibility": _get_app_ui_visibility(target)})
+    body = request.get_json(silent=True) or {}
+    visibility = body.get("visibility")
+    if not isinstance(visibility, dict) or any(type(visibility.get(key)) is not bool for key in ("scanner", "runner_stats")):
+        return jsonify({"error": "Both visibility options must be true or false."}), 400
+    record = _db_get_user(target) or {}
+    settings = _parse_admin_scanner_settings(record.get("scanner_settings"))
+    settings[_APP_UI_VISIBILITY_USER_KEY] = _normalize_app_ui_visibility(visibility)
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    if sub_url:
+        result = requests.patch(f"{sub_url}/rest/v1/app_users?username=eq.{quote(target, safe='')}",
+                                json={"scanner_settings": settings}, headers=_supabase_headers(), timeout=6)
+        if result.status_code not in (200, 204):
+            return jsonify({"error": f"Could not save access settings (HTTP {result.status_code})"}), 500
+    else:
+        try:
+            _write_local_user_ui_visibility(target, settings[_APP_UI_VISIBILITY_USER_KEY])
+        except Exception as exc:
+            return jsonify({"error": f"Could not save access settings: {exc}"}), 500
+    return jsonify({"ok": True, "visibility": settings[_APP_UI_VISIBILITY_USER_KEY]})
 
 
 @app.route("/api/admin/ui-visibility", methods=["GET", "POST"])
@@ -2267,6 +2335,7 @@ def admin_user_details(target):
         search_error = "Supabase is not configured; search history is unavailable."
 
     return jsonify({"profile": profile, "settings": settings,
+                    "ui_visibility": _get_app_ui_visibility(target),
                     "settings_configured": settings_configured, "settings_storage": settings_storage,
                     "recent_searches": searches, "search_error": search_error})
 
@@ -2822,19 +2891,6 @@ def _scanner_approaches(ticker, previous_close):
         levels.append(("VWAP", "approaching VWAP from above",
                        float(vwap_series.iloc[-1]), float(vwap_series.iloc[-2])))
 
-    now_et = dt.datetime.now(ET)
-    for timeframe in (2, 5):
-        grouped = bars.resample(f"{timeframe}min", origin="start_day", label="left", closed="left").agg(
-            {"o": "first", "h": "max", "l": "min", "c": "last", "v": "sum"}
-        ).dropna(subset=["c"])
-        grouped = grouped[grouped.index + pd.Timedelta(minutes=timeframe) <= pd.Timestamp(now_et)]
-        if len(grouped) < 21:
-            continue
-        ema_series = grouped.c.ewm(span=21, adjust=False).mean()
-        levels.append((f"BONE_{timeframe}M",
-                       f"approaching the {timeframe}-minute Bone Zone (21 EMA) from above",
-                       float(ema_series.iloc[-1]), float(ema_series.iloc[-2])))
-
     alerts = []
     for code, label, level, previous_level in levels:
         if level > 0 and previous_level > 0 and price > level and previous_price > previous_level:
@@ -2893,6 +2949,8 @@ def scanner_market_scan():
     token = (request.args.get("token") or "").strip()
     if not user or not token or not _db_validate_session(user, token):
         return jsonify({"error": "Session expired. Please sign in again."}), 401
+    if not _get_app_ui_visibility(user).get("scanner", True):
+        return jsonify({"error": "Scanner access is disabled for this account."}), 403
 
     now = time.time()
     session_date = _scanner_session_date()
@@ -3068,9 +3126,8 @@ canvas{display:block;width:100%}
       <div style="font-size:17px;font-weight:bold;color:#6cc4ff">🔎 Live Gap-Up Scanner</div>
       <div style="font-size:12px;color:#999">Price &gt;$0.40 and &lt;$20 · Gap &gt;40% · Dollar volume ≥$500K</div>
       <div style="margin-left:auto;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-        <label style="display:flex;align-items:center;gap:8px;color:#ffd23f;font-size:13px;cursor:pointer"><input id="scanner_alarm" type="checkbox" style="width:17px;height:17px"> Voice alarm · repeats every 5 min</label>
+        <label style="display:flex;align-items:center;gap:8px;color:#ffd23f;font-size:13px;cursor:pointer"><input id="scanner_alarm" type="checkbox" style="width:17px;height:17px"> Voice alerts (off by default)</label>
         <label style="display:flex;align-items:center;gap:7px;color:#aaa;font-size:12px">Volume <input id="scanner_alarm_volume" type="range" min="0" max="100" step="5" value="100" style="width:92px;height:18px;padding:0;accent-color:#ffd23f"><span id="scanner_alarm_volume_value" style="color:#ffd23f;min-width:34px">100%</span></label>
-        <label style="display:flex;align-items:center;gap:6px;color:#aaa;font-size:12px">Voice <select id="scanner_voice_select" style="height:30px;max-width:180px;margin:0;font-size:12px"><option value="">Auto · feminine if available</option></select></label>
       </div>
       <button id="scanner_refresh_btn" style="height:32px;font-size:13px;padding:0 12px">Refresh</button>
       <button id="scanner_close_btn" style="height:32px;font-size:13px;padding:0 12px" onclick="closeScanner()">Close</button>
@@ -3078,8 +3135,6 @@ canvas{display:block;width:100%}
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:10px 18px;background:#0d1014;border-bottom:1px solid #252b31;font-size:12px">
       <strong style="color:#aaa">Alert settings:</strong>
       <label style="display:flex;align-items:center;gap:5px"><input id="scanner_vwap_alert" type="checkbox" style="width:15px;height:15px"> VWAP</label>
-      <label style="display:flex;align-items:center;gap:5px"><input id="scanner_bone_2m_alert" type="checkbox" style="width:15px;height:15px"> Bone Zone 2m (21 EMA)</label>
-      <label style="display:flex;align-items:center;gap:5px"><input id="scanner_bone_5m_alert" type="checkbox" style="width:15px;height:15px"> Bone Zone 5m (21 EMA)</label>
       <label style="display:flex;align-items:center;gap:5px"><input id="scanner_news_alert" type="checkbox" style="width:15px;height:15px"> Announce News / PR</label>
       <label style="display:flex;align-items:center;gap:6px;color:#aaa">Alert within <input id="scanner_approach_pct" type="number" min="0.1" max="10" step="0.1" value="2" style="width:76px;height:30px;padding:2px 6px;font-size:13px"> %</label>
       <span id="scanner_settings_status" style="margin-left:auto;color:#777">Settings save per user</span>
@@ -3139,7 +3194,7 @@ canvas{display:block;width:100%}
       <button onclick="closeUsersModal()" style="background:transparent;border:none;color:#888;font-size:18px;cursor:pointer;padding:2px 6px" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#888'">✕</button>
     </div>
     <div style="padding:20px">
-      <div style="font-size:12px;color:#8a8a8a;margin-bottom:14px">Admins (karthik, locke) cannot be removed. Click a username to inspect account status, alert preferences, and recent searches.</div>
+      <div style="font-size:12px;color:#8a8a8a;margin-bottom:14px">Admins (karthik, locke) cannot be removed. Click a username to inspect account status, alert preferences, recent searches, and set that user’s tool access.</div>
       <div id="users_list" style="margin-bottom:20px;min-height:60px"></div>
       <div id="user_details" style="display:none;margin:0 0 20px;padding:14px;background:#080808;border:1px solid #333;border-radius:4px;max-height:42vh;overflow:auto"></div>
       <div style="display:flex;gap:10px;align-items:center;border-top:1px solid #222;padding-top:16px">
@@ -4406,14 +4461,18 @@ function applyAppUiVisibility(value){
   };
   const scannerButton = $('#scanner_open_btn');
   const runnerButton = $('#nav_multiday_btn');
+  const runnerNewTabButton = $('#open_multiday_newtab');
+  const runnerAdminButton = $('#multiday_stats_btn');
   if(scannerButton) scannerButton.style.display = appUiVisibility.scanner ? '' : 'none';
   if(runnerButton) runnerButton.style.display = appUiVisibility.runner_stats ? '' : 'none';
+  if(runnerNewTabButton) runnerNewTabButton.style.display = appUiVisibility.runner_stats ? '' : 'none';
+  if(runnerAdminButton) runnerAdminButton.style.display = appUiVisibility.runner_stats ? '' : 'none';
   if(!appUiVisibility.scanner && typeof closeScanner === 'function') closeScanner();
 }
 
 async function loadAppUiVisibility(){
   try{
-    const response = await fetch('/api/ui-visibility');
+    const response = await fetch('/api/ui-visibility?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken));
     if(response.ok) applyAppUiVisibility(await response.json());
   } catch(e){}
 }
@@ -4791,6 +4850,7 @@ function closeUsersModal(){
 }
 
 async function loadUsersModal(){
+  const cur = (currentUser||'').toLowerCase();
   try {
     const res = await fetch('/api/admin/users?user='+encodeURIComponent(currentUser)+'&pwd='+encodeURIComponent(adminPwd));
     const data = await res.json();
@@ -4829,7 +4889,10 @@ window.viewUserDetails = async function(name){
     const yesNo = v => v ? 'Yes' : 'No';
     const row = (label, value) => `<div style="display:flex;gap:10px;padding:5px 0;border-bottom:1px solid #1c1c1c"><span style="color:#888;min-width:190px">${esc(label)}</span><strong style="color:#ddd;overflow-wrap:anywhere">${esc(value === undefined || value === null || value === '' ? '—' : String(value))}</strong></div>`;
     const searches = (data.recent_searches || []).map(item=>`<div style="padding:5px 0;border-bottom:1px solid #1c1c1c"><strong style="color:#6cc4ff">${esc(item.ticker || '—')}</strong><span style="color:#888;margin-left:12px">${esc([item.date_ist,item.time_ist].filter(Boolean).join(' '))}</span></div>`).join('') || '<div style="color:#777;padding:6px 0">No recent searches found.</div>';
+    const visibility = data.ui_visibility || {scanner:true,runner_stats:true};
     panel.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><strong style="color:#6cc4ff;font-size:15px">${esc((p.username || name).toUpperCase())} · Account details</strong><span style="color:#777;font-size:11px">Preferences: ${esc(data.settings_storage || 'unknown')}</span></div>`+
+      `<div style="font-weight:bold;color:#ffd23f;margin:10px 0 4px">Tool access for this user</div>`+
+      `<div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin:7px 0 10px"><label style="color:#ddd"><input id="user_access_scanner" type="checkbox" ${visibility.scanner?'checked':''}> Scanner</label><label style="color:#ddd"><input id="user_access_runner" type="checkbox" ${visibility.runner_stats?'checked':''}> Runner Stats</label><button onclick="saveUserUiVisibility('${esc(name)}')" style="background:#071a28;border:1px solid #29a8ff;color:#6cc4ff;padding:5px 10px;cursor:pointer">Save access</button><span id="user_access_status" style="color:#888;font-size:12px"></span></div>`+
       `<div style="font-weight:bold;color:#ffd23f;margin:10px 0 4px">Account</div>`+
       row('Role', p.is_admin ? 'Admin' : p.can_rename ? 'Account manager' : 'User')+
       row('Password configured', yesNo(p.has_password))+
@@ -4841,12 +4904,25 @@ window.viewUserDetails = async function(name){
       row('Selected voice', s.voice_uri || 'Automatic')+
       row('Approach threshold', `${Number(s.approach_pct ?? 2)}%`)+
       row('VWAP alerts', yesNo(s.vwap_enabled))+
-      row('Bone Zone (21 EMA), 2 minute', yesNo(s.bone_2m_enabled))+
-      row('Bone Zone (21 EMA), 5 minute', yesNo(s.bone_5m_enabled))+
       row('News / PR announcements', yesNo(s.news_enabled))+
       `<div style="font-weight:bold;color:#ffd23f;margin:14px 0 4px">Recent searches</div>${searches}`+
       (data.search_error ? `<div style="color:#888;font-size:11px;margin-top:7px">${esc(data.search_error)}</div>` : '');
   } catch(error){ panel.innerHTML = `<span style="color:#ff7373">${esc(error.message)}</span>`; }
+};
+
+window.saveUserUiVisibility = async function(name){
+  const status = $('#user_access_status');
+  status.textContent = 'Saving…';
+  try{
+    const response = await fetch('/api/admin/users/'+encodeURIComponent(name)+'/ui-visibility?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken)+'&pwd='+encodeURIComponent(adminPwd), {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({visibility:{scanner:$('#user_access_scanner').checked,runner_stats:$('#user_access_runner').checked}})
+    });
+    const data = await response.json();
+    if(!response.ok) throw new Error(data.error || 'Could not save access');
+    status.textContent = 'Saved for '+name;
+    if(name.toLowerCase() === currentUser.toLowerCase()) applyAppUiVisibility(data.visibility);
+  }catch(error){status.textContent = error.message;}
 };
 
 async function addUser(){
@@ -4916,15 +4992,19 @@ function switchMainView(mode){
   }
 }
 if($('#nav_intraday_btn')) $('#nav_intraday_btn').onclick = () => switchMainView('intraday');
-if($('#nav_multiday_btn')) $('#nav_multiday_btn').onclick = () => window.open('/runner', '_blank');
-if($('#open_multiday_newtab')) $('#open_multiday_newtab').onclick = () => window.open('/runner', '_blank');
+function openRunnerStats(){
+  const url = '/runner?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken);
+  window.open(url, '_blank');
+}
+if($('#nav_multiday_btn')) $('#nav_multiday_btn').onclick = openRunnerStats;
+if($('#open_multiday_newtab')) $('#open_multiday_newtab').onclick = openRunnerStats;
 let scannerTimer = null;
 let scannerBusy = false;
 let scannerLastSpoken = new Map();
 let scannerNewsSpoken = new Map();
 let scannerAlertSession = '';
 let scannerSeenApproaches = new Set();
-const scannerSettingsDefaults = {version:2,voice_enabled:false,voice_volume:100,voice_uri:'',approach_pct:2,vwap_enabled:true,bone_2m_enabled:false,bone_5m_enabled:false,news_enabled:true};
+const scannerSettingsDefaults = {version:3,voice_enabled:false,voice_volume:100,voice_uri:'',approach_pct:2,vwap_enabled:true,news_enabled:true};
 let scannerSettings = {...scannerSettingsDefaults};
 let scannerSettingsUser = '';
 let scannerSettingsLoadPromise = null;
@@ -4948,11 +5028,9 @@ function startScannerPolling(){
 function migrateScannerSettings(settings){
   const source = settings && typeof settings === 'object' ? settings : {};
   const migrated = {...scannerSettingsDefaults, ...source};
-  if(Number(source.version || 0) < 2){
-    migrated.bone_2m_enabled = false;
-    migrated.bone_5m_enabled = false;
-  }
-  migrated.version = 2;
+  delete migrated.bone_2m_enabled;
+  delete migrated.bone_5m_enabled;
+  migrated.version = 3;
   return migrated;
 }
 
@@ -4964,11 +5042,10 @@ function applyScannerSettings(settings){
   $('#scanner_alarm_volume').value = scannerVoiceVolume;
   $('#scanner_alarm_volume_value').textContent = scannerVoiceVolume + '%';
   $('#scanner_vwap_alert').checked = !!scannerSettings.vwap_enabled;
-  $('#scanner_bone_2m_alert').checked = !!scannerSettings.bone_2m_enabled;
-  $('#scanner_bone_5m_alert').checked = !!scannerSettings.bone_5m_enabled;
   $('#scanner_news_alert').checked = !!scannerSettings.news_enabled;
   $('#scanner_approach_pct').value = scannerSettings.approach_pct;
-  if($('#scanner_voice_select')) $('#scanner_voice_select').value = scannerSettings.voice_uri || '';
+  const voice = scannerVoices[0];
+  if(voice) scannerSettings.voice_uri = voice.voiceURI;
 }
 
 function readScannerSettingsControls(){
@@ -4976,14 +5053,12 @@ function readScannerSettingsControls(){
   if(!Number.isFinite(approachPct)) approachPct = scannerSettings.approach_pct || 2;
   approachPct = Math.max(0.1, Math.min(10, approachPct));
   return {
-    version: 2,
+    version: 3,
     voice_enabled: $('#scanner_alarm').checked,
     voice_volume: Number($('#scanner_alarm_volume').value),
-    voice_uri: $('#scanner_voice_select').value || '',
+    voice_uri: scannerVoices[0]?.voiceURI || scannerSettings.voice_uri || '',
     approach_pct: Math.round(approachPct*10)/10,
     vwap_enabled: $('#scanner_vwap_alert').checked,
-    bone_2m_enabled: $('#scanner_bone_2m_alert').checked,
-    bone_5m_enabled: $('#scanner_bone_5m_alert').checked,
     news_enabled: $('#scanner_news_alert').checked
   };
 }
@@ -5104,11 +5179,16 @@ function playNextScannerAnnouncement(){
     utterance.rate = 1.0;
     utterance.pitch = 1.08;
     utterance.volume = scannerVoiceVolume / 100;
-    const voiceId = $('#scanner_voice_select').value;
-    const feminineVoice = scannerVoices.find(voice => /\b(aria|ava|amy|emma|jenny|june|karen|kimberly|moira|natasha|olivia|salli|samantha|sara|serena|sophie|susan|tessa|victoria|zira)\b|female/i.test(voice.name));
-    const selectedVoice = scannerVoices.find(voice => voice.voiceURI === voiceId);
-    const voice = selectedVoice || feminineVoice || scannerVoices.find(candidate => /^en([_-]|$)/i.test(candidate.lang));
-    if(voice){ utterance.voice = voice; utterance.lang = voice.lang; }
+    const feminineVoice = scannerVoices[0];
+    const voice = feminineVoice;
+    if(!voice){
+      scannerSpeechActive = false;
+      $('#scanner_status').textContent = 'No supported female voice is available in this browser.';
+      onDone();
+      return;
+    }
+    utterance.voice = voice;
+    utterance.lang = voice.lang;
     utterance.onend = complete;
     utterance.onerror = complete;
     window.speechSynthesis.speak(utterance);
@@ -5142,23 +5222,14 @@ function saveScannerApproach(id){
 
 function loadScannerVoices(){
   if(!('speechSynthesis' in window)) return;
-  scannerVoices = window.speechSynthesis.getVoices();
-  const select = $('#scanner_voice_select');
-  if(!select) return;
   const savedVoice = scannerSettings.voice_uri || '';
-  select.innerHTML = '';
-  const automatic = document.createElement('option');
-  automatic.value = '';
-  automatic.textContent = 'Auto · feminine if available';
-  select.appendChild(automatic);
-  scannerVoices.filter(voice => /^en([_-]|$)/i.test(voice.lang)).forEach(voice => {
-    const option = document.createElement('option');
-    option.value = voice.voiceURI;
-    option.textContent = `${voice.name} (${voice.lang})`;
-    select.appendChild(option);
-  });
-  if(savedVoice && [...select.options].some(option => option.value === savedVoice)) select.value = savedVoice;
-  else select.value = '';
+  const availableVoices = window.speechSynthesis.getVoices();
+  const femaleVoiceNames = /\b(aria|ava|amy|emma|jenny|june|karen|kimberly|moira|natasha|olivia|salli|samantha|sara|serena|sophie|susan|tessa|victoria|zira)\b|female/i;
+  const femaleVoices = availableVoices.filter(voice => /^en([_-]|$)/i.test(voice.lang) && femaleVoiceNames.test(voice.name));
+  const preferredVoice = femaleVoices.find(voice=>voice.voiceURI===savedVoice) ||
+    femaleVoices.sort((a,b)=>a.name.localeCompare(b.name))[0];
+  scannerVoices = preferredVoice ? [preferredVoice] : [];
+  if(preferredVoice) scannerSettings.voice_uri = preferredVoice.voiceURI;
 }
 
 async function refreshScanner(){
@@ -5211,9 +5282,7 @@ async function refreshScanner(){
         const newsDue = scannerSettings.news_enabled && newsWithin48Hours && !!newsKey &&
           (!newsState || newsState.key !== newsKey || now-newsState.at >= 15*60*1000);
         const newEvents = (row.approaches || []).filter(event=>{
-          const enabled = event.code === 'VWAP' ? scannerSettings.vwap_enabled :
-            event.code === 'BONE_2M' ? scannerSettings.bone_2m_enabled :
-            event.code === 'BONE_5M' ? scannerSettings.bone_5m_enabled : false;
+          const enabled = event.code === 'VWAP' && scannerSettings.vwap_enabled;
           const approachPct = Number(scannerSettings.approach_pct);
           const previousDistancePct = Number(event.previous_distance_pct);
           if(!enabled || Number(event.distance_pct) > approachPct ||
@@ -5265,7 +5334,7 @@ if($('#scanner_alarm')) $('#scanner_alarm').onchange = e=>{
     window.speechSynthesis.cancel();
   }
 };
-['scanner_vwap_alert','scanner_bone_2m_alert','scanner_bone_5m_alert','scanner_news_alert'].forEach(id=>{
+['scanner_vwap_alert','scanner_news_alert'].forEach(id=>{
   if($('#'+id)) $('#'+id).onchange = saveScannerSettings;
 });
 if($('#scanner_approach_pct')) $('#scanner_approach_pct').onchange = e=>{
@@ -5282,11 +5351,8 @@ if($('#scanner_alarm_volume')){
     saveScannerSettings();
   };
 }
-if($('#scanner_voice_select')){
-  loadScannerVoices();
-  if('speechSynthesis' in window) window.speechSynthesis.onvoiceschanged = loadScannerVoices;
-  $('#scanner_voice_select').onchange = saveScannerSettings;
-}
+loadScannerVoices();
+if('speechSynthesis' in window) window.speechSynthesis.onvoiceschanged = loadScannerVoices;
 if($('#multiday_stats_btn')) $('#multiday_stats_btn').onclick = () => {
   $('#admin_view').style.display = 'none';
   $('#app_main').style.display = 'block';
@@ -5337,9 +5403,17 @@ except Exception as _rs_err:
 def runner_index():
     if _rs is None:
         return "runner_stats.py not found next to chart_stats.py", 404
+    username = (request.args.get("user") or "").strip().lower()
+    token = (request.args.get("token") or "").strip()
+    if not username or not token or not _db_validate_session(username, token):
+        return "Unauthorized", 401
+    if not _get_app_ui_visibility(username).get("runner_stats", True):
+        return "Runner Stats access is disabled for this account.", 403
     # Rewrite API base so fetch calls hit our namespaced endpoint
     page = _rs.PAGE.replace("'/api/analyze", "'/api/runner/analyze") \
                    .replace('"/api/analyze', '"/api/runner/analyze')
+    page = page.replace("let LAST=null, API_BASE='/api';", "let LAST=null, API_BASE='/api';\nconst ACCESS_USER = " + json.dumps(username) + ";\nconst ACCESS_TOKEN = " + json.dumps(token) + ";")
+    page = page.replace("fetch(API_BASE + '/analyze?' + q)", "fetch(API_BASE + '/analyze?' + q + '&user=' + encodeURIComponent(ACCESS_USER) + '&token=' + encodeURIComponent(ACCESS_TOKEN))")
     from flask import Response as _FR
     return _FR(page, mimetype="text/html")
 
@@ -5351,6 +5425,12 @@ def runner_analyze():
     t = (request.args.get("ticker") or "").strip().upper()
     if not t:
         return jsonify({"error": "ticker required"}), 400
+    username = (request.args.get("user") or "").strip().lower()
+    token = (request.args.get("token") or "").strip()
+    if not username or not token or not _db_validate_session(username, token):
+        return jsonify({"error": "Unauthorized"}), 401
+    if not _get_app_ui_visibility(username).get("runner_stats", True):
+        return jsonify({"error": "Runner Stats access is disabled for this account."}), 403
     try:
         return jsonify(_rs.analyze(
             t,
