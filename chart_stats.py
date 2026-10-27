@@ -745,7 +745,7 @@ def chart_pack(df, m, pc, day):
     """Everything the browser needs for one 2-min chart (bars + VWAP + entry-model signals)."""
     sig = [{"name": k, "m": v["m"], "p": v["p"], "stop_m": v["stop_m"], "pnl": v["pnl"]}
            for k, v in (m.get("models") or {}).items()]
-    return {"bars": bars2(df), "pc": pc, "open": m.get("open"), "pmh": m.get("pm_high"),
+    return {"bars": bars2(df), "date": str(day), "pc": pc, "open": m.get("open"), "pmh": m.get("pm_high"),
             "off": ist_off(day), "stop": STOP_PCT, "sig": sig,
             "cover": ({"m": m["close_min"], "p": m["close"]} if m.get("rg") else None)}
 
@@ -2495,6 +2495,46 @@ def session_chart():
         return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 502
 
 
+@app.route("/api/chart-context")
+def chart_context():
+    """Lazily load nearby daily or multi-session minute bars for a chart card."""
+    user=(request.args.get("user") or "").strip().lower(); token=(request.args.get("token") or "").strip()
+    ticker=(request.args.get("ticker") or "").strip().upper(); day=(request.args.get("date") or "").strip()
+    tf=(request.args.get("tf") or "15m").strip().lower()
+    try: count=int(request.args.get("days", "5"))
+    except ValueError: count=5
+    if user not in ALLOWED_USERS or not _db_validate_session(user,token): return jsonify({"error":"Unauthorized"}),401
+    if not re.fullmatch(r"[A-Z.\-]{1,10}",ticker): return jsonify({"error":"Invalid ticker"}),400
+    try: dt.date.fromisoformat(day)
+    except ValueError: return jsonify({"error":"Invalid session date"}),400
+    if tf not in ("1m","2m","5m","15m","30m","1h","1d"): return jsonify({"error":"Invalid timeframe"}),400
+    count=max(1,min(60 if tf=="1d" else 10,count))
+    try:
+        daily=load_daily(ticker); idx=next((i for i,r in enumerate(daily) if r["date"]==day),None)
+        if idx is None: return jsonify({"error":f"No daily data for {day}"}),404
+        start=max(0,idx-count//2); end=min(len(daily),start+count); rows=daily[start:end]
+        if tf=="1d":
+            bars={"t":list(range(len(rows))),"d":[r["date"] for r in rows],"o":[r["o"] for r in rows],"h":[r["h"] for r in rows],"l":[r["l"] for r in rows],"c":[r["c"] for r in rows],"v":[r["v"] for r in rows],"vw":[None]*len(rows)}
+            return jsonify({"bars":bars,"dates":[r["date"] for r in rows],"daily":True})
+        startday,endday=rows[0]["date"],rows[-1]["date"]
+        key=f"{ticker}_{startday}_{endday}_context_1m"; raw=cget(key)
+        if raw is None:
+            raw=(poly_get(f"/v2/aggs/ticker/{ticker}/range/1/minute/{startday}/{endday}",{"adjusted":"false","sort":"asc","limit":50000}).get("results") or [])
+            cput(key,raw)
+        frame=poly_frame(raw) if raw else pd.DataFrame()
+        chunks=[]
+        for date in [r["date"] for r in rows]:
+            if frame.empty: break
+            dayframe=frame[frame.index.date==dt.date.fromisoformat(date)]
+            packed=bars2(dayframe)
+            if packed:
+                packed["d"]=[date]*len(packed["t"]); chunks.append(packed)
+        if not chunks: return jsonify({"error":"No intraday bars are available for this range"}),404
+        bars={k:sum((p[k] for p in chunks),[]) for k in ("t","d","o","h","l","c","v","vw")}
+        return jsonify({"bars":bars,"dates":[p["d"][0] for p in chunks],"daily":False})
+    except Exception as exc: return jsonify({"error":f"{type(exc).__name__}: {exc}"}),502
+
+
 _KW_FINANCING_FORMS = ("8-K,6-K,S-1,S-3,S-4,F-1,F-3,F-4,8-A,424B1,424B2,424B3,424B4,424B5,424B6,424B7,10-K,10-Q,20-F,40-F")
 _kw_sec_request_lock = threading.Lock()
 _kw_sec_last_request = 0.0
@@ -3687,8 +3727,10 @@ canvas{display:block;width:100%}
         <button id="cm_next" onclick="nextModalChart()" style="height:32px;font-size:13px;padding:0 12px;background:#1a1a1a;border:1px solid #444;color:#ddd;cursor:pointer;border-radius:3px" title="Next chart (Right Arrow)">Next →</button>
 
         <select id="cm_tf" title="Chart timeframe" style="height:32px;font-size:12px;padding:0 8px;background:#181818;border:1px solid #444;color:#fff;margin:0">
-          <option>1m</option><option>2m</option><option>5m</option><option>15m</option>
+          <option>1m</option><option>2m</option><option>5m</option><option>15m</option><option>30m</option><option>1h</option><option value="1d">Day</option>
         </select>
+        <select id="cm_days" title="Sessions shown" style="height:32px;font-size:12px;padding:0 8px;background:#181818;border:1px solid #444;color:#fff;margin:0"><option>1</option><option>3</option><option selected>5</option><option>10</option><option>20</option><option>60</option></select>
+        <button id="cm_zoom_out" style="height:32px;width:32px;background:#1a1a1a;border:1px solid #444;color:#ddd;cursor:pointer">−</button><button id="cm_zoom_in" style="height:32px;width:32px;background:#1a1a1a;border:1px solid #444;color:#ddd;cursor:pointer">+</button>
 
         <div style="width:1px;height:20px;background:#333;margin:0 4px"></div>
 
@@ -4297,7 +4339,7 @@ function renderTab(tab, r, isRefresh){
      `<div style="display:flex;align-items:center;flex-wrap:wrap">${esc(T.p6)}<select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
      (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/20 EMA cloud + BB)</label></div>`+
      `<span style="font-size:12px;color:#29a8ff;font-weight:normal">🔍 Click any chart to enlarge</span></div>`+
-  `<div class="evgrid">`+tab.EV.map((c,i)=>`<div class="evc" data-ev-slot="${i}" onclick="openChartModal(${i})"><div class="evhead"><div class="evt" id="evtitle${i}"></div><div class="evcontrols"><button class="evnav" data-step="-1" title="Previous chart">‹</button><button class="evnav" data-step="1" title="Next chart">›</button><select class="evtf" title="Timeframe"><option>1m</option><option selected>2m</option><option>5m</option><option>15m</option></select></div></div><canvas id="ev${i}"></canvas></div>`).join('')+
+  `<div class="evgrid">`+tab.EV.map((c,i)=>`<div class="evc" data-ev-slot="${i}" onclick="openChartModal(${i})"><div class="evhead"><div class="evt" id="evtitle${i}"></div><div class="evcontrols"><button class="evnav" data-step="-1" title="Previous day">‹</button><button class="evnav" data-step="1" title="Next day">›</button><select class="evtf" title="Timeframe"><option>1m</option><option selected>2m</option><option>5m</option><option>15m</option><option>30m</option><option>1h</option><option value="1d">Day</option></select><select class="evdays" title="Sessions shown"><option value="1">1 day</option><option value="3">3 days</option><option value="5" selected>5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="60">60 days</option></select><button class="evzoom" data-zoom="out" title="Zoom out">−</button><button class="evzoom" data-zoom="in" title="Zoom in">+</button></div></div><canvas id="ev${i}"></canvas></div>`).join('')+
      `<\/div><div class="foot"><span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance.">━ VWAP<\/span>  <span class="y" data-tip="Pre-market High — highest price before the US market open. Common fade target.">┅ PM high<\/span>  <span class="d" data-tip="Previous Close — yesterday’s close. Gap % is measured from here.">┅ prev close<\/span> &nbsp; <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period EMA on 2-min closes. Fast trend line.">━ EMA9<\/span> <span style="color:#ffa500" data-tip="EMA 20 — 20-period EMA on 2-min closes. Slower trend line. Bearish when EMA9 drops below it.">━ EMA20<\/span> <span class="g" data-tip="Bone Zone cloud — shaded between EMA9 &amp; EMA20. Green = bullish. Red = bearish.">▒<\/span><span class="r">▒<\/span> cloud <span class="d" data-tip="Bollinger Bands (20-period, 2 std dev). Shows expected volatility range on the 2-min chart.">━ BB(20,2)<\/span> &nbsp; <span data-tip="SELL signal — short entry triggered by an entry model.">▼ SELL<\/span> &nbsp; <span data-tip="BUY / Cover signal — close the short here. P&amp;L % shown next to it.">▲ BUY<\/span>. <span data-tip="Lighter shaded background = pre-market session (before 9:30 ET / 19:00 IST).">Shaded = premarket<\/span>. X axis = IST.<\/div><\/div>`;
 
   const pmGapText = Number.isFinite(r.chart.premarket_gap_pct)
@@ -4362,22 +4404,39 @@ function drawEvAll(evList, containerEl){
   const bzEl = cEl.querySelector('#bz');
   const bzChecked = bzEl ? bzEl.checked : false;
   const tabForCharts=Object.values(openTabs).find(tab=>tab.container===cEl);
+  if(!window.evLazyObserver)window.evLazyObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){entry.target._chartVisible=true;const t=Object.values(openTabs).find(x=>x.container.contains(entry.target));if(t)drawEvAll(t.EV,t.container);window.evLazyObserver.unobserve(entry.target);}}),{rootMargin:'450px 0px'});
   list.forEach((c,i)=>{
     const card=cEl.querySelector(`[data-ev-slot="${i}"]`), cv=cEl.querySelector('#ev'+i);
     if(!card || !cv) return;
     if(!card._chartItem) card._chartItem=c;
     if(!card._sessionDate) card._sessionDate=card._chartItem.date||c.date;
     if(!card._chartTf) card._chartTf='2m';
+    if(!card._chartDays) card._chartDays=(card._chartTf==='15m'?5:1);
     const item=card._chartItem || c;
     const dateList=tabForCharts?tabForCharts.sessionDates:[];
     card._sessionPos=dateList.indexOf(card._sessionDate);
     const title=card.querySelector(`#evtitle${i}`), tf=card.querySelector('.evtf');
     if(title) title.innerHTML=esc(item.title)+(item.sim?'':'<span class="d"> (not in similar set)</span>');
     card.querySelectorAll('.evnav').forEach(btn=>{const next=card._sessionPos+Number(btn.dataset.step);btn.disabled=card._sessionPos<0||next<0||next>=dateList.length;btn.style.opacity=btn.disabled?'.35':'1';});
-    if(tf){tf.value=card._chartTf;tf.onclick=e=>e.stopPropagation();tf.onchange=e=>{e.stopPropagation();card._chartTf=tf.value;drawEvAll(list,cEl);};}
+    if(tf){tf.value=card._chartTf;tf.onclick=e=>e.stopPropagation();tf.onchange=e=>{e.stopPropagation();card._chartTf=tf.value;if(tf.value==='1d'&&card._chartDays===1)card._chartDays=20;else if(['15m','30m','1h'].includes(tf.value)&&card._chartDays===1)card._chartDays=5;loadChartContext(card,tabForCharts);};}
+    const days=card.querySelector('.evdays');if(days){days.value=String(card._chartDays);days.onclick=e=>e.stopPropagation();days.onchange=e=>{e.stopPropagation();card._chartDays=Number(days.value);loadChartContext(card,tabForCharts);};}
+    card.querySelectorAll('.evzoom').forEach(btn=>btn.onclick=e=>{e.stopPropagation();card._zoom=Math.max(.5,Math.min(8,(card._zoom||1)*(btn.dataset.zoom==='in'?1.25:.8)));drawEvAll(list,cEl);});
     card.querySelectorAll('.evnav').forEach(btn=>{btn.onclick=e=>{e.stopPropagation();navigateEvCard(card,Number(btn.dataset.step),tabForCharts);};});
-    drawEv(cv,item.chart,sel,bzChecked,undefined,card._chartTf);
+    const renderItem=card._contextChart?{...item,chart:{...item.chart,bars:card._contextChart}}:item;
+    if(!card._chartVisible&&$('#chart_modal').style.display!=='flex'){window.evLazyObserver.observe(card);return;}
+    drawEv(cv,renderItem.chart,sel,bzChecked,undefined,card._chartTf,card._zoom||1);
   });
+}
+async function loadChartContext(card,tab){
+  if(!card||!tab)return;
+  const days=card._chartDays||1, tf=card._chartTf||'2m';
+  if(days===1&&tf!=='1d'){card._contextChart=null;drawEvAll(tab.EV,tab.container);return;}
+  const requestId=(card._contextRequestId||0)+1;card._contextRequestId=requestId;
+  const query=new URLSearchParams({ticker:tab.result?.head?.ticker||'',date:card._sessionDate,days:String(days),tf,user:currentUser||'',token:sessionToken||''});
+  try{const response=await fetch('/api/chart-context?'+query.toString()),data=await response.json();if(requestId!==card._contextRequestId)return;if(!response.ok)throw new Error(data.error||'Could not load chart range');card._contextChart=data.bars;card._contextDates=data.dates;}
+  catch(error){card._contextChart=null;card._contextError=error.message;}
+  drawEvAll(tab.EV,tab.container);
+  if($('#chart_modal').style.display==='flex'&&currentModalSlot===Number(card.dataset.evSlot))renderModalChart();
 }
 async function navigateEvCard(card, step, tab){
   if(!tab || !card || card._sessionPos==null || card._sessionPos<0) return;
@@ -4404,25 +4463,28 @@ async function navigateEvCard(card, step, tab){
   }
   if(requestId!==card._loadRequestId)return;
   card._chartItem=item;
+  card._contextChart=null;
   drawEvAll(tab.EV,tab.container);
+  if((card._chartDays||1)>1||card._chartTf==='1d')loadChartContext(card,tab);
   if($('#chart_modal').style.display==='flex'&&currentModalSlot===Number(card.dataset.evSlot))renderModalChart();
 }
 function aggregateEvBars(source, tf){
-  if(!source || !source.t || tf===1) return source;
-  const out={t:[],o:[],h:[],l:[],c:[],v:[],vw:[]}, groups=new Map();
+  if(!source || !source.t || tf===1 || tf==='1d') return source;
+  const out={t:[],d:[],o:[],h:[],l:[],c:[],v:[],vw:[]}, groups=new Map();
   for(let i=0;i<source.t.length;i++){
-    const start=Math.floor(source.t[i]/tf)*tf;
-    if(!groups.has(start)) groups.set(start,[]);
-    groups.get(start).push(i);
+    const start=Math.floor(source.t[i]/tf)*tf,day=source.d?.[i]||'';
+    const key=day+'|'+start;
+    if(!groups.has(key)) groups.set(key,[]);
+    groups.get(key).push(i);
   }
-  for(const [start,ids] of groups){
-    out.t.push(start);out.o.push(source.o[ids[0]]);out.h.push(Math.max(...ids.map(i=>source.h[i])));
+  for(const [key,ids] of groups){
+    const start=Number(key.split('|').pop());out.t.push(start);out.d.push(source.d?.[ids[0]]||'');out.o.push(source.o[ids[0]]);out.h.push(Math.max(...ids.map(i=>source.h[i])));
     out.l.push(Math.min(...ids.map(i=>source.l[i])));out.c.push(source.c[ids[ids.length-1]]);
     out.v.push(ids.reduce((sum,i)=>sum+(source.v[i]||0),0));out.vw.push(source.vw[ids[ids.length-1]]);
   }
   return out;
 }
-function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m'){
+function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   const parentW = (cv.parentElement && cv.parentElement.clientWidth) ? cv.parentElement.clientWidth : 0;
   const dpr = window.devicePixelRatio || 1;
   const W = Math.max(300, parentW - (targetH ? 0 : 16));
@@ -4436,7 +4498,11 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m'){
   x.clearRect(0, 0, W, H);
   const isLarge = H > 450;
   x.font = (isLarge ? '13px' : '11px') + ' Consolas,monospace';
-  const tf=parseInt(timeframe,10)||2, b=aggregateEvBars(c.bars,tf);
+  const daily=timeframe==='1d', tf=parseInt(timeframe,10)||2, source=c.bars;
+  let b=daily?source:aggregateEvBars(source,tf);
+  const dates=[...new Set(b?.d||[])];
+  const multi=!daily&&dates.length>1;
+  if(multi){let last='';let n=-1;b={...b,t:b.t.map((t,i)=>{if(b.d[i]!==last){last=b.d[i];n++;}return 240+n*720+t-240;})};}
   if(!b || !b.t.length){
     x.fillStyle = '#8a8a8a';
     x.fillText('No intraday data', 10, 20);
@@ -4450,13 +4516,14 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m'){
   const pad = (hi - lo) * 0.05 || hi * 0.02;
   lo -= pad;
   hi += pad;
-  const X = m => L + pw * (m - 240) / 720, Y = v => T + ph * (1 - (v - lo) / (hi - lo));
+  const span=daily?Math.max(1,b.t.length):multi?dates.length*720:720, fullStart=daily?-.5:240;
+  const viewSpan=span/Math.max(1,zoom), viewStart=fullStart+(span-viewSpan)/2, X=m=>L+pw*(m-viewStart)/viewSpan, Y=v=>T+ph*(1-(v-lo)/(hi-lo));
   // Premarket light grey background
   x.fillStyle = 'rgba(255, 255, 255, 0.085)';
-  x.fillRect(X(240), T, X(570) - X(240), ph + 6 + VH);
+  if(!daily)for(let day=0;day<(multi?dates.length:1);day++)x.fillRect(X(240+day*720),T,X(570+day*720)-X(240+day*720),ph+6+VH);
   x.fillStyle = '#8e8e9e';
   x.font = 'bold 10px Consolas,monospace';
-  x.fillText('PRE-MARKET', X(240) + 6, T + 13);
+  if(!daily)x.fillText('PRE-MARKET', X(240) + 6, T + 13);
   x.lineWidth = 1;
   x.strokeStyle = '#292d32';
   x.fillStyle = '#b3b8be';
@@ -4468,19 +4535,19 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m'){
     x.stroke();
     x.fillText(v >= 1 ? v.toFixed(2) : v.toFixed(3), 2, y + 4);
   }
-  for(let m = 240; m <= 960; m += 60){
-    const xx = X(m);
+  const tickStep=daily?1:multi?180:60;
+  for(let m = daily?0:240; m <= (daily?b.t.length-1:240+span); m += tickStep){
+    const xx = X(daily?m+.5:m);
     x.beginPath();
     x.moveTo(xx, T);
     x.lineTo(xx, vy1);
     x.stroke();
-    x.fillText(hm(m, c.off), xx - 14, H - 5);
+    x.fillText(daily?(b.d?.[m]||'').slice(5):multi?`${b.d?.[Math.min(b.d.length-1,Math.floor((m-240)/720))]||''} ${hm((m-240)%720+240,c.off)}`:hm(m,c.off), xx - 14, H - 5);
   }
   x.strokeStyle = '#777';
   x.setLineDash([2, 3]);
   x.beginPath();
-  x.moveTo(X(570), T);
-  x.lineTo(X(570), vy1);
+  if(!daily&&!multi){x.moveTo(X(570), T);x.lineTo(X(570), vy1);}
   x.stroke();
   x.setLineDash([]);
   const dash = (v, col) => {
@@ -4493,8 +4560,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m'){
     x.stroke();
     x.setLineDash([]);
   };
-  dash(c.pc, '#888');
-  dash(c.pmh, '#ffd23f');
+  if(!daily){dash(c.pc, '#888');dash(c.pmh, '#ffd23f');}
   // ---- bone zone: 9/20 EMA cloud + Bollinger Bands (20, 2) on the 2-min closes
   const BZ = bzChecked ? bone(b) : null;
   const clipP = () => { x.save(); x.beginPath(); x.rect(L, T, pw, ph); x.clip(); };
@@ -4527,9 +4593,9 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m'){
     poly(BZ.bl, '#7a7a7a', 1);
     x.restore();
   }
-  const bw = Math.max(1.4, pw / (720 / tf) * 0.84), vmax = Math.max(...b.v) || 1;
+  const bw = daily?Math.max(3,Math.min(24,pw/b.t.length*.65)):Math.max(1.4, pw / (720 / tf) * 0.84), vmax = Math.max(...b.v) || 1;
   for(let i = 0; i < b.t.length; i++){
-    const xx = X(b.t[i] + tf / 2), up = b.c[i] >= b.o[i], col = up ? '#3ddc84' : '#ff5a5a';
+    const xx = X(b.t[i] + (daily?.5:tf / 2)), up = b.c[i] >= b.o[i], col = up ? '#3ddc84' : '#ff5a5a';
     x.fillStyle = up ? 'rgba(61,220,132,0.55)' : 'rgba(255,90,90,0.55)';
     const vh = VH * b.v[i] / vmax;
     x.fillRect(xx - bw / 2, vy1 - vh, bw, vh);
@@ -4553,18 +4619,20 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m'){
   x.strokeStyle = '#29a8ff';
   x.lineWidth = isLarge ? 1.6 : 1.3;
   x.beginPath();
-  let on = false;
+  let on = false, lastVwapDate=null;
   for(let i = 0; i < b.t.length; i++){
     const v = b.vw[i];
     if(v == null){ on = false; continue; }
+    if(multi&&b.d?.[i]!==lastVwapDate)on=false;
     const xx = X(b.t[i] + tf / 2), yy = Y(Math.min(hi, Math.max(lo, v)));
     if(!on){ x.moveTo(xx, yy); on = true; } else x.lineTo(xx, yy);
+    lastVwapDate=b.d?.[i]||null;
   }
   x.stroke();
   x.lineWidth = 1;
   x.fillStyle = '#8a8a8a';
   x.fillText('vol', L + 2, vy0 + 10);
-  sg.forEach((s, idx) => {
+  if(!multi&&!daily)sg.forEach((s, idx) => {
     const col = MC[s.name] || '#fff', xs = X(s.m), ys = Y(s.p);
     let xm, ym, pl;
     if(s.stop_m != null){
@@ -4614,6 +4682,7 @@ window.openChartModal = function(i){
   if(mainSig) $('#cm_sig').value = mainSig.value;
   if(mainBz) $('#cm_bz').checked = mainBz.checked;
   $('#cm_tf').value = card && card._chartTf ? card._chartTf : '2m';
+  $('#cm_days').value=String(card?card._chartDays||1:1);
 
   $('#chart_modal').style.display = 'flex';
   setTimeout(renderModalChart, 30);
@@ -4643,7 +4712,8 @@ window.renderModalChart = function(){
   const sel = $('#cm_sig').value;
   const bzChecked = $('#cm_bz').checked;
 
-  drawEv(cv, item.chart, sel, bzChecked, targetH, $('#cm_tf').value || (card?card._chartTf:'2m'));
+  const chart=card?._contextChart?{...item.chart,bars:card._contextChart}:item.chart;
+  drawEv(cv, chart, sel, bzChecked, targetH, $('#cm_tf').value || (card?card._chartTf:'2m'),card?._zoom||1);
 };
 
 window.nextModalChart = function(){
@@ -4680,15 +4750,21 @@ $('#cm_tf').onchange = () => {
   const card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);
   if(card){
     card._chartTf=$('#cm_tf').value;
+    if(card._chartTf==='1d'&&card._chartDays===1)card._chartDays=20;else if(['15m','30m','1h'].includes(card._chartTf)&&card._chartDays===1)card._chartDays=5;
+    $('#cm_days').value=String(card._chartDays);
     const cardSelect=card.querySelector('.evtf');
     if(cardSelect) cardSelect.value=card._chartTf;
     const item=card._chartItem;
     if(item) drawEv(card.querySelector(`#ev${currentModalSlot}`),item.chart,
       openTabs[activeTab].container.querySelector('#sig')?.value||'none',
       openTabs[activeTab].container.querySelector('#bz')?.checked||false,undefined,card._chartTf);
+    loadChartContext(card,openTabs[activeTab]);
   }
   renderModalChart();
 };
+
+$('#cm_days').onchange=()=>{if(!activeTab||!openTabs[activeTab])return;const card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);if(card){card._chartDays=Number($('#cm_days').value);loadChartContext(card,openTabs[activeTab]);}};
+['cm_zoom_in','cm_zoom_out'].forEach(id=>$('#'+id).onclick=()=>{if(!activeTab||!openTabs[activeTab])return;const card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);if(card){card._zoom=Math.max(.5,Math.min(8,(card._zoom||1)*(id==='cm_zoom_in'?1.25:.8)));renderModalChart();drawEvAll(openTabs[activeTab].EV,openTabs[activeTab].container);}});
 
 $('#cm_bz').onchange = () => {
   renderModalChart();
