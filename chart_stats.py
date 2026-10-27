@@ -205,13 +205,15 @@ def poly_get(path, params=None):
 def load_daily(t, force=False):
     key = f"{t}_daily2"
     d = None if force else cget(key, 6 * 3600)
+    if d is not None and any("vw" not in row for row in d):
+        d = None
     if d is None:
         end = dt.date.today() + dt.timedelta(days=1)
         start = end - dt.timedelta(days=HISTORY_DAYS)
         j = poly_get(f"/v2/aggs/ticker/{t}/range/1/day/{start}/{end}",
                      {"adjusted": "false", "sort": "asc", "limit": 50000})
         d = [{"date": str(pd.to_datetime(r["t"], unit="ms", utc=True).tz_convert(ET).date()),
-              "o": r["o"], "h": r["h"], "l": r["l"], "c": r["c"], "v": round(float(r["v"]))}
+              "o": r["o"], "h": r["h"], "l": r["l"], "c": r["c"], "v": round(float(r["v"])), "vw": r.get("vw")}
              for r in j.get("results", [])]
         cput(key, d)
     return d
@@ -2508,7 +2510,7 @@ def chart_context():
     try: dt.date.fromisoformat(day)
     except ValueError: return jsonify({"error":"Invalid session date"}),400
     if tf not in ("1m","2m","5m","15m","30m","1h","1d"): return jsonify({"error":"Invalid timeframe"}),400
-    count=max(1,min(60 if tf=="1d" else 10,count))
+    count=max(1,min(60 if tf=="1d" else 20,count))
     try:
         daily=load_daily(ticker); idx=next((i for i,r in enumerate(daily) if r["date"]==day),None)
         if idx is None: return jsonify({"error":f"No daily data for {day}"}),404
@@ -2816,8 +2818,6 @@ def api_keyword_events():
             i, row = candidate["index"], daily[candidate["index"]]
             df = minute_df(ticker, row["date"])
             if df is None or df.empty:
-                output.append({**{k:v for k,v in candidate.items() if k not in ("index", "score")},
-                               "error": "No intraday candles are available from Polygon for this session."})
                 continue
             previous_close = float(daily[i-1]["c"])
             m = metrics(df, previous_close, True)
@@ -4331,7 +4331,7 @@ function renderTab(tab, r, isRefresh){
      `<div style="display:flex;align-items:center;flex-wrap:wrap">${esc(T.p6)}<select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
      (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/20 EMA cloud + BB)</label></div>`+
      `<span style="font-size:12px;color:#29a8ff;font-weight:normal">🔍 Click any chart to enlarge</span></div>`+
-  `<div class="evgrid">`+tab.EV.map((c,i)=>`<div class="evc" data-ev-slot="${i}" onclick="openChartModal(${i})"><div class="evhead"><div class="evt" id="evtitle${i}"></div><div class="evcontrols"><button class="evnav" data-step="-1" title="Previous day">‹</button><button class="evnav" data-step="1" title="Next day">›</button><select class="evtf" title="Timeframe"><option>1m</option><option selected>2m</option><option>5m</option><option>15m</option><option>30m</option><option>1h</option><option value="1d">Day</option></select><select class="evdays" title="Sessions shown"><option value="1">1 day</option><option value="3">3 days</option><option value="5" selected>5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="60">60 days</option></select><button class="evzoom" data-zoom="out" title="Zoom out">−</button><button class="evzoom" data-zoom="in" title="Zoom in">+</button></div></div><canvas id="ev${i}"></canvas></div>`).join('')+
+  `<div class="evgrid">`+tab.EV.map((c,i)=>`<div class="evc" data-ev-slot="${i}" onclick="openChartModal(${i})"><div class="evhead"><div class="evt" id="evtitle${i}"></div><div class="evcontrols"><button class="evnav" data-step="-1" title="Previous day">‹</button><button class="evnav" data-step="1" title="Next day">›</button><select class="evtf" title="Timeframe"><option>1m</option><option>2m</option><option>5m</option><option selected>15m</option><option>30m</option><option>1h</option><option value="1d">Day</option></select><select class="evdays" title="Sessions shown"><option value="1">1 day</option><option value="3">3 days</option><option value="5" selected>5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="60">60 days</option></select><button class="evzoom" data-zoom="out" title="Zoom out">−</button><button class="evzoom" data-zoom="in" title="Zoom in">+</button></div></div><canvas id="ev${i}"></canvas></div>`).join('')+
      `<\/div><div class="foot"><span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance.">━ VWAP<\/span>  <span class="y" data-tip="Pre-market High — highest price before the US market open. Common fade target.">┅ PM high<\/span>  <span class="d" data-tip="Previous Close — yesterday’s close. Gap % is measured from here.">┅ prev close<\/span> &nbsp; <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period EMA on 2-min closes. Fast trend line.">━ EMA9<\/span> <span style="color:#ffa500" data-tip="EMA 20 — 20-period EMA on 2-min closes. Slower trend line. Bearish when EMA9 drops below it.">━ EMA20<\/span> <span class="g" data-tip="Bone Zone cloud — shaded between EMA9 &amp; EMA20. Green = bullish. Red = bearish.">▒<\/span><span class="r">▒<\/span> cloud <span class="d" data-tip="Bollinger Bands (20-period, 2 std dev). Shows expected volatility range on the 2-min chart.">━ BB(20,2)<\/span> &nbsp; <span data-tip="SELL signal — short entry triggered by an entry model.">▼ SELL<\/span> &nbsp; <span data-tip="BUY / Cover signal — close the short here. P&amp;L % shown next to it.">▲ BUY<\/span>. <span data-tip="Lighter shaded background = pre-market session (before 9:30 ET / 19:00 IST).">Shaded = premarket<\/span>. X axis = IST.<\/div><\/div>`;
 
   const pmGapText = Number.isFinite(r.chart.premarket_gap_pct)
@@ -4402,8 +4402,8 @@ function drawEvAll(evList, containerEl){
     if(!card || !cv) return;
     if(!card._chartItem) card._chartItem=c;
     if(!card._sessionDate) card._sessionDate=card._chartItem.date||c.date;
-    if(!card._chartTf) card._chartTf='2m';
-    if(!card._chartDays) card._chartDays=(card._chartTf==='15m'?5:1);
+    if(!card._chartTf) card._chartTf='15m';
+    if(!card._chartDays) card._chartDays=5;
     const item=card._chartItem || c;
     const dateList=tabForCharts?tabForCharts.sessionDates:[];
     card._sessionPos=dateList.indexOf(card._sessionDate);
@@ -4416,17 +4416,20 @@ function drawEvAll(evList, containerEl){
     card.querySelectorAll('.evnav').forEach(btn=>{btn.onclick=e=>{e.stopPropagation();navigateEvCard(card,Number(btn.dataset.step),tabForCharts);};});
     const renderItem=card._contextChart?{...item,chart:{...item.chart,bars:card._contextChart}}:item;
     if(!card._chartVisible&&$('#chart_modal').style.display!=='flex'){window.evLazyObserver.observe(card);return;}
+    if((card._chartDays>1||card._chartTf==='1d')&&!card._contextChart&&!card._contextLoading&&!card._contextError)loadChartContext(card,tabForCharts);
     drawEv(cv,renderItem.chart,sel,bzChecked,undefined,card._chartTf,card._zoom||1);
   });
 }
 async function loadChartContext(card,tab){
   if(!card||!tab)return;
   const days=card._chartDays||1, tf=card._chartTf||'2m';
-  if(days===1&&tf!=='1d'){card._contextChart=null;drawEvAll(tab.EV,tab.container);return;}
+  if(days===1&&tf!=='1d'){card._contextChart=null;card._contextError='';card._contextLoading=false;drawEvAll(tab.EV,tab.container);return;}
+  card._contextLoading=true;card._contextError='';
   const requestId=(card._contextRequestId||0)+1;card._contextRequestId=requestId;
   const query=new URLSearchParams({ticker:tab.result?.head?.ticker||'',date:card._sessionDate,days:String(days),tf,user:currentUser||'',token:sessionToken||''});
   try{const response=await fetch('/api/chart-context?'+query.toString()),data=await response.json();if(requestId!==card._contextRequestId)return;if(!response.ok)throw new Error(data.error||'Could not load chart range');card._contextChart=data.bars;card._contextDates=data.dates;}
   catch(error){card._contextChart=null;card._contextError=error.message;}
+  card._contextLoading=false;
   drawEvAll(tab.EV,tab.container);
   if($('#chart_modal').style.display==='flex'&&currentModalSlot===Number(card.dataset.evSlot))renderModalChart();
 }
@@ -4527,14 +4530,14 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
     x.stroke();
     x.fillText(v >= 1 ? v.toFixed(2) : v.toFixed(3), 2, y + 4);
   }
-  const tickStep=daily?1:multi?180:60;
+  const tickStep=daily?(b.t.length>12?Math.ceil(b.t.length/10):1):multi?180:60;
   for(let m = daily?0:240; m <= (daily?b.t.length-1:240+span); m += tickStep){
     const xx = X(daily?m+.5:m);
     x.beginPath();
     x.moveTo(xx, T);
     x.lineTo(xx, vy1);
     x.stroke();
-    x.fillText(daily?(b.d?.[m]||'').slice(5):multi?`${b.d?.[Math.min(b.d.length-1,Math.floor((m-240)/720))]||''} ${hm((m-240)%720+240,c.off)}`:hm(m,c.off), xx - 14, H - 5);
+    x.fillText(daily?(b.d?.[m]||'').slice(5):multi?((m-240)%720===0?(b.d?.[Math.min(b.d.length-1,Math.floor((m-240)/720))]||'').slice(5):''):hm(m,c.off), xx - 14, H - 5);
   }
   x.strokeStyle = '#777';
   x.setLineDash([2, 3]);
@@ -4585,7 +4588,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
     poly(BZ.bl, '#7a7a7a', 1);
     x.restore();
   }
-  const bw = daily?Math.max(3,Math.min(24,pw/b.t.length*.65)):Math.max(1.4, pw / (720 / tf) * 0.84), vmax = Math.max(...b.v) || 1;
+  const bw = daily?Math.max(3,Math.min(24,pw/b.t.length*.65)):Math.max(1.4, pw / (span / tf) * 0.84), vmax = Math.max(...b.v) || 1;
   for(let i = 0; i < b.t.length; i++){
     const xx = X(b.t[i] + (daily?.5:tf / 2)), up = b.c[i] >= b.o[i], col = up ? '#3ddc84' : '#ff5a5a';
     x.fillStyle = up ? 'rgba(61,220,132,0.55)' : 'rgba(255,90,90,0.55)';
@@ -5900,7 +5903,7 @@ input[type=text]{width:min(420px,70vw)}input[type=date]{width:140px}select{min-w
 <div id="status" class="status">Search SEC filings by keyword and date. Charts only show sessions where the premarket high is >50% above the previous close and session dollar volume is >$10M.</div>
 <div id="resultSummary"></div><div id="tableRoot"></div><div id="stocksRoot"></div>
 </main>
-<div id="chartModal" class="chartModal" onclick="if(event.target===this)closeKWModal()"><div class="chartModalBox"><div class="chartModalHead"><button id="kwPrev">‹</button><span id="kwModalTitle" class="chartModalTitle"></span><button id="kwNext">›</button><select id="kwModalTf"><option>1m</option><option>2m</option><option>5m</option><option>15m</option><option>30m</option><option>1h</option><option>1D</option></select><button onclick="closeKWModal()">✕</button></div><canvas id="kwModalCanvas" class="chartModalCanvas" height="720"></canvas></div></div>
+<div id="chartModal" class="chartModal" onclick="if(event.target===this)closeKWModal()"><div class="chartModalBox"><div class="chartModalHead"><button id="kwPrev">‹</button><span id="kwModalTitle" class="chartModalTitle"></span><button id="kwNext">›</button><select id="kwModalTf"><option>1m</option><option>2m</option><option>5m</option><option selected>15m</option><option>30m</option><option>1h</option><option>1D</option></select><select id="kwModalDays"><option value="1">1 day</option><option value="3">3 days</option><option value="5" selected>5 days</option><option value="10">10 days</option><option value="20">20 days</option></select><button onclick="closeKWModal()">✕</button></div><canvas id="kwModalCanvas" class="chartModalCanvas" height="720"></canvas></div></div>
 <script>
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const user=localStorage.getItem('gap_user')||'', token=localStorage.getItem('gap_token')||'';
@@ -5909,7 +5912,7 @@ const now=new Date(), isoDate=d=>`${d.getFullYear()}-${String(d.getMonth()+1).pa
 $('#endDate').value=isoDate(now);const twoYears=new Date(now);twoYears.setFullYear(twoYears.getFullYear()-2);$('#startDate').value=isoDate(twoYears);
 async function verify(){if(!user||!token){$('#status').innerHTML='<span class="error">Please sign in to the main app first, then reopen this page.</span>';return false}try{const r=await fetch('/api/auth/verify-session?user='+encodeURIComponent(user)+'&token='+encodeURIComponent(token));if(!r.ok)throw 0;return true}catch{$('#status').innerHTML='<span class="error">Your session is not valid. Return to the main app and sign in again.</span>';return false}}
 function payload(){return {user,token,keyword:$('#keyword').value.trim(),start_date:$('#startDate').value,end_date:$('#endDate').value,offset}}
-function fmtDate(d){const [y,m,day]=String(d||'').split('-');return y&&m&&day?`${m}/${day}/${y}`:d}
+function fmtDate(d){const [y,m,day]=String(d||'').slice(0,10).split('-');return y&&m&&day?`${m}/${day}/${y}`:d}
 function setStatus(t,err=false){$('#status').innerHTML=err?`<span class="error">${esc(t)}</span>`:esc(t)}
 function buildTable(){
  const companies=groupCompanies();
@@ -5920,8 +5923,9 @@ function buildTable(){
 }
 function groupCompanies(){const map=new Map();for(const r of rows){const key=r.ticker||r.cik;if(!map.has(key))map.set(key,{key,ticker:r.ticker,company:r.company,filings:[]});map.get(key).filings.push(r)}return [...map.values()]}
 function renderStocks(){
- if(observer)observer.disconnect();const companies=groupCompanies();
- $('#stocksRoot').innerHTML=companies.map((c,i)=>`<section class="stock" id="stock-${i}" data-stock="${esc(c.key)}" data-ticker="${esc(c.ticker)}"><div class="stockhead"><h2>${c.ticker?`<a class="ticker" href="https://finance.yahoo.com/quote/${encodeURIComponent(c.ticker)}" target="_blank" rel="noopener">${esc(c.ticker)}</a>`:esc(c.company)}</h2><div class="evidence">${c.filings.length} SEC filing matches · charts load as you scroll</div></div><div class="stockCharts"><div class="status loading">Loading charts: premarket high >50% above previous close and session dollar volume >$10M.</div></div></section>`).join('');
+ if(observer)observer.disconnect();const companies=groupCompanies().filter(c=>c.ticker);
+ $('#stocksRoot').innerHTML=companies.map((c,i)=>`<section class="stock" id="stock-${i}" data-stock="${esc(c.key)}" data-ticker="${esc(c.ticker)}"><div class="stockhead"><h2>${c.ticker?`<a class="ticker" href="https://finance.yahoo.com/quote/${encodeURIComponent(c.ticker)}" target="_blank" rel="noopener">${esc(c.ticker)}</a>`:esc(c.company)}</h2><div class="evidence">Charts load as you scroll</div></div><div class="stockCharts"><div class="status loading">Loading charts: premarket high >50% above previous close and session dollar volume >$10M.</div></div></section>`).join('');
+ $('#stocksRoot').querySelectorAll('.stock').forEach((el,i)=>{el._filings=companies[i].filings;});
  observer=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){observer.unobserve(entry.target);loadStockCharts(entry.target)}}),{rootMargin:'500px'});
  $('#stocksRoot').querySelectorAll('.stock').forEach(el=>observer.observe(el));
 }
@@ -5932,35 +5936,52 @@ async function loadStockCharts(section){
  const start=$('#startDate').value,end=$('#endDate').value;
  const q=new URLSearchParams({ticker,user,token,start,end});
  try{const res=await fetch('/api/keyword-events?'+q),data=await res.json();if(!res.ok)throw Error(data.error||'Market data request failed');
-   if(!data.events.length){root.innerHTML=`<div class="noevents">No sessions matched: premarket high >50% above previous close and session dollar volume >$10M, between ${esc(start)} and ${esc(end)}.</div>`;return}
-   renderEvents(root,data);
+   if(!data.events.length){const id=section.id;section.remove();$('#tableRoot').querySelector(`a[href="#${id}"]`)?.remove();return}
+   renderEvents(root,data,section._filings||[]);
  }catch(e){root.innerHTML=`<div class="noevents error">${esc(e.message)}</div>`}
 }
-function aggregate(bars,tf){const src=bars;if(tf==='1D'){if(!src.t.length)return src;const i=[...src.t.keys()];return{t:[570],o:[src.o[i[0]]],h:[Math.max(...i.map(k=>src.h[k]))],l:[Math.min(...i.map(k=>src.l[k]))],c:[src.c[i[i.length-1]]],v:[i.reduce((s,k)=>s+(src.v[k]||0),0)],vw:[src.vw[i[i.length-1]]]}}
- const mins=tf==='1h'?60:Number(tf.replace('m',''))||2,out={t:[],o:[],h:[],l:[],c:[],v:[],vw:[]},g=new Map();for(let i=0;i<src.t.length;i++){const x=Math.floor(src.t[i]/mins)*mins;if(!g.has(x))g.set(x,[]);g.get(x).push(i)}for(const [t,idx]of g){out.t.push(t);out.o.push(src.o[idx[0]]);out.h.push(Math.max(...idx.map(i=>src.h[i])));out.l.push(Math.min(...idx.map(i=>src.l[i])));out.c.push(src.c[idx.at(-1)]);out.v.push(idx.reduce((s,i)=>s+(src.v[i]||0),0));out.vw.push(src.vw[idx.at(-1)])}return out}
-function renderEvents(root,data){
+function aggregate(bars,tf){const src=bars;if(tf==='1D'){if(src.d?.length)return src;if(!src.t.length)return src;const i=[...src.t.keys()];return{t:[0],d:[src.date||''],o:[src.o[i[0]]],h:[Math.max(...i.map(k=>src.h[k]))],l:[Math.min(...i.map(k=>src.l[k]))],c:[src.c[i[i.length-1]]],v:[i.reduce((s,k)=>s+(src.v[k]||0),0)],vw:[null]}}
+ const mins=tf==='1h'?60:Number(tf.replace('m',''))||2,out={t:[],d:[],o:[],h:[],l:[],c:[],v:[],vw:[]},g=new Map();for(let i=0;i<src.t.length;i++){const x=Math.floor(src.t[i]/mins)*mins,key=(src.d?.[i]||'')+'|'+x;if(!g.has(key))g.set(key,[]);g.get(key).push(i)}for(const [key,idx]of g){out.t.push(Number(key.split('|').pop()));out.d.push(src.d?.[idx[0]]||'');out.o.push(src.o[idx[0]]);out.h.push(Math.max(...idx.map(i=>src.h[i])));out.l.push(Math.min(...idx.map(i=>src.l[i])));out.c.push(src.c[idx.at(-1)]);out.v.push(idx.reduce((s,i)=>s+(src.v[i]||0),0));out.vw.push(src.vw[idx.at(-1)])}return out}
+function renderEvents(root,data,filings=[]){
  const events=data.events;root.innerHTML=`<div class="status">${events.length} qualifying charts · Premarket high >50% above previous close · Dollar volume >$10M</div><div class="eventGrid">`+
- events.map((e,i)=>`<article class="event" data-event="${i}"><div class="eventhead"><span class="eventtitle">${esc(data.ticker)} · ${esc(fmtDate(e.date))}</span><select class="eventTf" aria-label="Chart timeframe"><option>1m</option><option selected>2m</option><option>5m</option><option>15m</option><option>30m</option><option>1h</option><option>1D</option></select></div>${e.error?`<div class="noevents">${esc(e.error)}</div>`:`<canvas class="priceChart" height="300" aria-label="${esc(data.ticker)} ${esc(fmtDate(e.date))} chart"></canvas>`}</article>`).join('')+`</div>`;
- if(!chartObserver)chartObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){const cv=entry.target;chartObserver.unobserve(cv);drawKWChart(cv);bindKWChart(cv)}}),{rootMargin:'300px'});
- events.forEach((e,i)=>{const card=root.querySelector(`[data-event="${i}"]`);if(!e.error){const cv=card.querySelector('.priceChart');cv._chart=e.chart;cv._event={...e,ticker:data.ticker};cv._timeframe='2m';chartObserver.observe(cv);}
-   card.querySelector('.eventTf').onchange=ev=>{ev.stopPropagation();if(!e.error){const cv=card.querySelector('.priceChart');cv._timeframe=ev.target.value;cv._view=null;drawKWChart(cv);if(kwModalSource===cv)renderKWModal()}};
+ events.map((e,i)=>`<article class="event" data-event="${i}"><div class="eventhead"><span class="eventtitle">${esc(data.ticker)} · ${esc(fmtDate(e.date))}</span><button class="eventPrev" title="Previous trading day">‹</button><button class="eventNext" title="Next trading day">›</button><select class="eventTf" aria-label="Chart timeframe"><option>1m</option><option>2m</option><option>5m</option><option selected>15m</option><option>30m</option><option>1h</option><option>1D</option></select><select class="eventDays" aria-label="Trading days shown"><option value="1">1 day</option><option value="3">3 days</option><option value="5" selected>5 days</option><option value="10">10 days</option><option value="20">20 days</option></select></div>${e.error?`<div class="noevents">${esc(e.error)}</div>`:`<canvas class="priceChart" height="390" aria-label="${esc(data.ticker)} ${esc(fmtDate(e.date))} chart"></canvas>`}</article>`).join('')+`</div>`;
+ if(!chartObserver)chartObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){const cv=entry.target;chartObserver.unobserve(cv);bindKWChart(cv);loadKWContext(cv,cv._event.date,cv._chartDays)}}),{rootMargin:'300px'});
+ if(filings.length)root.insertAdjacentHTML('beforeend',`<details class="qualFilings"><summary>Related SEC filings (${filings.length})</summary>${filings.map(f=>`<div class="evidence"><a href="${esc(f.filing_url)}" target="_blank" rel="noopener">${esc(f.headline)}</a> · ${esc(f.form)} · ${esc(fmtDate(f.filing_date))}</div>`).join('')}</details>`);
+ events.forEach((e,i)=>{const card=root.querySelector(`[data-event="${i}"]`);if(!e.error){const cv=card.querySelector('.priceChart');cv._chart=e.chart;cv._event={...e,ticker:data.ticker};cv._timeframe='15m';cv._chartDays=5;cv._activeDate=e.date;chartObserver.observe(cv);}
+   card.querySelector('.eventTf').onchange=ev=>{ev.stopPropagation();const cv=card.querySelector('.priceChart');if(cv){cv._timeframe=ev.target.value;loadKWContext(cv,cv._activeDate||e.date,cv._chartDays);if(kwModalSource===cv)renderKWModal()}};
+   card.querySelector('.eventDays').onchange=ev=>{ev.stopPropagation();const cv=card.querySelector('.priceChart');if(cv){cv._chartDays=Number(ev.target.value);loadKWContext(cv,cv._activeDate||e.date,cv._chartDays);if(kwModalSource===cv)renderKWModal()}};
+   card.querySelector('.eventPrev').onclick=()=>stepKWDay(card.querySelector('.priceChart'),-1);
+   card.querySelector('.eventNext').onclick=()=>stepKWDay(card.querySelector('.priceChart'),1);
  });
 }
+async function loadKWContext(cv,anchor,days){if(!cv?._chart)return;cv._activeDate=anchor;const requestId=(cv._contextRequestId||0)+1;cv._contextRequestId=requestId;const q=new URLSearchParams({ticker:cv._event.ticker,date:anchor,days:String(days||5),tf:(cv._timeframe||'15m')==='1D'?'1d':(cv._timeframe||'15m'),user,token});try{const r=await fetch('/api/chart-context?'+q),data=await r.json();if(requestId!==cv._contextRequestId)return;if(!r.ok)throw Error(data.error||'Chart data unavailable');cv._contextBars=data.bars;cv._contextDates=data.dates;cv._contextError='';}catch(e){if(requestId!==cv._contextRequestId)return;cv._contextBars=null;cv._contextError=e.message;}const card=cv.closest('.event');if(card){card.querySelector('.eventtitle').textContent=`${cv._event.ticker} · ${fmtDate(anchor)}`;if(cv._contextError){let msg=card.querySelector('.chartError');if(!msg){msg=document.createElement('div');msg.className='noevents chartError';card.appendChild(msg)}msg.textContent=cv._contextError}else card.querySelector('.chartError')?.remove()}drawKWChart(cv);if(kwModalSource===cv)renderKWModal()}
+async function stepKWDay(cv,step){if(!cv?._chart)return;let dates=cv._contextDates||[],anchor=cv._activeDate||cv._event.date,idx=dates.indexOf(anchor);if(idx<0||idx+step<0||idx+step>=dates.length){try{const q=new URLSearchParams({ticker:cv._event.ticker,date:anchor,days:'3',tf:'15m',user,token}),r=await fetch('/api/chart-context?'+q),d=await r.json();if(r.ok)dates=d.dates||[]}catch{}idx=dates.indexOf(anchor)}const next=dates[idx+step];if(next)await loadKWContext(cv,next,cv._chartDays||5)}
 function openKWModal(cv){kwModalSource=cv;kwModalSeries=[...cv.closest('.stock').querySelectorAll('.priceChart')].filter(c=>c._chart);kwModalIndex=Math.max(0,kwModalSeries.indexOf(cv));renderKWModal();$('#chartModal').classList.add('open')}
-function renderKWModal(){const src=kwModalSeries[kwModalIndex];if(!src)return;const cv=$('#kwModalCanvas');cv._chart=src._chart;cv._event=src._event;cv._timeframe=src._timeframe||'2m';$('#kwModalTitle').textContent=`${src._event.ticker||src.closest('.stock').dataset.ticker} · ${fmtDate(src._event.date)}`;$('#kwModalTf').value=cv._timeframe;cv.setAttribute('height',String(Math.max(350,window.innerHeight-70)));drawKWChart(cv)}
+function renderKWModal(){const src=kwModalSeries[kwModalIndex];if(!src)return;const cv=$('#kwModalCanvas');cv._chart=src._chart;cv._event=src._event;cv._timeframe=src._timeframe||'15m';cv._contextBars=src._contextBars;cv._activeDate=src._activeDate;cv._chartDays=src._chartDays;$('#kwModalTitle').textContent=`${src._event.ticker} · ${fmtDate(src._activeDate||src._event.date)}`;$('#kwModalTf').value=cv._timeframe;$('#kwModalDays').value=String(cv._chartDays||5);cv.setAttribute('height',String(Math.max(350,window.innerHeight-70)));drawKWChart(cv)}
 function closeKWModal(){$('#chartModal').classList.remove('open');kwModalSource=null}
-$('#kwPrev').onclick=()=>{kwModalIndex=Math.max(0,kwModalIndex-1);renderKWModal()};$('#kwNext').onclick=()=>{kwModalIndex=Math.min(kwModalSeries.length-1,kwModalIndex+1);renderKWModal()};
-$('#kwModalTf').onchange=()=>{const src=kwModalSeries[kwModalIndex];if(!src)return;src._timeframe=$('#kwModalTf').value;const card=src.closest('.event');card.querySelector('.eventTf').value=src._timeframe;renderKWModal();drawKWChart(src)};
+$('#kwPrev').onclick=()=>{if(kwModalSource)stepKWDay(kwModalSource,-1)};$('#kwNext').onclick=()=>{if(kwModalSource)stepKWDay(kwModalSource,1)};
+$('#kwModalTf').onchange=()=>{const src=kwModalSeries[kwModalIndex];if(!src)return;src._timeframe=$('#kwModalTf').value;src.closest('.event').querySelector('.eventTf').value=src._timeframe;loadKWContext(src,src._activeDate||src._event.date,src._chartDays||5)};
+$('#kwModalDays').onchange=()=>{const src=kwModalSeries[kwModalIndex];if(!src)return;src._chartDays=Number($('#kwModalDays').value);src.closest('.event').querySelector('.eventDays').value=String(src._chartDays);loadKWContext(src,src._activeDate||src._event.date,src._chartDays)};
 function drawKWChart(cv){
- const chart=cv?._chart;if(!chart?.bars)return;const tf=cv._timeframe||'2m',b=aggregate(chart.bars,tf);if(!b||!b.t.length)return;const dpr=devicePixelRatio||1,W=Math.max(320,cv.parentElement.clientWidth-16),H=Number(cv.getAttribute('height'))||360;if(cv.width!==W*dpr)cv.width=W*dpr;if(cv.height!==H*dpr)cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';const x=cv.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);
- const L=58,R=14,T=12,VH=Math.round(H*.18),B=24,ph=H-T-VH-B-7,pw=W-L-R,vy=T+ph+7,vb=vy+VH,fullStart=tf==='1D'?0:240,fullEnd=tf==='1D'?1:960;let a=cv._view?cv._view[0]:fullStart,z=cv._view?cv._view[1]:fullEnd;if(tf==='1D'){a=0;z=1}const X=t=>L+pw*(t-a)/(z-a), lo=Math.min(...b.l),hi=Math.max(...b.h),pad=(hi-lo)*.06||hi*.02,y0=lo-pad,y1=hi+pad,Y=v=>T+ph*(1-(v-y0)/(y1-y0));
- x.fillStyle='#080a0d';x.fillRect(0,0,W,H);x.strokeStyle='#252b32';x.fillStyle='#bac4cd';x.font='11px Consolas,monospace';for(let k=0;k<=5;k++){const v=y0+(y1-y0)*k/5,yy=Y(v);x.beginPath();x.moveTo(L,yy);x.lineTo(W-R,yy);x.stroke();x.fillText(v.toFixed(v<1?3:2),3,yy+4)}
- if(tf!=='1D'){const preX=X(Math.max(a,240)),openX=X(Math.min(z,570));x.fillStyle='rgba(255,255,255,.07)';x.fillRect(preX,T,Math.max(0,openX-preX),ph+7+VH);x.fillStyle='#a0a9b1';x.fillText('PRE-MARKET',Math.max(L,preX+4),T+12);for(let m=Math.ceil(a/60)*60;m<=z;m+=60){const xx=X(m);x.strokeStyle='#1b2026';x.beginPath();x.moveTo(xx,T);x.lineTo(xx,vb);x.stroke();const local=((m+(chart.off||0))%1440+1440)%1440;x.fillStyle='#aeb7c0';x.fillText(String(Math.floor(local/60)).padStart(2,'0')+':'+String(local%60).padStart(2,'0'),xx-16,H-5)}if(a<=570&&z>=570){x.strokeStyle='#777';x.setLineDash([3,3]);x.beginPath();x.moveTo(X(570),T);x.lineTo(X(570),vb);x.stroke();x.setLineDash([])}}else{x.fillStyle='#aeb7c0';x.fillText(cv._event.date||'Daily',W/2-20,H-5)}
- const ref=(v,color,label)=>{if(v==null||v<y0||v>y1)return;x.strokeStyle=color;x.setLineDash([4,4]);x.beginPath();x.moveTo(L,Y(v));x.lineTo(W-R,Y(v));x.stroke();x.setLineDash([]);x.fillStyle=color;x.fillText(label,W-R-70,Y(v)-3)};ref(chart.pc,'#8a939b','Prev close');ref(chart.pmh,'#ffd66b','PM high');ref(cv._event.high,'#47d890','HOD');ref(cv._event.low,'#ff626c','LOD');
- const spacing=pw/(tf==='1D'?1:(z-a)/((tf==='1h'?60:Number(tf.replace('m','')))||2)),bw=Math.max(1.5,Math.min(spacing*.72,tf==='1D'?26:18)),maxVol=Math.max(...b.v)||1,vis=[];for(let i=0;i<b.t.length;i++)if(tf==='1D'||(b.t[i]>=a&&b.t[i]<=z))vis.push(i);
- for(const i of vis){const t=tf==='1D'?.5:b.t[i]+(tf==='1h'?30:(Number(tf.replace('m',''))||2)/2),xx=X(t),up=b.c[i]>=b.o[i],color=up?'#47d890':'#ff626c';x.fillStyle=up?'rgba(71,216,144,.72)':'rgba(255,98,108,.72)';const volH=VH*b.v[i]/maxVol;x.fillRect(xx-bw/2,vb-volH,bw,volH);x.strokeStyle=color;x.lineWidth=1.3;x.beginPath();x.moveTo(xx,Y(b.h[i]));x.lineTo(xx,Y(b.l[i]));x.stroke();x.fillStyle=color;x.fillRect(xx-bw/2,Y(Math.max(b.o[i],b.c[i])),bw,Math.max(1.6,Math.abs(Y(b.o[i])-Y(b.c[i]))))}
- if(chart.bars.vw){x.strokeStyle='#55bfff';x.lineWidth=1.5;x.beginPath();let on=false;for(let i=0;i<chart.bars.t.length;i++){const t=chart.bars.t[i],v=chart.bars.vw[i];if(v==null||t<a||t>z){on=false;continue}const xx=X(t+(tf==='1h'?30:(Number(tf.replace('m',''))||2)/2)),yy=Y(v);if(!on){x.moveTo(xx,yy);on=true}else x.lineTo(xx,yy)}x.stroke();x.lineWidth=1}
- x.fillStyle='#9ba5af';x.fillText('Volume',L+3,vy+12);if(cv._hover){const i=vis.reduce((best,k)=>Math.abs(X(tf==='1D'?.5:b.t[k])-cv._hover.x)<Math.abs(X(tf==='1D'?.5:b.t[best])-cv._hover.x)?k:best,vis[0]);if(i!=null){const xx=X(tf==='1D'?.5:b.t[i]+(Number(tf.replace('m',''))||2)/2);x.strokeStyle='#d8e2eb';x.setLineDash([3,3]);x.beginPath();x.moveTo(xx,T);x.lineTo(xx,vb);x.stroke();x.setLineDash([]);x.fillStyle='#e6edf3';x.fillRect(L+6,T+5,230,52);x.fillStyle='#080a0d';x.fillText(`O ${fmtNum(b.o[i])}  H ${fmtNum(b.h[i])}  L ${fmtNum(b.l[i])}  C ${fmtNum(b.c[i])}`,L+12,T+20);x.fillText(`Vol ${fmtNum(b.v[i])} · ${tf==='1D'?cv._event.date:hm(b.t[i],chart.off||0)+' IST'}`,L+12,T+39)}}
+ const chart=cv?._chart;if(!chart)return;const tf=cv._timeframe||'15m',daily=tf==='1D',source=cv._contextBars||chart.bars;let b=aggregate(source,tf);if(!b?.t?.length)return;
+ const dates=[...new Set(b.d||[])],multi=!daily&&dates.length>1;
+ if(multi){let prev='',dayIndex=-1;b={...b,t:b.t.map((t,i)=>{if(b.d[i]!==prev){prev=b.d[i];dayIndex++}return 240+dayIndex*720+t-240})}}
+ const dpr=devicePixelRatio||1,W=Math.max(320,cv.parentElement.clientWidth-16),H=Number(cv.getAttribute('height'))||390;
+ if(cv.width!==W*dpr)cv.width=W*dpr;if(cv.height!==H*dpr)cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';
+ const x=cv.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);
+ const L=58,R=12,T=12,VH=Math.round(H*.18),B=24,ph=H-T-VH-B-7,pw=W-L-R,vy=T+ph+7,vb=vy+VH;
+ const fullStart=daily?-.5:240,fullEnd=daily?b.t.length-.5:multi?240+dates.length*720:960,a=fullStart,z=fullEnd;
+ const X=t=>L+pw*(t-a)/(z-a),lo=Math.min(...b.l),hi=Math.max(...b.h),pad=(hi-lo)*.06||hi*.02,y0=lo-pad,y1=hi+pad,Y=v=>T+ph*(1-(v-y0)/(y1-y0));
+ x.fillStyle='#050607';x.fillRect(0,0,W,H);x.strokeStyle='#252b32';x.fillStyle='#bac4cd';x.font='11px Consolas,monospace';
+ for(let k=0;k<=5;k++){const v=y0+(y1-y0)*k/5,yy=Y(v);x.beginPath();x.moveTo(L,yy);x.lineTo(W-R,yy);x.stroke();x.fillText(v.toFixed(v<1?3:2),3,yy+4)}
+ if(daily){const step=dates.length>12?Math.ceil(dates.length/10):1;for(let i=0;i<b.t.length;i+=step){const xx=X(i+.5);x.strokeStyle='#1b2026';x.beginPath();x.moveTo(xx,T);x.lineTo(xx,vb);x.stroke();x.fillStyle='#aeb7c0';x.fillText(fmtDate(b.d?.[i]||''),xx-26,H-5)}}
+ else for(let day=0;day<(multi?dates.length:1);day++){const shift=day*720,pre=X(240+shift),open=X(570+shift);x.fillStyle='rgba(255,255,255,.07)';x.fillRect(pre,T,open-pre,ph+7+VH);if(day===0){x.fillStyle='#a0a9b1';x.fillText('PRE-MARKET',pre+4,T+12)}for(let m=240;m<=960;m+=(multi?180:60)){const pos=m+shift,xx=X(pos);x.strokeStyle='#1b2026';x.beginPath();x.moveTo(xx,T);x.lineTo(xx,vb);x.stroke();const time=hm(m,chart.off||0),label=multi?(m===240?dates[day].slice(5):''):time;if(label){x.fillStyle='#aeb7c0';x.fillText(label,xx-18,H-5)}}const xx=X(570+shift);x.strokeStyle='#777';x.setLineDash([3,3]);x.beginPath();x.moveTo(xx,T);x.lineTo(xx,vb);x.stroke();x.setLineDash([])}
+ const showRefs=!multi&&!daily&&(cv._activeDate||cv._event.date)===cv._event.date&&cv._chartDays===1;
+ if(showRefs){const ref=(v,color)=>{if(v==null||v<y0||v>y1)return;x.strokeStyle=color;x.setLineDash([4,4]);x.beginPath();x.moveTo(L,Y(v));x.lineTo(W-R,Y(v));x.stroke();x.setLineDash([])};ref(chart.pc,'#8a939b');ref(chart.pmh,'#ffd66b');ref(cv._event.high,'#47d890');ref(cv._event.low,'#ff626c')}
+ const mins=tf==='1h'?60:parseInt(tf,10)||15,spacing=pw/(daily?Math.max(1,b.t.length):multi?dates.length*720/mins:720/mins),bw=Math.max(daily?4:1.5,Math.min(spacing*.72,daily?22:18)),maxVol=Math.max(...b.v)||1;
+ for(let i=0;i<b.t.length;i++){const t=daily?b.t[i]+.5:b.t[i]+mins/2,xx=X(t),up=b.c[i]>=b.o[i],color=up?'#47d890':'#ff626c',volH=VH*b.v[i]/maxVol;x.fillStyle=up?'rgba(71,216,144,.78)':'rgba(255,98,108,.78)';x.fillRect(xx-bw/2,vb-volH,bw,volH);x.strokeStyle=color;x.lineWidth=1.3;x.beginPath();x.moveTo(xx,Y(b.h[i]));x.lineTo(xx,Y(b.l[i]));x.stroke();x.fillStyle=color;x.fillRect(xx-bw/2,Y(Math.max(b.o[i],b.c[i])),bw,Math.max(1.6,Math.abs(Y(b.o[i])-Y(b.c[i]))))}
+ const vwap=b.vw;if(vwap&&!daily){x.strokeStyle='#55bfff';x.lineWidth=1.6;x.beginPath();let on=false,lastDate=null;for(let i=0;i<b.t.length;i++){const v=vwap[i];if(v==null){on=false;continue}if(multi&&b.d[i]!==lastDate)on=false;const xx=X(b.t[i]+mins/2),yy=Y(v);if(on)x.lineTo(xx,yy);else x.moveTo(xx,yy);on=true;lastDate=b.d?.[i]}x.stroke()}
+ x.fillStyle='#9ba5af';x.fillText('Volume',L+3,vy+12);x.fillStyle='#aeb7c0';x.fillText(daily?`${dates.length} trading days`:multi?`${dates.length} trading days · ${tf}`:tf,H>500?L+90:L+64,H-5);
 }
 function hm(m,off){m=((m+(off||0))%1440+1440)%1440;return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0')}
 function bindKWChart(cv){if(cv._bound)return;cv._bound=true;cv.addEventListener('click',()=>openKWModal(cv))}
