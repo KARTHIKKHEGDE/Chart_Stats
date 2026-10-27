@@ -31,7 +31,6 @@ import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
-import xml.etree.ElementTree as ET_XML
 from flask import Flask, request, jsonify, Response, send_file
 from urllib.parse import quote
 
@@ -1611,12 +1610,14 @@ def run_job(job, t, refresh):
         recent_news = _get_scanner_news(t)
         report["news"] = recent_news
         report["news_status"] = (_scanner_details.get(t, {}).get("news_status") or
-                                  ("Latest press releases found" if recent_news else
-                                   "No recent press releases found via Yahoo Finance or Google News"))
+                                  ("Latest press releases found on Yahoo Finance" if recent_news else
+                                   "No press releases found on Yahoo Finance"))
         if recent_news:
-            report["text"] += "\n\nLatest Press Releases"
+            report["text"] += "\n\nLatest Press Releases · Yahoo Finance"
             for item in recent_news:
                 report["text"] += f"\n- [{item['kind']}] {item['title']} ({item['publisher']}) {item['url']}"
+        else:
+            report["text"] += f"\n\nLatest Press Releases · Yahoo Finance\n{report['news_status']}"
         job["result"] = report
         job["status"] = "done"
     except Exception as ex:
@@ -2880,36 +2881,27 @@ def _fetch_yahoo_news(ticker):
         if len(items) >= 2:
             break
 
+    # Search may omit the ticker's own Yahoo Finance news feed, so also inspect
+    # Yahoo's ticker news endpoint before deciding that no releases are present.
     if len(items) < 2:
         try:
-            rss_url = ("https://news.google.com/rss/search?q=" +
-                       quote(f"{ticker} press release", safe="") +
-                       "&hl=en-US&gl=US&ceid=US:en")
-            response = requests.get(rss_url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/rss+xml,application/xml,text/xml"}, timeout=10)
-            response.raise_for_status()
-            root = ET_XML.fromstring(response.content)
-            for article in root.findall("./channel/item"):
-                source_node = article.find("source")
-                publisher = source_node.text.strip() if source_node is not None and source_node.text else ""
-                if not press_wire_pattern.search(publisher):
+            for article in (yf.Ticker(ticker.replace(".", "-")).news or []):
+                content = article.get("content") if isinstance(article.get("content"), dict) else article
+                provider = content.get("provider") or article.get("publisher") or ""
+                if isinstance(provider, dict):
+                    provider = provider.get("displayName") or provider.get("name") or ""
+                if not press_wire_pattern.search(str(provider)):
                     continue
-                title = article.findtext("title") or ""
-                if not title.strip():
-                    continue
-                items.append({
-                    "title": title.strip(),
-                    "url": article.findtext("link") or "",
-                    "publisher": publisher,
-                    "published": article.findtext("pubDate") or "",
-                    "kind": "Press release",
-                })
+                item = _normalize_yahoo_news(article, "Press release")
+                if item:
+                    items.append(item)
         except Exception as exc:
-            errors.append(f"Google News RSS: {type(exc).__name__}: {exc}")
+            errors.append(f"Yahoo ticker news: {type(exc).__name__}: {exc}")
 
     unique, seen = [], set()
     for item in items:
-        # Yahoo and Google News often link to the same wire release through
-        # different URLs. Deduplicate on normalized headline as well.
+        # Yahoo search and its ticker feed can return the same wire release;
+        # deduplicate on normalized headline, falling back to the URL.
         key = re.sub(r"\W+", " ", item["title"].lower()).strip()
         if not key:
             key = item["url"]
@@ -2926,9 +2918,9 @@ def _fetch_yahoo_news(ticker):
             return 0
     unique.sort(key=published_at, reverse=True)
     now_ts = time.time()
-    # Keep stale and undated releases out of both the notes and voice alerts.
-    unique = [item for item in unique
-              if now_ts - 48 * 60 * 60 <= published_at(item) <= now_ts]
+    # Yahoo search is already relevance/recentness ranked. Keep older releases
+    # when they are the latest items available, but discard future timestamps.
+    unique = [item for item in unique if not published_at(item) or published_at(item) <= now_ts]
     if not unique:
         app.logger.warning("No press releases found for %s. News fetch diagnostics: %s",
                            ticker, " | ".join(errors) if errors else "sources returned no matching press releases")
@@ -2948,8 +2940,8 @@ def _get_scanner_news(ticker):
     with _scanner_details_lock:
         cached = _scanner_details.setdefault(ticker, {})
         cached.update(news=news, news_at=now,
-                      news_status=("Latest press releases found" if news else
-                                   "Press release lookup unavailable; see server log"))
+                      news_status=("Latest press releases found on Yahoo Finance" if news else
+                                   "No press releases found on Yahoo Finance"))
     return news
 
 
@@ -3942,13 +3934,13 @@ function renderTab(tab, r, isRefresh){
   o += `<div>Summary: ${esc(h.summary)}</div>`;
   (h.notes||[]).forEach(n=>o+=`<div class="y">Note: ${esc(n)}</div>`);
   const newsItems = r.news || [];
-  if(newsItems.length) o += `<div class="panel"><div class="ttl">Latest Press Releases</div>`+
-    newsItems.map(item=>{
+  o += `<div class="panel"><div class="ttl">Latest Press Releases · Yahoo Finance</div>`+
+    (newsItems.length ? newsItems.map(item=>{
       const link = /^https?:\/\//i.test(item.url || '')
         ? `<a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer" style="color:#6cc4ff">${esc(item.title)}</a>`
         : esc(item.title);
       return `<div style="padding:5px 0;border-bottom:1px solid #222"><span style="color:#ffd23f;font-size:12px">${esc(item.kind || 'News')}</span> · ${link}<span style="color:#777;font-size:12px"> — ${esc(item.publisher || 'Yahoo Finance')}${item.published?' · '+esc(item.published):''}</span></div>`;
-    }).join('') + `</div>`;
+    }).join('') : `<div class="foot">${esc(r.news_status || 'No press releases found on Yahoo Finance.')}</div>`) + `</div>`;
   o += `<div class="panel two"><div><div class="ttl">${esc(T.p1)}</div>${kv(r.p1.left)}</div><div>${kv(r.p1.right)}</div></div>`;
   if(r.open_hod_stats){
     const s=r.open_hod_stats, fmt=x=>x==null?'—':`${x>=0?'+':''}${(x*100).toFixed(0)}%`, line=x=>`${fmt(x.median)}   avg ${fmt(x.avg)}   (${x.n} ${x.n===1?'day':'days'})`;
