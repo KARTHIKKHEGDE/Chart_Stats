@@ -1968,6 +1968,10 @@ DEFAULT_SCANNER_SETTINGS = {
 }
 _scanner_user_settings_lock = threading.RLock()
 _scanner_user_settings_file = Path(__file__).resolve().parent / ".scanner_user_settings.json"
+_APP_UI_VISIBILITY_KEY = "app_ui_visibility"
+_APP_UI_VISIBILITY_DEFAULTS = {"scanner": True, "runner_stats": True}
+_app_ui_visibility_file = Path(__file__).resolve().parent / ".app_ui_visibility.json"
+_app_ui_visibility_lock = threading.RLock()
 
 
 def _normalize_scanner_settings(value):
@@ -2017,6 +2021,99 @@ def _write_local_scanner_settings(username, settings):
         tmp.replace(_scanner_user_settings_file)
 
 
+def _normalize_app_ui_visibility(value):
+    source = value if isinstance(value, dict) else {}
+    return {
+        "scanner": source.get("scanner") is not False,
+        "runner_stats": source.get("runner_stats") is not False,
+    }
+
+
+def _parse_admin_scanner_settings(value):
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            value = {}
+    return value if isinstance(value, dict) else {}
+
+
+def _read_local_app_ui_visibility():
+    try:
+        with _app_ui_visibility_lock:
+            value = json.loads(_app_ui_visibility_file.read_text(encoding="utf-8"))
+        return _normalize_app_ui_visibility(value)
+    except Exception:
+        return None
+
+
+def _write_local_app_ui_visibility(visibility):
+    with _app_ui_visibility_lock:
+        temp_path = _app_ui_visibility_file.with_suffix(".tmp")
+        temp_path.write_text(json.dumps(visibility, indent=2), encoding="utf-8")
+        temp_path.replace(_app_ui_visibility_file)
+
+
+def _get_app_ui_visibility():
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if sub_url and sub_key:
+        try:
+            response = requests.get(
+                f"{sub_url}/rest/v1/app_users?select=username,scanner_settings,is_admin,can_rename",
+                headers=_supabase_headers(), timeout=5
+            )
+            if response.status_code == 200:
+                rows = response.json()
+                admins = [row for row in rows if row.get("is_admin") or row.get("can_rename")]
+                admins.sort(key=lambda row: (row.get("username", "").lower() not in ("karthik", "locke"),
+                                             row.get("username", "").lower()))
+                for row in admins:
+                    saved = _parse_admin_scanner_settings(row.get("scanner_settings")).get(_APP_UI_VISIBILITY_KEY)
+                    if isinstance(saved, dict):
+                        return _normalize_app_ui_visibility(saved)
+        except Exception:
+            pass
+    return _read_local_app_ui_visibility() or dict(_APP_UI_VISIBILITY_DEFAULTS)
+
+
+def _save_app_ui_visibility(visibility):
+    clean = _normalize_app_ui_visibility(visibility)
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if sub_url and sub_key:
+        response = requests.get(
+            f"{sub_url}/rest/v1/app_users?select=username,scanner_settings,is_admin,can_rename",
+            headers=_supabase_headers(), timeout=5
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"Could not load admin settings (HTTP {response.status_code})")
+        rows = response.json()
+        admins = [row for row in rows if row.get("is_admin") or row.get("can_rename")]
+        if not admins:
+            raise RuntimeError("No admin accounts are available to store app visibility settings")
+        for row in admins:
+            username = (row.get("username") or "").strip().lower()
+            if not username:
+                continue
+            settings = _parse_admin_scanner_settings(row.get("scanner_settings"))
+            settings[_APP_UI_VISIBILITY_KEY] = clean
+            result = requests.patch(
+                f"{sub_url}/rest/v1/app_users?username=eq.{quote(username, safe='')}",
+                json={"scanner_settings": settings}, headers=_supabase_headers(), timeout=6
+            )
+            if result.status_code not in (200, 204):
+                raise RuntimeError(f"Could not save visibility settings for {username} "
+                                   f"(HTTP {result.status_code})")
+        try:
+            _write_local_app_ui_visibility(clean)
+        except Exception:
+            pass
+        return clean, "Supabase"
+    _write_local_app_ui_visibility(clean)
+    return clean, "local fallback"
+
+
 def _get_user_scanner_settings(username):
     record = _db_get_user(username) or {}
     remote = record.get("scanner_settings")
@@ -2030,6 +2127,10 @@ def _get_user_scanner_settings(username):
 
 def _save_user_scanner_settings(username, settings):
     clean_settings = _normalize_scanner_settings(settings)
+    existing = _db_get_user(username) or {}
+    preserved = _parse_admin_scanner_settings(existing.get("scanner_settings"))
+    if isinstance(preserved.get(_APP_UI_VISIBILITY_KEY), dict):
+        clean_settings[_APP_UI_VISIBILITY_KEY] = preserved[_APP_UI_VISIBILITY_KEY]
     local_error = None
     try:
         _write_local_scanner_settings(username, clean_settings)
@@ -2051,6 +2152,34 @@ def _save_user_scanner_settings(username, settings):
     if local_error:
         raise RuntimeError(f"Could not save scanner preferences: {local_error}")
     return clean_settings, "local fallback"
+
+
+@app.route("/api/ui-visibility")
+def app_ui_visibility():
+    return jsonify(_get_app_ui_visibility())
+
+
+@app.route("/api/admin/ui-visibility", methods=["GET", "POST"])
+def admin_app_ui_visibility():
+    body = request.get_json(silent=True) or {}
+    username = (request.args.get("user") or body.get("user") or "").strip().lower()
+    token = (request.args.get("token") or body.get("token") or "").strip()
+    password = (request.args.get("pwd") or body.get("pwd") or "").strip()
+    if (username not in ADMIN_USERS or password != "500" or not token or
+            not _db_validate_session(username, token)):
+        return jsonify({"error": "Unauthorized"}), 401
+    if request.method == "GET":
+        return jsonify({"visibility": _get_app_ui_visibility(), "storage": "Supabase or local fallback"})
+
+    requested = body.get("visibility")
+    if (not isinstance(requested, dict) or type(requested.get("scanner")) is not bool or
+            type(requested.get("runner_stats")) is not bool):
+        return jsonify({"error": "Both visibility options must be true or false."}), 400
+    try:
+        visibility, storage = _save_app_ui_visibility(requested)
+        return jsonify({"ok": True, "visibility": visibility, "storage": storage})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/api/scanner/settings", methods=["GET", "POST"])
@@ -2989,6 +3118,16 @@ canvas{display:block;width:100%}
       <button id="admin_back_btn" style="height:36px;font-size:13px;padding:0 14px;border-color:#29a8ff;color:#29a8ff">Back to Terminal</button>
     </div>
   </div>
+  <div class="panel" style="margin:0 0 18px;padding:16px 20px;border:1px solid #333">
+    <div style="font-weight:bold;color:#ffd23f;font-size:14px;margin-bottom:5px">App-wide button visibility</div>
+    <div style="color:#888;font-size:12px;margin-bottom:12px">Choose which optional tools everyone can see. The main terminal remains available.</div>
+    <div style="display:flex;align-items:center;gap:22px;flex-wrap:wrap">
+      <label style="display:flex;align-items:center;gap:7px;color:#ddd;font-size:13px"><input id="admin_show_scanner" type="checkbox" style="width:16px;height:16px"> Show Scanner button to everyone</label>
+      <label style="display:flex;align-items:center;gap:7px;color:#ddd;font-size:13px"><input id="admin_show_runner_stats" type="checkbox" style="width:16px;height:16px"> Show Runner Stats button to everyone</label>
+      <button id="admin_save_ui_visibility" style="height:34px;padding:0 14px;font-size:12px;border:1px solid #29a8ff;background:#071a28;color:#6cc4ff;cursor:pointer;border-radius:3px;font-weight:bold">Save visibility</button>
+      <span id="admin_ui_visibility_status" style="color:#888;font-size:12px"></span>
+    </div>
+  </div>
   <div id="admin_list" style="margin-top:10px"></div>
 </div>
 
@@ -3291,6 +3430,9 @@ function _showApp(){
     $('#u_name').style.textDecoration='none';
     $('#u_name').title = '';
   }
+  loadAppUiVisibility();
+  if(appUiVisibilityTimer) clearInterval(appUiVisibilityTimer);
+  appUiVisibilityTimer = setInterval(loadAppUiVisibility, 30000);
   $('#t').focus();
   loadScannerSettings().then(()=>startScannerPolling());
   // Periodically verify session (every 90s) for non-exempt users
@@ -3324,6 +3466,7 @@ function _startSessionPoll(){
 
 function doLogout(){
   if(_sessionPollTimer){ clearInterval(_sessionPollTimer); _sessionPollTimer=null; }
+  if(appUiVisibilityTimer){ clearInterval(appUiVisibilityTimer); appUiVisibilityTimer=null; }
   localStorage.removeItem('gap_user');
   localStorage.removeItem('gap_token');
   currentUser='';
@@ -4253,6 +4396,70 @@ $('#logout_btn').onclick=()=>{
 };
 
 let adminPwd = '';
+let appUiVisibility = {scanner:true, runner_stats:true};
+let appUiVisibilityTimer = null;
+
+function applyAppUiVisibility(value){
+  appUiVisibility = {
+    scanner: value && value.scanner !== false,
+    runner_stats: value && value.runner_stats !== false
+  };
+  const scannerButton = $('#scanner_open_btn');
+  const runnerButton = $('#nav_multiday_btn');
+  if(scannerButton) scannerButton.style.display = appUiVisibility.scanner ? '' : 'none';
+  if(runnerButton) runnerButton.style.display = appUiVisibility.runner_stats ? '' : 'none';
+  if(!appUiVisibility.scanner && typeof closeScanner === 'function') closeScanner();
+}
+
+async function loadAppUiVisibility(){
+  try{
+    const response = await fetch('/api/ui-visibility');
+    if(response.ok) applyAppUiVisibility(await response.json());
+  } catch(e){}
+}
+
+async function loadAdminUiVisibility(){
+  const status = $('#admin_ui_visibility_status');
+  if(status) status.textContent = 'Loading…';
+  try{
+    const url = '/api/admin/ui-visibility?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken)+'&pwd='+encodeURIComponent(adminPwd);
+    const response = await fetch(url);
+    const data = await response.json();
+    if(!response.ok) throw new Error(data.error || 'Could not load settings');
+    const visibility = data.visibility || {};
+    $('#admin_show_scanner').checked = visibility.scanner !== false;
+    $('#admin_show_runner_stats').checked = visibility.runner_stats !== false;
+    if(status) status.textContent = 'Saved globally';
+  } catch(error){
+    if(status) status.textContent = error.message;
+  }
+}
+
+async function saveAdminUiVisibility(){
+  const button = $('#admin_save_ui_visibility');
+  const status = $('#admin_ui_visibility_status');
+  if(!button || !status) return;
+  button.disabled = true;
+  status.textContent = 'Saving…';
+  try{
+    const visibility = {
+      scanner: $('#admin_show_scanner').checked,
+      runner_stats: $('#admin_show_runner_stats').checked
+    };
+    const response = await fetch('/api/admin/ui-visibility', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({user:currentUser, token:sessionToken, pwd:adminPwd, visibility})
+    });
+    const data = await response.json();
+    if(!response.ok) throw new Error(data.error || 'Could not save settings');
+    applyAppUiVisibility(data.visibility);
+    status.textContent = 'Saved for everyone';
+  } catch(error){
+    status.textContent = error.message;
+  } finally{
+    button.disabled = false;
+  }
+}
 
 function openPwdModal(){
   const cur = (currentUser||'').toLowerCase();
@@ -4480,6 +4687,7 @@ function renderAdminView(){
 }
 
 async function loadAdminSearches(){
+  loadAdminUiVisibility();
   $('#admin_list').innerHTML = '<span class="d">Loading search logs…</span>';
   try {
     const res = await fetch('/api/admin/searches?user=' + encodeURIComponent(currentUser) + '&pwd=' + encodeURIComponent(adminPwd));
@@ -4565,6 +4773,7 @@ $('#admin_back_btn').onclick=()=>{
   $('#t').focus();
 };
 $('#admin_rf_btn').onclick=loadAdminSearches;
+$('#admin_save_ui_visibility').onclick=saveAdminUiVisibility;
 
 // --- User Management Modal ---
 let liveAllowed = [];
