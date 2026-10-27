@@ -2195,6 +2195,10 @@ def job(jid):
 
 _scanner_cache = {"at": 0.0, "rows": []}
 _scanner_cache_lock = threading.Lock()
+_scanner_scan_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scanner-universe")
+_scanner_scan_state = {"running": False, "session_date": "", "done": 0, "total": 0,
+                       "error": "", "completed_at": 0.0}
+_SCANNER_RESCAN_SECONDS = 60
 
 
 def _scanner_session_date(now=None):
@@ -2293,57 +2297,93 @@ def _yahoo_scanner_rows():
     return rows
 
 
-def _tradingview_premarket_rows():
-    """Discover today's premarket gappers from TradingView's extended-hours screener."""
-    columns = ["name", "description", "premarket_close", "premarket_change",
-               "premarket_change_abs", "premarket_volume"]
-    payload = {
-        "filter": [{"left": "premarket_change", "operation": "greater", "right": 0}],
-        "options": {"lang": "en"},
-        "markets": ["america"],
-        "symbols": {"query": {"types": ["stock"]}, "tickers": []},
-        "columns": columns,
-        "sort": {"sortBy": "premarket_change", "sortOrder": "desc"},
-        "range": [0, 1000],
-    }
-    response = requests.post("https://scanner.tradingview.com/america/scan",
-                             json=payload, timeout=12,
-                             headers={"User-Agent": "Mozilla/5.0", "Origin": "https://www.tradingview.com",
-                                      "Referer": "https://www.tradingview.com/"})
-    response.raise_for_status()
-    data = response.json().get("data") or []
+def _yahoo_all_premarket_rows(session_date):
+    """Scan every US screener page using Yahoo's current premarket quote fields."""
+    query = yf.EquityQuery("eq", ["region", "us"])
+    page_size = 250
+    first = yf.screen(query, offset=0, size=page_size, sortField="ticker", sortAsc=True)
+    pages = [(0, first)]
+    total = int(first.get("total") or 0)
+    offsets = list(range(page_size, min(total, 50000), page_size))
+    with _scanner_cache_lock:
+        _scanner_scan_state.update(done=1, total=1 + len(offsets), error="")
 
+    def load_page(offset):
+        return offset, yf.screen(query, offset=offset, size=page_size,
+                                 sortField="ticker", sortAsc=True)
+
+    if total:
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="scanner-yahoo-page") as pool:
+            futures = [pool.submit(load_page, offset) for offset in offsets]
+            for future in as_completed(futures):
+                pages.append(future.result())
+                with _scanner_cache_lock:
+                    _scanner_scan_state["done"] += 1
+    else:
+        offset = page_size
+        while offset < 50000:
+            page = yf.screen(query, offset=offset, size=page_size,
+                             sortField="ticker", sortAsc=True)
+            page_quotes = page.get("quotes") or []
+            if not page_quotes:
+                break
+            pages.append((offset, page))
+            with _scanner_cache_lock:
+                _scanner_scan_state.update(done=len(pages), total=len(pages))
+            if len(page_quotes) < page_size:
+                break
+            offset += len(page_quotes)
+
+    quotes = []
+    for _, page in sorted(pages, key=lambda pair: pair[0]):
+        quotes.extend(page.get("quotes") or [])
+    if not quotes:
+        raise RuntimeError("Yahoo returned no US ticker quotes")
+
+    today = dt.date.fromisoformat(session_date)
     rows = []
-    for item in data:
-        values = item.get("d") or []
-        if len(values) < len(columns):
-            continue
-        symbol, company, price, gap_pct, change_abs, volume = values
+    for quote in quotes:
+        price = quote.get("preMarketPrice")
+        volume = quote.get("preMarketVolume")
+        previous_close = quote.get("regularMarketPreviousClose") or quote.get("previousClose")
+        quote_time = quote.get("preMarketTime")
         try:
-            price = float(price)
-            gap_pct = float(gap_pct)
-            volume = float(volume)
-            change_abs = float(change_abs) if change_abs is not None else None
-        except (TypeError, ValueError):
+            price, volume, previous_close = float(price), float(volume), float(previous_close)
+            timestamp = float(quote_time)
+            if timestamp > 10_000_000_000:
+                timestamp /= 1000
+            quote_date = dt.datetime.fromtimestamp(timestamp, ET).date()
+        except (TypeError, ValueError, OSError, OverflowError):
             continue
-        if price <= 0 or gap_pct <= 0 or volume <= 0:
+        if quote_date != today or price <= 0 or previous_close <= 0 or volume <= 0:
             continue
-        previous_close = price - change_abs if change_abs is not None else price / (1 + gap_pct / 100)
-        if previous_close <= 0:
-            continue
-        # Use the absolute change when supplied so the displayed gap is tied
-        # directly to the premarket price and previous regular-session close.
         gap_pct = (price / previous_close - 1) * 100
         dollar_volume = price * volume
-        ticker = str(item.get("s") or "").rsplit(":", 1)[-1].upper()
+        ticker = str(quote.get("symbol") or "").upper()
         if ticker and 0.40 < price < 20 and gap_pct > 40 and dollar_volume >= 500_000:
-            rows.append({"ticker": ticker, "company": str(company or ""),
-                         "price": round(price, 4), "previous_close": round(previous_close, 4),
-                         "gap_pct": round(gap_pct, 2), "dollar_volume": round(dollar_volume),
-                         "volume": round(volume)})
-
+            rows.append({"ticker": ticker, "price": round(price, 4),
+                         "previous_close": round(previous_close, 4), "gap_pct": round(gap_pct, 2),
+                         "dollar_volume": round(dollar_volume), "volume": round(volume)})
     rows.sort(key=lambda row: (-row["gap_pct"], -row["dollar_volume"], row["ticker"]))
     return rows
+
+
+def _refresh_yahoo_premarket_universe(session_date):
+    """Scan Yahoo's US screener pages and publish the current premarket gap list."""
+    try:
+        rows = _yahoo_all_premarket_rows(session_date)
+        with _scanner_cache_lock:
+            if (_scanner_cache.get("session_date") == session_date and
+                    _scanner_cache.get("source") == "premarket"):
+                _scanner_cache.update(at=time.time(), rows=rows)
+    except Exception as exc:
+        with _scanner_cache_lock:
+            _scanner_scan_state["error"] = str(exc)
+    finally:
+        with _scanner_cache_lock:
+            if _scanner_scan_state.get("session_date") == session_date:
+                _scanner_scan_state["running"] = False
+                _scanner_scan_state["completed_at"] = time.time()
 
 
 _scanner_details = {}
@@ -2588,13 +2628,24 @@ def scanner_market_scan():
 
     now = time.time()
     session_date = _scanner_session_date()
+    premarket_scan = _scanner_is_premarket_window()
     with _scanner_cache_lock:
-        if (_scanner_cache.get("session_date") != session_date or
-                now - _scanner_cache["at"] >= 25):
+        if _scanner_cache.get("session_date") != session_date:
+            _scanner_cache.update(at=0.0, rows=[], session_date=session_date, source="")
+        if premarket_scan:
+            scan_due = (_scanner_scan_state.get("session_date") != session_date or
+                        (not _scanner_scan_state.get("running") and
+                         now - _scanner_scan_state.get("completed_at", 0) >= _SCANNER_RESCAN_SECONDS))
+            _scanner_cache["source"] = "premarket"
+            if scan_due:
+                _scanner_scan_state.update(running=True, session_date=session_date,
+                                           done=0, total=0, error="")
+                _scanner_scan_pool.submit(_refresh_yahoo_premarket_universe, session_date)
+        elif (_scanner_cache.get("source") != "regular" or
+              now - _scanner_cache["at"] >= 25):
             try:
-                rows = (_tradingview_premarket_rows() if _scanner_is_premarket_window()
-                        else _yahoo_scanner_rows())
-                _scanner_cache.update(at=now, rows=rows, session_date=session_date)
+                rows = _yahoo_scanner_rows()
+                _scanner_cache.update(at=now, rows=rows, session_date=session_date, source="regular")
             except Exception as exc:
                 return jsonify({"error": str(exc)}), 502
         output = []
@@ -2607,7 +2658,11 @@ def scanner_market_scan():
                            "news_status": details.get("news_status"),
                            "approaches": details.get("approaches") or []})
         return jsonify({"tickers": output, "updated": _scanner_cache["at"],
-                        "session_date": session_date})
+                        "session_date": session_date,
+                        "scanning": premarket_scan and _scanner_scan_state.get("running", False),
+                        "scan_done": _scanner_scan_state.get("done", 0),
+                        "scan_total": _scanner_scan_state.get("total", 0),
+                        "scan_error": _scanner_scan_state.get("error", "")})
 
 
 HTML = r"""<!doctype html>
@@ -4769,7 +4824,10 @@ async function refreshScanner(){
     }
     const body = $('#scanner_rows');
     if(!tickers.length){
-      body.innerHTML = '<tr><td colspan="5" style="padding:18px;color:#777;text-align:center">No tickers currently meet all scanner conditions.</td></tr>';
+      body.innerHTML = '<tr><td colspan="5" style="padding:18px;color:#777;text-align:center">'+
+        (data.scanning ? 'Scanning Yahoo US tickers for today’s premarket gaps…' :
+         data.scan_error ? 'Yahoo premarket scan failed: '+esc(data.scan_error) : 'No tickers currently meet all scanner conditions.')+
+        '</td></tr>';
     } else {
       body.innerHTML = tickers.map(row=>`<tr class="scanner-result-row" data-ticker="${esc(row.ticker)}" style="border-bottom:1px solid #20242a;cursor:pointer" title="Load notes for ${esc(row.ticker)}" onmouseover="this.style.background='#101820'" onmouseout="this.style.background='transparent'">`+
         `<td style="padding:9px;color:#6cc4ff;font-weight:bold">${esc(row.ticker)}</td>`+
@@ -4780,7 +4838,9 @@ async function refreshScanner(){
       body.querySelectorAll('[data-ticker]').forEach(row=>row.onclick=()=>selectScannerTicker(row.dataset.ticker));
     }
     const stamp = new Date((data.updated || Date.now()/1000)*1000).toLocaleTimeString();
-    status.textContent = `${tickers.length} matching ticker${tickers.length===1?'':'s'} · Updated ${stamp} · Refreshes every 30 seconds`;
+    status.textContent = data.scanning
+      ? `Scanning Yahoo US ticker pages · ${Number(data.scan_done||0).toLocaleString()} / ${Number(data.scan_total||0).toLocaleString()} pages`
+      : `${tickers.length} matching ticker${tickers.length===1?'':'s'} · Updated ${stamp} · Full scan refreshes every 60 seconds`;
     if(scannerAlarmEnabled){
       const now = Date.now();
       tickers.forEach(row=>{
