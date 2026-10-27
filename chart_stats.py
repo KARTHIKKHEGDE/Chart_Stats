@@ -2756,10 +2756,10 @@ def api_keyword_search():
     try:
         start_date = dt.date.fromisoformat(str(data.get("start_date")))
         end_date = dt.date.fromisoformat(str(data.get("end_date")))
-        if start_date > end_date or (end_date-start_date).days > 3650:
+        if start_date > end_date or (end_date-start_date).days > 366:
             raise ValueError
     except (TypeError, ValueError):
-        return jsonify({"error": "Choose a valid filing date range (maximum 10 years)."}), 400
+        return jsonify({"error": "Choose a valid filing date range within one year."}), 400
     requested_forms = data.get("forms") or []
     allowed_forms = set(_KW_FINANCING_FORMS.split(","))
     forms = ",".join(form for form in requested_forms if form in allowed_forms) if isinstance(requested_forms, list) else ""
@@ -2787,29 +2787,18 @@ def api_keyword_events():
     try:
         start = dt.date.fromisoformat(request.args.get("start") or (dt.date.today()-dt.timedelta(days=365)).isoformat())
         end = dt.date.fromisoformat(request.args.get("end") or dt.date.today().isoformat())
-        min_premarket_premium = 0.50
-        min_dollar_volume = 10_000_000
-        min_relative_volume = 100.0
+        min_premarket_premium = 0.70
+        min_dollar_volume = 50_000_000
         max_events = 4
         metadata_only = request.args.get("metadata_only") == "1"
     except (TypeError, ValueError):
         return jsonify({"error": "Invalid historical chart filters."}), 400
-    if start > end:
-        return jsonify({"error": "Chart start date must be on or before end date."}), 400
+    if start > end or (end-start).days > 366:
+        return jsonify({"error": "Choose a valid chart date range within one year."}), 400
     try:
         daily = load_daily(ticker)
         splits = load_splits(ticker)
         split_dates = {x["date"] for x in splits}
-        def split_adjust_volume(value, source_day, target_day):
-            adjusted = float(value or 0)
-            for split in splits:
-                split_day = split.get("date")
-                if not split_day: continue
-                ratio = float(split.get("to") or 0) / float(split.get("from") or 1)
-                if ratio <= 0: continue
-                if source_day < split_day <= target_day: adjusted *= ratio
-                elif target_day < split_day <= source_day: adjusted /= ratio
-            return adjusted
         def split_adjust_price(value, source_day, target_day):
             adjusted = float(value or 0)
             for split in splits:
@@ -2826,20 +2815,14 @@ def api_keyword_events():
             day = dt.date.fromisoformat(row["date"])
             if day < start or day > end or row["date"] in split_dates or prev.get("c", 0) <= 0 or row.get("o", 0) <= 0:
                 continue
-            volume = split_adjust_volume(row.get("v"), row["date"], row["date"])
+            volume = float(row.get("v") or 0)
             price = float(row.get("vw") or row.get("c") or 0)
             dvol = volume * price
-            prior_volumes = [split_adjust_volume(x.get("v"), x["date"], row["date"])
-                             for x in daily[max(0, i-20):i] if float(x.get("v") or 0) > 0]
-            avg_volume20 = float(np.mean(prior_volumes)) if len(prior_volumes) >= 20 else None
-            rvol20 = volume / avg_volume20 if avg_volume20 else None
-            if dvol <= min_dollar_volume * 0.8 and (rvol20 is None or rvol20 < min_relative_volume):
+            if dvol < min_dollar_volume * 0.8:
                 continue
             candidates.append({"index": i, "date": row["date"],
                                "volume": volume, "dollar_volume": dvol,
-                               "rvol20": rvol20,
-                               "avg_volume20": avg_volume20,
-                               "score": max(dvol/min_dollar_volume, (rvol20 or 0)/min_relative_volume)})
+                               "score": dvol/min_dollar_volume})
         selected = sorted(candidates, key=lambda x: x["score"], reverse=True)[:20]
         output = []
         for candidate in selected:
@@ -2852,12 +2835,8 @@ def api_keyword_events():
             pmh=m.get("pm_high")
             premarket_premium=(float(pmh)/previous_close-1) if pmh and previous_close>0 else None
             session_dollar_volume=float((((df["h"]+df["l"]+df["c"])/3)*df["v"]).sum())
-            session_volume=float(df["v"].sum())
-            average_event_volume=candidate.get("avg_volume20")
-            actual_rvol20=session_volume/average_event_volume if average_event_volume else None
             if (premarket_premium is None or premarket_premium <= min_premarket_premium or
-                    (session_dollar_volume <= min_dollar_volume and
-                     (actual_rvol20 is None or actual_rvol20 < min_relative_volume))):
+                    session_dollar_volume < min_dollar_volume):
                 continue
             bar_minutes = df.index.hour*60+df.index.minute
             opening_bars = df[(bar_minutes >= RG_START) & (bar_minutes < RG_START+5)]
@@ -2867,9 +2846,8 @@ def api_keyword_events():
             open_price, close_price = m.get("open"), m.get("close")
             next_close = float(daily[i+1]["c"]) if i+1 < len(daily) else None
             next_ret = next_close / float(row["c"]) - 1 if next_close and row.get("c") else None
-            event = {k:v for k,v in candidate.items() if k not in ("index", "score", "avg_volume20")}
-            event.update({"dollar_volume":session_dollar_volume,"premarket_high_pct":premarket_premium,
-                          "relative_volume_20d":actual_rvol20})
+            event = {k:v for k,v in candidate.items() if k not in ("index", "score")}
+            event.update({"dollar_volume":session_dollar_volume,"premarket_high_pct":premarket_premium})
             event.update({"prev_close": previous_close, "premarket_high": m.get("pm_high"),
                           "chart_off": ist_off(row["date"]),
                           "premarket_low": m.get("pm_low"), "open": open_price, "high": m.get("hod"),
@@ -2893,21 +2871,35 @@ def api_keyword_events():
 
 
 def _compare_event_features(ticker, day, window, force=False):
-    """Real Polygon intraday and daily event features, cached by ticker/date/window."""
-    cache_key = f"kwcompare_v2_{ticker}_{day}_{window}"
-    cached = None if force else cget(cache_key, 6 * 3600)
+    """Reuse live_snapshot for today; use Polygon daily/intraday aggregates for history."""
+    today_live = day == dt.date.today().isoformat()
+    cache_key = f"kwcompare_v3_{ticker}_{day}_{window}"
+    cached = None if force else cget(cache_key, 30 if today_live else 6 * 3600)
     if cached is not None:
         return cached
-    daily = load_daily(ticker, force=force)
-    idx = next((i for i, row in enumerate(daily) if row["date"] == day), None)
-    today_live = day == dt.date.today().isoformat()
-    if idx is None and not today_live:
-        raise ValueError(f"No daily candle for {ticker} on {day}; the date may not be a trading session.")
-    if idx is None:
-        idx = len(daily)
+    live = None
+    if today_live:
+        live = live_snapshot(ticker)
+        live_day = live["date"].isoformat() if hasattr(live["date"], "isoformat") else str(live["date"])
+        if live_day != day:
+            raise ValueError(f"Live chart data is for {live_day}, not the selected date {day}.")
+        daily = [dict(row) for row in live["hist"]]
+        live_df = live["df"]
+        regular_bars = live_df[(live_df.index.hour * 60 + live_df.index.minute >= RG_START) &
+                               (live_df.index.hour * 60 + live_df.index.minute < RG_END)]
+        today_row = {"date": day, "o": float(regular_bars["o"].iloc[0]) if not regular_bars.empty else None,
+                     "h": float(live_df["h"].max()), "l": float(live_df["l"].min()),
+                     "c": float(live_df["c"].iloc[-1]), "v": float(live_df["v"].sum())}
+        daily.append(today_row)
+        idx = len(daily) - 1
+    else:
+        daily = load_daily(ticker, force=force)
+        idx = next((i for i, row in enumerate(daily) if row["date"] == day), None)
+        if idx is None:
+            raise ValueError(f"No daily candle for {ticker} on {day}; the date may not be a trading session.")
     if idx < 1:
         raise ValueError(f"Previous close is unavailable for {ticker} on {day}.")
-    splits = load_splits(ticker)
+    splits = [] if today_live else load_splits(ticker)
     def split_adjust(row, target_day):
         adjusted = dict(row)
         price_factor = volume_factor = 1.0
@@ -2926,10 +2918,10 @@ def _compare_event_features(ticker, day, window, force=False):
         if adjusted.get("v") is not None: adjusted["v"] = float(adjusted["v"]) * volume_factor
         return adjusted
     previous_row = split_adjust(daily[idx-1], day)
-    pc = float(previous_row["c"] or 0)
+    pc = float((live["pc"] if today_live else previous_row["c"]) or 0)
     if pc <= 0:
         raise ValueError(f"Previous close is invalid for {ticker} on {day}.")
-    df = minute_df(ticker, day, force=(force or day == dt.date.today().isoformat()))
+    df = live["df"] if today_live else minute_df(ticker, day, force=force)
     if df is None or df.empty:
         raise ValueError(f"Intraday candles are unavailable for {ticker} on {day}; no daily substitute was used.")
     m = metrics(df, pc, True)
@@ -3110,7 +3102,8 @@ def _compare_event_features(ticker, day, window, force=False):
         "post_low_day": post_low_day, "follow_through": follow_through,
         "pre_coverage": min(window, max(0, len(pre_rows)-1)), "post_coverage": len(post_rows),
         "chart": chart_pack(df, m, pc, dt.date.fromisoformat(day)),
-        "source": "Polygon 1-minute and daily aggregate candles"
+        "source": ("Gap-Up Fade live_snapshot (Yahoo intraday; Alpaca when configured)"
+                   if today_live else "Polygon 1-minute and daily aggregate candles")
     }
     features["feature_mask"] = {key: (value is not None) for key, value in features.items()
                                 if key not in ("chart", "intraday", "feature_mask")}
@@ -3271,7 +3264,7 @@ def _learn_compare_weights(events):
     return best[1], {"method": "leave-one-out outcome RMSE", "sample_size": len(usable), "rmse": best[0]}
 
 
-def _compare_share_context(ticker, day, price):
+def _compare_share_context(ticker, day, price, adjust_splits=True):
     facts = load_shares_out(ticker)
     eligible = [row for row in facts if row.get("filed", "") <= day and row.get("end", "") <= day]
     if not eligible:
@@ -3279,7 +3272,7 @@ def _compare_share_context(ticker, day, price):
                 "market_cap_bucket": "Unavailable", "price_bucket": _compare_price_bucket(price), "exchange": "Unavailable"}
     row = max(eligible, key=lambda item: (item.get("end", ""), item.get("filed", "")))
     shares = float(row["val"])
-    for split in load_splits(ticker):
+    for split in (load_splits(ticker) if adjust_splits else []):
         if row.get("end", "") < split.get("date", "") <= day:
             shares *= float(split.get("to") or 1) / float(split.get("from") or 1)
     market_cap = shares * float(price) if price else None
@@ -3441,9 +3434,8 @@ def api_keyword_compare():
         target_for_score = _compare_feature_asof(target, cutoff_minute) if cutoff_minute is not None else target
         compare_own = bool(data.get("include_own"))
         eligible = []
-        candidate_pool = sorted(candidates, key=lambda item: max(
-            float(item.get("dollar_volume") or 0) / 10_000_000,
-            float(item.get("relative_volume_20d") or 0) / 100), reverse=True)[:120]
+        candidate_pool = sorted(candidates, key=lambda item:
+            float(item.get("dollar_volume") or 0) / 50_000_000, reverse=True)[:120]
         for item in candidate_pool:
             symbol = str(item.get("ticker") or "").strip().upper()
             event_day = str(item.get("date") or "")
@@ -3474,7 +3466,7 @@ def api_keyword_compare():
                 item["score"] = (sum(item["scores"][k]*weights[k] for k in active)/denominator if denominator else 0.0)
         eligible.sort(key=lambda x: x["score"], reverse=True)
         matches = eligible[:top_k]
-        target["context"] = _compare_share_context(ticker, day, target.get("close"))
+        target["context"] = _compare_share_context(ticker, day, target.get("close"), adjust_splits=not partial_day)
         target["dollar_volume_market_cap_fraction"] = (target.get("session_dollar_volume")/target["context"]["market_cap"]
                                                        if target["context"].get("market_cap") else None)
         target["feature_mask"]["dollar_volume_market_cap_fraction"] = target["dollar_volume_market_cap_fraction"] is not None
@@ -3485,6 +3477,9 @@ def api_keyword_compare():
             match["features"]["feature_mask"]["dollar_volume_market_cap_fraction"] = match["features"]["dollar_volume_market_cap_fraction"] is not None
         return jsonify({"target": target, "matches": matches, "candidate_count": len(eligible),
                         "partial_day": partial_day, "as_of_minute": cutoff_minute,
+                        "target_source": ("Gap-Up Fade live_snapshot (Yahoo intraday; Alpaca when configured)"
+                                         if partial_day else "Polygon historical daily and 1-minute candles"),
+                        "match_source": "Polygon historical daily and 1-minute candles",
                         "weights": weights, "weight_report": weight_report,
                         "window": window, "target_post_coverage": target["post_coverage"],
                         "consensus": {"faded": sum(1 for x in eligible[:top_k] if (x["features"].get("hod_fade") or 0) < -20),
@@ -6535,7 +6530,7 @@ input[type=text]{width:min(420px,70vw)}input[type=date]{width:140px}select{min-w
 .stock{border-top:1px solid #39414b;margin-top:18px;padding-top:10px}.stockhead{position:sticky;top:51px;z-index:2;background:#0a0c0f;border-left:3px solid #3285c4;padding:9px 10px;margin-bottom:8px}.stockhead h2{font-size:16px;margin:0;color:#d8e8f5}.evidence{font-size:11px;color:#adb5be;margin-top:5px}.evidence a{color:#69baff}.divider{border:0;border-top:1px solid #292f36;margin:8px 0}
 .tickerIndex{display:flex;gap:6px;flex-wrap:wrap;padding:6px 0 12px}.tickerIndex a{border:1px solid #303943;background:#0d1116;color:#7dc7ff;padding:5px 9px;text-decoration:none}.tickerIndex a:hover{border-color:#29a8ff}.eventGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.event{border:1px solid #272d34;background:#090b0e;padding:5px;min-width:0}.eventhead{display:flex;align-items:center;gap:4px;padding:1px 0 5px}.eventtitle{font-weight:bold;color:#d7e7f2;margin-right:auto;white-space:nowrap}.event select{height:25px;min-width:58px;font-size:11px;padding:2px 5px}.event button{height:25px;font-size:11px;padding:2px 7px}.event canvas{width:100%;height:300px!important;max-height:300px;display:block;background:#050607;cursor:zoom-in}.chartModal{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.94);display:none;align-items:center;justify-content:center;padding:14px}.chartModal.open{display:flex}.chartModalBox{width:98vw;height:95vh;background:#080a0d;border:1px solid #343a42;display:flex;flex-direction:column}.chartModalHead{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#11151a;border-bottom:1px solid #252a30}.chartModalTitle{color:#60baff;font-weight:bold;margin-right:auto}.chartModalCanvas{width:100%;height:calc(95vh - 54px);background:#050607}#comparePanel{margin-top:28px;border-top:1px solid #39414b;padding-top:14px;scroll-margin-top:58px}#comparePanel h2{margin:0 0 8px;color:#8fd0ff}.compareToolbar{display:flex;gap:9px;align-items:end;flex-wrap:wrap;padding:12px;background:#0b0d10;border:1px solid var(--line)}.compareToolbar input[type=text]{width:125px}.compareToolbar input[type=date]{width:145px}.compareToolbar select{min-width:85px}.compareMatch{border:1px solid #303841;background:#0a0c0f;margin:13px 0;padding:10px}.compareSummary{color:#b4c0ca;margin:8px 0}.scoreline{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0;color:#aab4be}.scorebar{width:105px;height:7px;background:#242a31;display:inline-block;vertical-align:middle;margin-left:4px}.scorebar i{display:block;height:100%;background:#53b9ff}.compareCharts{display:grid;grid-template-columns:1fr 1fr;gap:10px}.compareOverlay{width:100%;height:220px;background:#050607;display:block}.compareStats{border-collapse:collapse;width:100%;margin:8px 0}.compareStats td,.compareStats th{border:1px solid #242a31;padding:5px;text-align:left}.compareStats th{color:#9fcfff}.compareNote{color:#909aa4;font-size:11px;margin:7px 0}.compareFiling{color:#75c6ff}@media(max-width:760px){.eventGrid,.compareCharts{grid-template-columns:1fr}}
 #comparePanel .unifiedProjection{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(280px,1fr);gap:12px;margin:16px 0;padding:10px;border:1px solid #34404b;background:#090b0e}#comparePanel .unifiedChartWrap{min-width:0;position:relative}#comparePanel .unifiedControls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:5px 0}#comparePanel .unifiedControls select,#comparePanel .unifiedControls button{height:26px;font-size:11px}#comparePanel .unifiedCanvas{width:100%;height:440px;display:block;background:#050607}#comparePanel .unifiedLegend{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}#comparePanel .unifiedLegend label{display:inline-flex;flex-direction:row;align-items:center;border:1px solid #252c34;padding:3px 6px}#comparePanel .projectionPanel{border-left:1px solid #292f36;padding:4px 10px}#comparePanel .projectionPanel h3{margin:2px 0 8px;color:#9fd3ff}#comparePanel .projectionGrid{display:grid;grid-template-columns:1fr auto;gap:5px 10px}#comparePanel .projectionGrid span{border-bottom:1px solid #20262d;padding:4px 0}#comparePanel .lowConfidence{display:inline-block;color:#ffd66b;border:1px solid #8c7026;padding:3px 6px;margin:4px 0;font-weight:bold}#comparePanel .confidenceGood{color:#47d890}#comparePanel .chartTip{position:absolute;display:none;pointer-events:none;background:#111820;border:1px solid #4c5a67;padding:6px;white-space:pre;z-index:2;font-size:10px}@media(max-width:900px){#comparePanel .unifiedProjection{grid-template-columns:1fr}#comparePanel .projectionPanel{border-left:0;border-top:1px solid #292f36;padding-top:10px}}
-.compareMatch .compareCharts{display:none}.qualifiedMatchList{display:grid;gap:5px;margin-top:10px}.qualifiedMatch{display:grid;grid-template-columns:minmax(170px,1fr) repeat(4,minmax(110px,auto));gap:8px;align-items:center;background:#0a0c0f;border:1px solid #252c34;padding:8px 10px;color:#adb6c0;font-size:11px}.qualifiedMatch b{font-size:12px}@media(max-width:760px){.qualifiedMatch{grid-template-columns:1fr 1fr}}
+.compareMatch .compareCharts{display:none}.qualifiedMatchList{display:grid;gap:5px;margin-top:10px}.qualifiedMatch{display:grid;grid-template-columns:minmax(170px,1fr) repeat(3,minmax(110px,auto));gap:8px;align-items:center;background:#0a0c0f;border:1px solid #252c34;padding:8px 10px;color:#adb6c0;font-size:11px}.qualifiedMatch b{font-size:12px}@media(max-width:760px){.qualifiedMatch{grid-template-columns:1fr 1fr}}
 @media(max-width:720px){main{padding:10px}.stockhead{top:45px}.toolbar{align-items:stretch}input[type=text]{width:100%}}
 </style></head><body>
 <header><a href="/">← Gap-Up Fade</a><strong>⌕ Search Keyword</strong><a href="#comparePanel">Jump to Compare</a><span style="margin-left:auto;color:#78838e">SEC EDGAR · financing-player research</span></header>
@@ -6546,9 +6541,9 @@ input[type=text]{width:min(420px,70vw)}input[type=date]{width:140px}select{min-w
   <button class="primary" type="submit">Search SEC</button><button id="clearBtn" type="button">Clear</button>
   <button id="moreBtn" type="button" style="display:none">Load more</button>
 </form>
-<div id="status" class="status">Search SEC filings by keyword and date. Only tickers with a >50% premarket high and either >$10M session dollar volume or ≥100× 20-day relative volume are shown.</div>
+<div id="status" class="status">Search SEC filings from the last year. Only tickers with a >70% premarket high and at least $50M session dollar volume are shown.</div>
 <div id="resultSummary"></div><div id="tableRoot"></div><div id="stocksRoot"></div>
-<section id="comparePanel"><h2>Compare historical event patterns</h2><div class="compareNote">Compare your ticker with matching-keyword tickers that had a qualifying gap-up and high-volume event.</div><form id="compareForm" class="compareToolbar"><label>Target ticker<input id="compareTicker" type="text" maxlength="10" placeholder="TICKER" required></label><label>Target date<input id="compareDate" type="date" required></label><button class="primary" type="submit">Compare</button></form><div id="compareStatus" class="status">Search for a keyword to populate historical candidate events.</div><div id="unifiedProjectionRoot"></div><div id="compareResults"></div></section>
+<section id="comparePanel"><h2>Compare historical event patterns</h2><div class="compareNote">Compare your ticker with matching-keyword tickers whose event had a >70% premarket high and ≥$50M session dollar volume.</div><form id="compareForm" class="compareToolbar"><label>Target ticker<input id="compareTicker" type="text" maxlength="10" placeholder="TICKER" required></label><label>Target date<input id="compareDate" type="date" required></label><button class="primary" type="submit">Compare</button></form><div id="compareStatus" class="status">Search for a keyword to populate historical candidate events.</div><div id="unifiedProjectionRoot"></div><div id="compareResults"></div></section>
 </main>
 <div id="chartModal" class="chartModal" onclick="if(event.target===this)closeKWModal()"><div class="chartModalBox"><div class="chartModalHead"><button id="kwPrev">‹</button><span id="kwModalTitle" class="chartModalTitle"></span><button id="kwNext">›</button><select id="kwModalTf"><option>1m</option><option>2m</option><option>5m</option><option selected>15m</option><option>30m</option><option>1h</option><option>1D</option></select><select id="kwModalDays"><option value="1">1 day</option><option value="3">3 days</option><option value="5" selected>5 days</option><option value="10">10 days</option><option value="20">20 days</option></select><button onclick="closeKWModal()">✕</button></div><canvas id="kwModalCanvas" class="chartModalCanvas" height="720"></canvas></div></div>
 <script>
@@ -6556,7 +6551,7 @@ const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=
 const user=localStorage.getItem('gap_user')||'', token=localStorage.getItem('gap_token')||'';
 let rows=[],offset=0,total=0,observer=null,chartObserver=null,searchGeneration=0,eventScreenGeneration=0,kwModalSource=null,kwModalSeries=[],kwModalIndex=0;
 const now=new Date(), isoDate=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-$('#endDate').value=isoDate(now);const twoYears=new Date(now);twoYears.setFullYear(twoYears.getFullYear()-2);$('#startDate').value=isoDate(twoYears);
+$('#endDate').value=isoDate(now);const oneYear=new Date(now);oneYear.setFullYear(oneYear.getFullYear()-1);$('#startDate').value=isoDate(oneYear);
 async function verify(){if(!user||!token){$('#status').innerHTML='<span class="error">Please sign in to the main app first, then reopen this page.</span>';return false}try{const r=await fetch('/api/auth/verify-session?user='+encodeURIComponent(user)+'&token='+encodeURIComponent(token));if(!r.ok)throw 0;return true}catch{$('#status').innerHTML='<span class="error">Your session is not valid. Return to the main app and sign in again.</span>';return false}}
 function payload(){return {user,token,keyword:$('#keyword').value.trim(),start_date:$('#startDate').value,end_date:$('#endDate').value,offset}}
 function fmtDate(d){const [y,m,day]=String(d||'').slice(0,10).split('-');return y&&m&&day?`${m}/${day}/${y}`:d}
@@ -6573,7 +6568,7 @@ async function renderStocks(companies){
  for(let i=0;i<companies.length;i+=3){const batch=companies.slice(i,i+3);const results=await Promise.allSettled(batch.map(c=>fetchKeywordEvents(c.ticker,true)));
   if(scanId!==eventScreenGeneration)return;
   results.forEach((result,j)=>{scanned++;if(result.status==='fulfilled'&&result.value.length)qualifiedTickers.add(batch[j].ticker)});
-  $('#resultSummary').innerHTML=`<div class="status">Screened ${scanned}/${companies.length} tickers · <span class="count">${qualifiedTickers.size} qualify</span> · gap-up plus $10M dollar volume or 100× relative volume.</div>`;
+  $('#resultSummary').innerHTML=`<div class="status">Screened ${scanned}/${companies.length} tickers · <span class="count">${qualifiedTickers.size} qualify</span> · premarket high >70% and session dollar volume ≥$50M.</div>`;
  }
  const eligible=companies.filter(c=>qualifiedTickers.has(c.ticker));
  if(!eligible.length){$('#stocksRoot').innerHTML='<div class="status">No filing-linked tickers had a qualifying event in this date range.</div>';return}
@@ -6591,7 +6586,7 @@ async function loadStockCharts(section){
 function aggregate(bars,tf){const src=bars;if(tf==='1D'){if(src.d?.length)return src;if(!src.t.length)return src;const i=[...src.t.keys()];return{t:[0],d:[src.date||''],o:[src.o[i[0]]],h:[Math.max(...i.map(k=>src.h[k]))],l:[Math.min(...i.map(k=>src.l[k]))],c:[src.c[i[i.length-1]]],v:[i.reduce((s,k)=>s+(src.v[k]||0),0)],vw:[null]}}
  const mins=tf==='1h'?60:Number(tf.replace('m',''))||2,out={t:[],d:[],o:[],h:[],l:[],c:[],v:[],vw:[]},g=new Map();for(let i=0;i<src.t.length;i++){const x=Math.floor(src.t[i]/mins)*mins,key=(src.d?.[i]||'')+'|'+x;if(!g.has(key))g.set(key,[]);g.get(key).push(i)}for(const [key,idx]of g){out.t.push(Number(key.split('|').pop()));out.d.push(src.d?.[idx[0]]||'');out.o.push(src.o[idx[0]]);out.h.push(Math.max(...idx.map(i=>src.h[i])));out.l.push(Math.min(...idx.map(i=>src.l[i])));out.c.push(src.c[idx.at(-1)]);out.v.push(idx.reduce((s,i)=>s+(src.v[i]||0),0));out.vw.push(src.vw[idx.at(-1)])}return out}
 function renderEvents(root,data,filings=[]){
- const events=data.events;root.innerHTML=`<div class="status">${events.length} qualifying event days · premarket high >50% · session dollar volume >$10M OR 20-day relative volume ≥100×</div><div class="eventGrid">`+
+ const events=data.events;root.innerHTML=`<div class="status">${events.length} qualifying event days · premarket high >70% · session dollar volume ≥$50M</div><div class="eventGrid">`+
  events.map((e,i)=>`<article class="event" data-event="${i}"><div class="eventhead"><span class="eventtitle">${esc(data.ticker)} · ${esc(fmtDate(e.date))}</span><button class="eventPrev" title="Previous trading day">‹</button><button class="eventNext" title="Next trading day">›</button><select class="eventTf" aria-label="Chart timeframe"><option>1m</option><option>2m</option><option>5m</option><option selected>15m</option><option>30m</option><option>1h</option><option>1D</option></select><select class="eventDays" aria-label="Trading days shown"><option value="1">1 day</option><option value="3">3 days</option><option value="5" selected>5 days</option><option value="10">10 days</option><option value="20">20 days</option></select></div>${e.error?`<div class="noevents">${esc(e.error)}</div>`:`<canvas class="priceChart" height="390" aria-label="${esc(data.ticker)} ${esc(fmtDate(e.date))} chart"></canvas>`}</article>`).join('')+`</div>`;
  if(!chartObserver)chartObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){const cv=entry.target;chartObserver.unobserve(cv);bindKWChart(cv);loadKWContext(cv,cv._event.date,cv._chartDays)}}),{rootMargin:'100px'});
  if(filings.length)root.insertAdjacentHTML('beforeend',`<details class="qualFilings"><summary>Related SEC filings (${filings.length})</summary>${filings.map(f=>`<div class="evidence"><a href="${esc(f.filing_url)}" target="_blank" rel="noopener">${esc(f.headline)}</a> · ${esc(f.form)} · ${esc(fmtDate(f.filing_date))}</div>`).join('')}</details>`);
@@ -6638,10 +6633,10 @@ function drawCrossStockNormalized(){const checks=[...document.querySelectorAll('
 const kwEventCache=new Map();let lastComparePayload=null,compareChartObserver=null,currentCompareData=null,qualifiedTickers=new Set();
 async function fetchKeywordEvents(ticker,metadataOnly=false){const cacheKey=ticker+'|'+(metadataOnly?'meta':'full');if(kwEventCache.has(cacheKey))return kwEventCache.get(cacheKey);const q=new URLSearchParams({ticker,user,token,start:$('#startDate').value,end:$('#endDate').value,metadata_only:metadataOnly?'1':'0'});const r=await fetch('/api/keyword-events?'+q),d=await r.json();if(!r.ok)throw Error(d.error||'Could not load qualifying chart events for '+ticker);kwEventCache.set(cacheKey,d.events||[]);return d.events||[]}
 function nearestFiling(ticker,date){const filings=rows.filter(x=>x.ticker===ticker&&x.filing_date&&x.filing_date<=date);if(!filings.length)return null;return filings.reduce((best,row)=>{const distance=Math.abs(Date.parse(row.filing_date)-Date.parse(date));return !best||distance<best.distance?{row,distance}:best},null)?.row||null}
-async function collectCompareCandidates(){const symbols=[...qualifiedTickers],out=[];let done=0;for(let i=0;i<symbols.length;i+=3){const batch=symbols.slice(i,i+3);const result=await Promise.allSettled(batch.map(t=>fetchKeywordEvents(t,true)));for(let j=0;j<result.length;j++){done++;$('#compareStatus').textContent=`Collecting qualifying events… ${done}/${symbols.length} tickers`;if(result[j].status!=='fulfilled')continue;for(const e of result[j].value){const f=nearestFiling(batch[j],e.date);out.push({ticker:batch[j],date:e.date,dollar_volume:e.dollar_volume||0,relative_volume_20d:e.relative_volume_20d||0,company:f?.company||batch[j],keyword:$('#keyword').value.trim(),role:f?.role||'',headline:f?.headline||'',filing_url:f?.filing_url||'',filing_date:f?.filing_date||''})}}}return out}
+async function collectCompareCandidates(){const symbols=[...qualifiedTickers],out=[];let done=0;for(let i=0;i<symbols.length;i+=3){const batch=symbols.slice(i,i+3);const result=await Promise.allSettled(batch.map(t=>fetchKeywordEvents(t,true)));for(let j=0;j<result.length;j++){done++;$('#compareStatus').textContent=`Collecting qualifying events… ${done}/${symbols.length} tickers`;if(result[j].status!=='fulfilled')continue;for(const e of result[j].value){const f=nearestFiling(batch[j],e.date);out.push({ticker:batch[j],date:e.date,dollar_volume:e.dollar_volume||0,company:f?.company||batch[j],keyword:$('#keyword').value.trim(),role:f?.role||'',headline:f?.headline||'',filing_url:f?.filing_url||'',filing_date:f?.filing_date||''})}}}return out}
 function comparePane(parent,label,feature){const pane=document.createElement('article');pane.className='event';pane.innerHTML=`<div class="eventhead"><span class="eventtitle">${esc(label)}</span><button class="eventPrev small" title="Previous trading day">‹</button><button class="eventNext small" title="Next trading day">›</button><select class="eventTf"><option>1m</option><option>2m</option><option>5m</option><option selected>15m</option><option>30m</option><option>1h</option><option>1D</option></select><select class="eventDays"><option value="1">1 day</option><option value="3">3 days</option><option value="5" selected>5 days</option><option value="10">10 days</option><option value="20">20 days</option></select></div><canvas class="priceChart" height="390"></canvas>`;parent.appendChild(pane);const cv=pane.querySelector('canvas');cv._chart=feature.chart;cv._event={ticker:feature.ticker,date:feature.date,high:feature.hod,low:feature.lod};cv._timeframe='15m';cv._chartDays=5;cv._activeDate=feature.date;bindKWChart(cv);drawKWChart(cv);if(!compareChartObserver)compareChartObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){compareChartObserver.unobserve(entry.target);loadKWContext(entry.target,entry.target._activeDate,entry.target._chartDays)}}),{rootMargin:'250px'});compareChartObserver.observe(cv);pane.querySelector('.eventTf').onchange=e=>{cv._timeframe=e.target.value;loadKWContext(cv,cv._activeDate,cv._chartDays)};pane.querySelector('.eventDays').onchange=e=>{cv._chartDays=Number(e.target.value);loadKWContext(cv,cv._activeDate,cv._chartDays)};pane.querySelector('.eventPrev').onclick=()=>stepKWDay(cv,-1);pane.querySelector('.eventNext').onclick=()=>stepKWDay(cv,1);return cv}
 function drawCompareOverlay(canvas,target,match,type,windowDays){const dpr=devicePixelRatio||1,W=Math.max(360,canvas.parentElement.clientWidth-12),H=220;canvas.width=W*dpr;canvas.height=H*dpr;canvas.style.width=W+'px';canvas.style.height=H+'px';const x=canvas.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle='#050607';x.fillRect(0,0,W,H);const L=45,R=12,T=18,B=25,pw=W-L-R,ph=H-T-B,colors=['#53bfff','#ffc857'];let series=[];if(type==='intraday'){series=[target.intraday.map(p=>p.prev),match.intraday.map(p=>p.prev)];}else{const toPath=f=>{const pre=f.pre_path||[],post=f.post_path||[];return [...Array(Math.max(0,windowDays-pre.length)).fill(null),...pre,0,...post,...Array(Math.max(0,windowDays-post.length)).fill(null)]};series=[toPath(target),toPath(match)]}const vals=series.flat().filter(v=>v!=null&&Number.isFinite(v));if(!vals.length){x.fillStyle='#9ba5af';x.fillText('Not enough real bars for this overlay.',12,30);return}const lo=Math.min(0,...vals),hi=Math.max(0,...vals),Y=v=>T+ph*(1-(v-lo)/(hi-lo||1)),count=Math.max(...series.map(a=>a.length)),X=i=>L+pw*(count<2?0:i/(count-1));x.strokeStyle='#28303a';x.fillStyle='#9ba5af';for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,yy=Y(v);x.beginPath();x.moveTo(L,yy);x.lineTo(W-R,yy);x.stroke();x.fillText(v.toFixed(0)+'%',3,yy+3)}if(type==='intraday'){const openX=L+pw*330/720;x.fillStyle='rgba(255,255,255,.06)';x.fillRect(L,T,openX-L,ph);x.strokeStyle='#8b929a';x.setLineDash([3,3]);x.beginPath();x.moveTo(openX,T);x.lineTo(openX,T+ph);x.stroke();x.setLineDash([]);x.fillStyle='#8e98a3';x.fillText('PREMARKET',L+4,T+12);x.fillText('09:30 ET',openX+4,H-7)}else{x.fillStyle='#8e98a3';x.fillText(`-${windowDays} sessions`,L,H-7);x.fillText('D',L+pw*windowDays/(2*windowDays),H-7);x.fillText(`+${windowDays}`,W-50,H-7)}series.forEach((arr,j)=>{x.strokeStyle=colors[j];x.lineWidth=1.8;x.beginPath();let started=false;arr.forEach((v,i)=>{if(v==null){started=false;return}const xx=X(i),yy=Y(v);started?x.lineTo(xx,yy):x.moveTo(xx,yy);started=true});x.stroke()});x.fillStyle=colors[0];x.fillText(`${target.ticker} target`,L,12);x.fillStyle=colors[1];x.fillText(`${match.ticker} ${fmtDate(match.date)}`,L+130,12)}
-function renderCompare(data){const root=$('#compareResults'),t=data.target;root.innerHTML=`<div class="compareSummary"><b>${esc(t.ticker)} · ${esc(fmtDate(t.date))}</b> compared against ${data.matches.length} closest gap-up volume days tied to this keyword. Only the normalized chart above is shown; click a ticker in its legend to toggle it.</div>`;if(!data.matches.length){root.insertAdjacentHTML('beforeend','<div class="status">No matching qualified event days found.</div>');return}const colors=['#71c7ff','#ffc857','#66d99a','#f487b5','#b9a1ff','#ff9270','#f46a6a','#a6df67'];root.insertAdjacentHTML('beforeend',`<div class="qualifiedMatchList">${data.matches.map((m,i)=>{const f=m.features||{};return `<article class="qualifiedMatch"><b style="color:${colors[i%colors.length]}">${esc(m.ticker)} · ${esc(fmtDate(m.date))}</b><span>Match ${m.score.toFixed(0)}/100</span><span>PM high ${f.premarket_high_pct==null?'—':f.premarket_high_pct.toFixed(0)+'%'}</span><span>Dollar volume ${f.session_dollar_volume==null?'—':'$'+fmtNum(f.session_dollar_volume)}</span><span>20-day volume ${f.event_rvol==null?'—':f.event_rvol.toFixed(0)+'×'}</span></article>`}).join('')}</div>`)}function compareDifference(t,m){const tf=nearestFiling(t.ticker,t.date);const link=f=>f?.filing_url?`<a class="compareFiling" href="${esc(f.filing_url)}" target="_blank" rel="noopener">${esc(f.headline)} (${fmtDate(f.filing_date)})</a>`:'no prior keyword filing in the loaded results';const ts=t.context?.shares_out?fmtNum(t.context.shares_out)+' shares (SEC, filed '+fmtDate(t.context.filed)+')':'SEC shares unavailable';const ms=m.features.context?.shares_out?fmtNum(m.features.context.shares_out)+' shares (SEC, filed '+fmtDate(m.features.context.filed)+')':'SEC shares unavailable';return `Differences: Target catalyst ${link(tf)} vs candidate ${link({filing_url:m.filing_url,headline:m.headline,filing_date:m.filing_date})}; point-in-time shares outstanding ${esc(ts)} vs ${esc(ms)} (not float; verify dilution details in the filing).`}
+function renderCompare(data){const root=$('#compareResults'),t=data.target;root.innerHTML=`<div class="compareSummary"><b>${esc(t.ticker)} · ${esc(fmtDate(t.date))}</b> compared against ${data.matches.length} closest gap-up volume days tied to this keyword. Only the normalized chart above is shown; click a ticker in its legend to toggle it.</div>`;if(!data.matches.length){root.insertAdjacentHTML('beforeend','<div class="status">No matching qualified event days found.</div>');return}const colors=['#71c7ff','#ffc857','#66d99a','#f487b5','#b9a1ff','#ff9270','#f46a6a','#a6df67'];root.insertAdjacentHTML('beforeend',`<div class="qualifiedMatchList">${data.matches.map((m,i)=>{const f=m.features||{};return `<article class="qualifiedMatch"><b style="color:${colors[i%colors.length]}">${esc(m.ticker)} · ${esc(fmtDate(m.date))}</b><span>Match ${m.score.toFixed(0)}/100</span><span>PM high ${f.premarket_high_pct==null?'—':f.premarket_high_pct.toFixed(0)+'%'}</span><span>Dollar volume ${f.session_dollar_volume==null?'—':'$'+fmtNum(f.session_dollar_volume)}</span></article>`}).join('')}</div>`)}function compareDifference(t,m){const tf=nearestFiling(t.ticker,t.date);const link=f=>f?.filing_url?`<a class="compareFiling" href="${esc(f.filing_url)}" target="_blank" rel="noopener">${esc(f.headline)} (${fmtDate(f.filing_date)})</a>`:'no prior keyword filing in the loaded results';const ts=t.context?.shares_out?fmtNum(t.context.shares_out)+' shares (SEC, filed '+fmtDate(t.context.filed)+')':'SEC shares unavailable';const ms=m.features.context?.shares_out?fmtNum(m.features.context.shares_out)+' shares (SEC, filed '+fmtDate(m.features.context.filed)+')':'SEC shares unavailable';return `Differences: Target catalyst ${link(tf)} vs candidate ${link({filing_url:m.filing_url,headline:m.headline,filing_date:m.filing_date})}; point-in-time shares outstanding ${esc(ts)} vs ${esc(ms)} (not float; verify dilution details in the filing).`}
 function qtile(values,q){const a=values.filter(Number.isFinite).sort((x,y)=>x-y);if(!a.length)return null;const p=(a.length-1)*q,l=Math.floor(p),f=p-l;return a[l]*(1-f)+(a[Math.min(l+1,a.length-1)]||0)*f}
 function drawUnifiedProjection(data){const root=$('#unifiedProjectionRoot'),target=data.target,matches=data.matches;root.innerHTML=`<section class="unifiedProjection"><div class="unifiedChartWrap"><b>Unified normalized path · target vs closest matches</b><div class="compareNote">Weight method: ${esc(data.weight_report?.method||'documented default')} · training n=${data.weight_report?.sample_size??0}; this is a leave-one-event-out open-to-close RMSE weight fit when at least 30 events are available.</div><div class="unifiedControls"><label>Y axis<select id="unifiedMode"><option value="prev">% from previous close</option><option value="open">% from open</option><option value="retention">Gap retention</option></select></label><button id="unifiedDaily">Show D-10…D+10</button><span class="compareNote">Click a ticker below to include/exclude it from the outcome bands.</span></div><div class="unifiedLegend" id="unifiedLegend"></div><canvas class="unifiedCanvas" id="unifiedCanvas"></canvas><div class="chartTip" id="unifiedTip"></div><div class="compareNote">Historical similarity is not causation or a guarantee. Volume below is cumulative session-volume fraction; float rotation is unavailable unless verified float data exists.</div></div><aside class="projectionPanel"><h3>Observed outcomes · not a prediction</h3><div id="projectionConfidence"></div><div class="projectionGrid" id="projectionGrid"></div><div class="compareNote" id="projectionFoot"></div></aside></section>`;const legend=$('#unifiedLegend');matches.forEach((m,i)=>{const label=document.createElement('label');label.innerHTML=`<input type="checkbox" checked data-match="${i}"><span style="color:${['#71c7ff','#ffc857','#66d99a','#f487b5','#b9a1ff','#ff9270','#f46a6a','#a6df67'][i%8]}">${esc(m.ticker)} ${esc(fmtDate(m.date))}</span>`;legend.appendChild(label);label.querySelector('input').onchange=()=>{drawUnifiedCanvas(data);drawProjectionPanel(data)}});$('#unifiedMode').onchange=()=>drawUnifiedCanvas(data);$('#unifiedDaily').onclick=()=>{const b=$('#unifiedDaily');b.dataset.daily=b.dataset.daily==='1'?'0':'1';b.textContent=b.dataset.daily==='1'?'Show intraday':'Show D-10…D+10';drawUnifiedCanvas(data)};drawUnifiedCanvas(data);drawProjectionPanel(data)}
 function selectedUnifiedMatches(data){return [...$('#unifiedLegend').querySelectorAll('input:checked')].map(x=>data.matches[Number(x.dataset.match)]).filter(Boolean)}
@@ -6657,7 +6652,7 @@ function drawProjectionPanel(data){if(data.validation?.beats_baseline===false&&!
 async function runCompare(force=false){if(!qualifiedTickers.size){$('#compareStatus').textContent='Search a keyword and wait for qualifying tickers to finish screening.';return}if(!await verify())return;const button=$('#compareForm button[type=submit]');button.disabled=true;$('#compareResults').innerHTML='';$('#unifiedProjectionRoot').innerHTML='';try{$('#compareStatus').textContent='Finding similar qualified event days…';const candidates=await collectCompareCandidates();if(!candidates.length)throw Error('No qualifying keyword-linked events are available.');const payload={user,token,ticker:$('#compareTicker').value.trim().toUpperCase(),date:$('#compareDate').value,window:10,top_k:8,include_own:false,manual_weights:false,force,weights:{A:50,B:25,C:25},candidates};lastComparePayload=payload;const r=await fetch('/api/keyword-compare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),d=await r.json();if(!r.ok)throw Error(d.error||'Compare failed');currentCompareData=d;$('#compareStatus').textContent=`Comparison complete · ${d.matches.length} closest qualifying days from ${qualifiedTickers.size} matching-keyword tickers.`;renderCompare(d);drawUnifiedProjection(d)}catch(e){$('#compareStatus').innerHTML=`<span class="error">${esc(e.message)}</span>`}finally{button.disabled=false}}async function runMatcherValidation(){if(!rows.length){$('#compareStatus').textContent='Run a keyword search first.';return}if(!await verify())return;const button=$('#validateMatcher');button.disabled=true;try{$('#compareStatus').textContent='Validating against held-out SEC-associated events and three baselines…';const candidates=await collectCompareCandidates(),weights=currentCompareData?.weights||{A:50,B:25,C:25};const response=await fetch('/api/keyword-validate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user,token,window:Number($('#compareWindow').value),mode:$('#validationMode').value,weights,candidates})}),result=await response.json();if(!response.ok)throw Error(result.error||'Validation failed');if(currentCompareData){currentCompareData.validation=result;drawProjectionPanel(currentCompareData)}const names={fade:'HOD-to-close fade (RMSE)',open_close:'Open-to-close sign (hit rate)',d1:'D+1 direction (hit rate)',midday_remaining:'Midday remaining move (RMSE)'},bases=[['matcher','Matcher'],['gap_price_baseline','Gap + price baseline'],['random_keyword_baseline','Random same-keyword'],['scalar_only_baseline','Scalar-only']];let html=`<section class="compareMatch"><h3>Matcher validation · ${esc(result.mode)} · n=${result.sample_size}</h3>${result.warning?`<div class="lowConfidence">${esc(result.warning)}</div>`:'<div class="confidenceGood">Beat each baseline on both continuous measures.</div>'}<div class="compareNote">${esc(result.note)}</div><table class="compareStats"><tr><th>Outcome</th>${bases.map(x=>`<th>${x[1]}</th>`).join('')}</tr>`;for(const [key,label]of Object.entries(names)){html+=`<tr><td>${label}</td>${bases.map(([base])=>{const s=result.metrics[key][base];if(!s.n)return '<td>n=0</td>';return `<td>n=${s.n} · ${s.rmse==null?'':`RMSE ${s.rmse.toFixed(2)} ${s.rmse_ci95?`(95% ${s.rmse_ci95[0].toFixed(2)}–${s.rmse_ci95[1].toFixed(2)}) · `:''}`}hit ${(100*s.hit_rate).toFixed(0)}% (95% ${(100*s.hit_ci95[0]).toFixed(0)}–${(100*s.hit_ci95[1]).toFixed(0)}%)</td>`}).join('')}</tr>`}html+='</table></section>';$('#compareResults').insertAdjacentHTML('beforeend',html);$('#compareStatus').textContent=`Validation finished on ${result.evaluated} held-out events (${result.mode}).`}catch(e){$('#compareStatus').innerHTML=`<span class="error">${esc(e.message)}</span>`}finally{button.disabled=false}}
 $('#compareDate').value=isoDate(now);$('#compareTicker').addEventListener('input',e=>e.target.value=e.target.value.toUpperCase());$('#compareForm').onsubmit=e=>{e.preventDefault();runCompare()};async function search(reset=true){if(!await verify())return;if(reset){eventScreenGeneration++;qualifiedTickers.clear();rows=[];offset=0;kwEventCache.clear();lastComparePayload=null;$('#compareResults').innerHTML='';$('#tableRoot').innerHTML='';$('#stocksRoot').innerHTML=''}const gen=++searchGeneration;$('#moreBtn').disabled=true;$('#moreBtn').textContent='Searching…';setStatus('Searching EDGAR full text; inspecting filing excerpts…');try{const body=payload();const res=await fetch('/api/keyword-search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await res.json();if(gen!==searchGeneration)return;if(!res.ok)throw Error(data.error||'SEC search failed');rows=reset?data.rows:rows.concat(data.rows);offset=data.from+data.size;total=data.total;setStatus(`Search complete: ${data.rows.length} filing matches returned on this page.`);buildTable();$('#moreBtn').style.display=offset<total?'inline-block':'none';$('#moreBtn').disabled=false;$('#moreBtn').textContent='Load more';}catch(e){if(gen===searchGeneration){setStatus(e.message,true);$('#moreBtn').disabled=false;$('#moreBtn').textContent='Load more'}}}
 $('#searchForm').onsubmit=e=>{e.preventDefault();search(true)};$('#moreBtn').onclick=()=>search(false);
-$('#clearBtn').onclick=()=>{searchGeneration++;eventScreenGeneration++;qualifiedTickers.clear();kwEventCache.clear();lastComparePayload=null;$('#compareResults').innerHTML='';rows=[];offset=0;total=0;$('#keyword').value='';$('#tableRoot').innerHTML='';$('#stocksRoot').innerHTML='';$('#resultSummary').innerHTML='';$('#moreBtn').style.display='none';$('#status').textContent='Search SEC filings by keyword and date. Only tickers with a >50% premarket high and either >$10M session dollar volume or ≥100× 20-day relative volume are shown.';$('#startDate').value=isoDate(twoYears);$('#endDate').value=isoDate(now)};
+$('#clearBtn').onclick=()=>{searchGeneration++;eventScreenGeneration++;qualifiedTickers.clear();kwEventCache.clear();lastComparePayload=null;$('#compareResults').innerHTML='';rows=[];offset=0;total=0;$('#keyword').value='';$('#tableRoot').innerHTML='';$('#stocksRoot').innerHTML='';$('#resultSummary').innerHTML='';$('#moreBtn').style.display='none';$('#status').textContent='Search SEC filings from the last year. Only tickers with a >70% premarket high and at least $50M session dollar volume are shown.';$('#startDate').value=isoDate(oneYear);$('#endDate').value=isoDate(now)};
 $('#keyword').addEventListener('keydown',e=>{if(e.key==='Escape')$('#clearBtn').click()});
 </script></body></html>"""
 
