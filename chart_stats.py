@@ -3942,7 +3942,8 @@ function renderTab(tab, r, isRefresh){
       let publishedDate='';
       if(item.published){
         const raw=String(item.published), parsed=new Date(raw);
-        publishedDate=/^\d{4}-\d{2}-\d{2}/.test(raw)?raw.slice(0,10):(!Number.isNaN(parsed.getTime())?parsed.toISOString().slice(0,10):'');
+        const iso=/^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+        publishedDate=iso?`${iso[2]}/${iso[3]}/${iso[1]}`:(!Number.isNaN(parsed.getTime())?`${String(parsed.getUTCMonth()+1).padStart(2,'0')}/${String(parsed.getUTCDate()).padStart(2,'0')}/${parsed.getUTCFullYear()}`:'');
       }
       const dateTag=publishedDate?`<span style="display:inline-block;margin-left:8px;padding:1px 6px;border:1px solid #294458;border-radius:3px;background:#0b151c;color:#9fc5dc;font-size:11px;white-space:nowrap">${esc(publishedDate)}</span>`:'';
       return `<div style="padding:7px 0;border-bottom:1px solid #222"><span style="color:#ffd23f;font-size:12px">${esc(item.kind || 'News')}</span> · ${link}<span style="color:#777;font-size:12px"> — ${esc(item.publisher || 'Yahoo Finance')}</span>${dateTag}</div>`;
