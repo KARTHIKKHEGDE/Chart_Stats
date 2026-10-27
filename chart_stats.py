@@ -2197,6 +2197,18 @@ _scanner_cache = {"at": 0.0, "rows": []}
 _scanner_cache_lock = threading.Lock()
 
 
+def _scanner_session_date(now=None):
+    """Return the scanner day, rolling over at 13:30 Asia/Kolkata."""
+    now = now or dt.datetime.now(IST)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=IST)
+    local = now.astimezone(IST)
+    session_start = local.replace(hour=13, minute=30, second=0, microsecond=0)
+    if local < session_start:
+        local -= dt.timedelta(days=1)
+    return local.date().isoformat()
+
+
 def _yahoo_scanner_rows():
     """Fetch Yahoo's free gainers screener and apply the scanner's local filters."""
     query = yf.EquityQuery("and", [
@@ -2501,11 +2513,13 @@ def scanner_market_scan():
         return jsonify({"error": "Session expired. Please sign in again."}), 401
 
     now = time.time()
+    session_date = _scanner_session_date()
     with _scanner_cache_lock:
-        if now - _scanner_cache["at"] >= 25:
+        if (_scanner_cache.get("session_date") != session_date or
+                now - _scanner_cache["at"] >= 25):
             try:
                 rows = _yahoo_scanner_rows()
-                _scanner_cache.update(at=now, rows=rows)
+                _scanner_cache.update(at=now, rows=rows, session_date=session_date)
             except Exception as exc:
                 return jsonify({"error": str(exc)}), 502
         output = []
@@ -2518,7 +2532,7 @@ def scanner_market_scan():
                            "news_status": details.get("news_status"),
                            "approaches": details.get("approaches") or []})
         return jsonify({"tickers": output, "updated": _scanner_cache["at"],
-                        "session_date": dt.datetime.now(ET).date().isoformat()})
+                        "session_date": session_date})
 
 
 HTML = r"""<!doctype html>
