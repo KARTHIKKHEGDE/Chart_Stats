@@ -829,10 +829,35 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
             "legs": [],
         }
 
+    frd_source = mb or frd or {}
+    csv_summary = {
+        "ticker": tkr,
+        "rally_start_date": D[si]["d"].isoformat(),
+        "first_red_day_date": frd["d"].isoformat() if frd else None,
+        "number_of_days": ndays,
+        "float_before_rally": flt,
+        "float_rotation_start_to_high": div(rally_vol, flt),
+        "market_cap_before_rally": mcap_before,
+        "market_cap_at_rally_high": mcap_peak,
+        "market_cap_high_to_before_multiple": div(mcap_peak, mcap_before),
+        "dollar_volume_start_to_high": rally_dv,
+        "frd_gap": mb["gap"] if mb else (div(frd["o"] - prev_close, prev_close) if frd and prev_close else None),
+        "frd_premarket_volume": mb["pm_vol"] if mb else None,
+        "frd_premarket_dollar_volume": mb["pm_dv"] if mb else None,
+        "frd_regular_market_volume": mb["rth_vol"] if mb else (frd["v"] if frd else None),
+        "frd_regular_market_dollar_volume": mb["rth_dv"] if mb else (frd["dv"] if frd else None),
+        "frd_open_to_high_volume": mb["o2h_vol"] if mb else None,
+        "frd_open": frd_source.get("o"),
+        "frd_high": frd_source.get("h"),
+        "frd_low": frd_source.get("l"),
+        "frd_close": frd_source.get("c"),
+        "frd_hod_time_ist": mb["hod_t"] if mb else None,
+    }
+
     return dict(
         ticker=tkr,
         header=f"{tkr}  |  rally {dstr(D[si]['d'])} -> {dstr(D[pi]['d'])}  |  FRD {dstr(frd['d']) if frd else 'none yet'}",
-        alts=alts_txt, p1=p1, p2=p2,
+        alts=alts_txt, p1=p1, p2=p2, csv_summary=csv_summary,
         chart_15=chart_15,
         table=dict(cols=["Date", "Open", "High", "Low", "Close", "Market Cap (close)", "Chg", "Volume", "$ Vol", "Cum float rot", ""], rows=trows),
         notes=notes,
@@ -927,7 +952,7 @@ h2{font-size:12px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;ma
   <button id="csvAppend" disabled>Append current setup</button>
   <button id="csvDownload" disabled>Download CSV</button>
   <span id="csvState" class="csvState">Loading your saved CSVs…</span>
-  <span class="csvHint">Collections are private to your account and autosave when you create a CSV or append a setup. Each row includes summary stats, deep stats, manual legs, and rally-day data.</span>
+  <span class="csvHint">Each row contains only the requested rally and FRD summary fields, with one dollar-move column for each manually drawn leg. Your CSV autosaves privately to your account.</span>
 </div>
 <!-- Multi-Ticker Tab Bar -->
 <div id="tab_bar" style="display:none;padding:8px 34px 0;background:#050505;border-bottom:1px solid var(--line);gap:6px;overflow-x:auto;align-items:center;flex-wrap:nowrap"></div>
@@ -1256,20 +1281,35 @@ function saveCsvWorkspace(){
 function selectedCsv(){return csvCollections.find(c=>c.id===selectedCsvId)||null}
 function csvSetupRow(){
   const j=currentCsvSetup();if(!j)return null;
-  const row={'Ticker':j.ticker||activeTab||$('t').value.trim().toUpperCase(),'Report summary':j.header||'','Rally start input':$('s').value,'FRD input':$('f').value,'Float override (M)':$('fl').value,'Added at':new Date().toLocaleString()};
-  (j.p1||[]).forEach(item=>{const label=String(item[0]||'').trim();if(!label)return;row['Key stat - '+label]=item[1]??'';if(item[2])row['Key stat details - '+label]=item[2]});
-  (j.p2||[]).forEach(section=>(section[1]||[]).forEach(metric=>{row['Deep stat - '+section[0]+' - '+metric[0]]=metric[1]??''}));
-  const legCard=$('legCard');if(legCard){row['Key stat - Leg']=legCard.querySelector('.v')?.textContent||row['Key stat - Leg'];row['Key stat details - Leg']=legCard.querySelector('.s')?.textContent||row['Key stat details - Leg']||''}
-  const cols=j.table?.cols||[],dailyRows=j.table?.rows||[];
-  dailyRows.forEach((values,index)=>cols.forEach((column,colIndex)=>{const name=String(column||'Row tag').trim();row['Rally day '+(index+1)+' - '+name]=values[colIndex]??''}));
-  if(_chartState&&activeTab===row.Ticker&&Array.isArray(_chartState.legs)){
-    const bars=_chartState.bars||[],flt=_chartState.data?.float_val,shares=_chartState.data?.shares_out;
-    _chartState.legs.forEach((leg,index)=>{
-      const lo=Math.min(leg.loI,leg.hiI),hi=Math.max(leg.loI,leg.hiI),subset=bars.slice(lo,hi+1),prefix='Manual leg '+(index+1)+' - ';
-      const vol=subset.reduce((sum,b)=>sum+(Number(b.v)||0),0),dvol=subset.reduce((sum,b)=>sum+(Number(b.dv??((Number(b.v)||0)*(Number(b.c)||Number(b.h))))||0),0);
-      row[prefix+'Price low']=fmtP(leg.loPx);row[prefix+'Price high']=fmtP(leg.hiPx);row[prefix+'Gain']=((leg.hiPx/leg.loPx-1)*100).toFixed(1)+'%';row[prefix+'Dollar move/share']=fmtP(leg.hiPx-leg.loPx);row[prefix+'Volume']=fmtV(vol);row[prefix+'Dollar volume']=fmtDv(dvol);row[prefix+'Float rotation']=fmtRot(vol,flt);row[prefix+'Market cap at high']=shares?fmtDv(shares*leg.hiPx):'-';row[prefix+'Duration']=subset.length+' bars (15min)';row[prefix+'Time window']=((bars[lo]?.t)||'')+' → '+((bars[hi]?.t)||'');
-    });
-  }
+  const s=j.csv_summary||{},ticker=j.ticker||activeTab||$('t').value.trim().toUpperCase();
+  const row={
+    'Ticker':s.ticker||ticker,
+    'Rally Start Date':s.rally_start_date||'',
+    'First Red Day Date':s.first_red_day_date||'',
+    'Number of Rally Days':s.number_of_days??'',
+  };
+  const tab=openTabs[ticker],legs=(_chartState&&activeTab===ticker&&Array.isArray(_chartState.legs))?_chartState.legs:(tab?.legs||[]);
+  row['Number of Legs']=legs.length;
+  legs.forEach((leg,index)=>{row['Leg '+(index+1)+' Dollar Move per Share']=Number(leg.hiPx)-Number(leg.loPx)});
+  Object.assign(row,{
+    'Float Before Rally (Shares)':s.float_before_rally??'',
+    'Float Rotation (Start to Rally High, Times)':s.float_rotation_start_to_high??'',
+    'Market Capitalization Before Rally (USD)':s.market_cap_before_rally??'',
+    'Market Capitalization at Rally High (USD)':s.market_cap_at_rally_high??'',
+    'Rally-High Market Cap / Pre-Rally Market Cap (Times)':s.market_cap_high_to_before_multiple??'',
+    'Dollar Volume from Rally Start to High (USD)':s.dollar_volume_start_to_high??'',
+    'First Red Day Gap Up (%)':s.frd_gap==null?'':s.frd_gap*100,
+    'First Red Day Premarket Volume (Shares)':s.frd_premarket_volume??'',
+    'First Red Day Premarket Dollar Volume (USD)':s.frd_premarket_dollar_volume??'',
+    'First Red Day Regular-Market Volume (Shares)':s.frd_regular_market_volume??'',
+    'First Red Day Regular-Market Dollar Volume (USD)':s.frd_regular_market_dollar_volume??'',
+    'First Red Day Open-to-High Volume (Shares)':s.frd_open_to_high_volume??'',
+    'First Red Day Open Price (USD)':s.frd_open??'',
+    'First Red Day High Price (USD)':s.frd_high??'',
+    'First Red Day Low Price (USD)':s.frd_low??'',
+    'First Red Day Close Price (USD)':s.frd_close??'',
+    'First Red Day High-of-Day Time (IST)':s.frd_hod_time_ist||''
+  });
   return row;
 }
 function csvCell(value){const text=String(value??'');return /[",\r\n]/.test(text)?'"'+text.replace(/"/g,'""')+'"':text}
