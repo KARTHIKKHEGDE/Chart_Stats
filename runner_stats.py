@@ -716,7 +716,7 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
          f"open {px(mb['o'] if mb else (frd['o'] if frd else None))} vs prev close {px(prev_close)}" if frd else ""],
         ["Pre-mkt vol (FRD)", big(mb["pm_vol"]) if mb else "-", "04:00-09:30 ET / 13:30-19:00 IST"],
         ["Pre-mkt $ vol (FRD)", usd(mb["pm_dv"]) if mb else "-", f"PM high {px(mb['pm_high'])} @ {mb['pm_high_t']} IST" if mb and mb.get("pm_high") else ""],
-        ["O->H vol (FRD)", big(mb["o2h_vol"]) if mb else "-", (usd(mb["o2h_dv"]) + " dollar volume · Float rotation " + rot(div(mb["o2h_vol"], flt))) if mb else ""],
+        ["O->H vol (FRD)", big(mb["o2h_vol"]) if mb else "-", (usd(mb["o2h_dv"]) + " dollar volume · Float rotation " + rot(div(mb["o2h_vol"], flt)) + " · Market cap @ HOD " + usd(shares * mb["h"] if shares else None)) if mb else ""],
         ["Date of First Red Day", dstr(frd["d"]) if frd else "none yet", ("rally high " + dstr(D[pi]["d"])) + (" (same day)" if fi == pi else "") if frd else ""],
     ]
 
