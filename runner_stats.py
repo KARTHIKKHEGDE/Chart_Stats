@@ -1160,23 +1160,44 @@ $('rf').onclick=()=>run(true);
 async function copySectionImage(sectionId,label){
   const source=document.getElementById(sectionId);
   if(!LAST||!source){$('st').textContent='Load a report first.';return;}
-  const clone=source.cloneNode(true);
-  const sourceCanvases=source.querySelectorAll('canvas'),clonedCanvases=clone.querySelectorAll('canvas');
-  sourceCanvases.forEach((canvas,i)=>{const target=clonedCanvases[i];if(!target)return;const image=document.createElement('img');try{image.src=canvas.toDataURL('image/png')}catch{return}image.width=canvas.width;image.height=canvas.height;image.style.cssText=canvas.getAttribute('style')||'display:block;max-width:100%;height:auto';target.replaceWith(image)});
-  clone.querySelectorAll('button,input,select').forEach(el=>el.remove());
-  const css=[...document.querySelectorAll('style')].map(style=>style.textContent).join(' ').replace(/&/g,'&amp;').replace(/</g,'&lt;');
-  const width=Math.ceil(Math.max(source.scrollWidth,source.getBoundingClientRect().width)),height=Math.ceil(source.scrollHeight);
+  const bounds=source.getBoundingClientRect();
+  const width=Math.ceil(Math.max(bounds.width,source.scrollWidth)),height=Math.ceil(Math.max(bounds.height,source.scrollHeight));
   const scale=Math.max(1,Math.min(3,16000/Math.max(width,height)));
-  const markup=`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;min-height:${height}px;background:#000;color:#e8e8e8"><style>${css}</style>${clone.outerHTML}</div></foreignObject></svg>`;
-  const svgUrl=URL.createObjectURL(new Blob([markup],{type:'image/svg+xml;charset=utf-8'}));
+  const output=document.createElement('canvas');output.width=Math.ceil(width*scale);output.height=Math.ceil(height*scale);
+  const ctx=output.getContext('2d');if(!ctx){$('st').textContent='Could not create the section image.';return;}
+  ctx.scale(scale,scale);ctx.fillStyle='#000';ctx.fillRect(0,0,width,height);
+  const isTransparent=color=>!color||color==='transparent'||color==='rgba(0, 0, 0, 0)';
+  const skip=new Set(['BUTTON','INPUT','SELECT','OPTION']);
+  const drawText=node=>{
+    const value=node.nodeValue||'';if(!value.trim())return;
+    const style=getComputedStyle(node.parentElement),fontSize=parseFloat(style.fontSize)||12;
+    ctx.font=style.font||`${style.fontWeight} ${fontSize}px ${style.fontFamily}`;ctx.fillStyle=style.color||'#e8e8e8';ctx.textBaseline='alphabetic';
+    const range=document.createRange(),lines=[];let line=null;
+    for(let i=0;i<value.length;i++){
+      range.setStart(node,i);range.setEnd(node,i+1);const rect=range.getBoundingClientRect();
+      if(!rect.width&&!rect.height){if(line){lines.push(line);line=null}continue}
+      const top=Math.round(rect.top-bounds.top),left=rect.left-bounds.left;
+      if(!line||Math.abs(line.top-top)>1){if(line)lines.push(line);line={top,left,text:value[i],right:rect.right-bounds.left}}
+      else{line.text+=value[i];line.right=rect.right-bounds.left}
+    }
+    if(line)lines.push(line);
+    for(const item of lines){let x=item.left;if(style.textAlign==='right')x=item.right;else if(style.textAlign==='center')x=(item.left+item.right)/2;ctx.textAlign=style.textAlign==='start'?'left':style.textAlign;ctx.fillText(item.text,x,item.top+fontSize*.84)}
+  };
+  const walk=node=>{
+    if(node.nodeType===Node.TEXT_NODE){drawText(node);return}
+    if(node.nodeType!==Node.ELEMENT_NODE||skip.has(node.tagName))return;
+    const rect=node.getBoundingClientRect(),x=rect.left-bounds.left,y=rect.top-bounds.top,style=getComputedStyle(node);
+    if(!isTransparent(style.backgroundColor)){ctx.fillStyle=style.backgroundColor;ctx.fillRect(x,y,rect.width,rect.height)}
+    const borders=[['borderTopWidth','borderTopColor',x,y,rect.width],['borderBottomWidth','borderBottomColor',x,y+rect.height,rect.width]];
+    for(const [w,c,bx,by,bw] of borders){const size=parseFloat(style[w])||0;if(size&&!isTransparent(style[c])){ctx.fillStyle=style[c];ctx.fillRect(bx,by,bw,size)}}
+    for(const child of node.childNodes)walk(child);
+  };
+  walk(source);
   try{
-    const image=new Image();image.src=svgUrl;await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=reject});
-    const output=document.createElement('canvas');output.width=Math.ceil(width*scale);output.height=Math.ceil(height*scale);
-    const ctx=output.getContext('2d');if(!ctx)throw new Error('Canvas unavailable');ctx.fillStyle='#000';ctx.fillRect(0,0,output.width,output.height);ctx.scale(scale,scale);ctx.drawImage(image,0,0,width,height);
-    const blob=await new Promise(resolve=>output.toBlob(resolve,'image/png'));
-    if(!blob||!navigator.clipboard?.write||!window.ClipboardItem)throw new Error('Image clipboard unavailable');
-    await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);$('st').textContent=`Copied ${label} · ${output.width} × ${output.height}px`;setTimeout(()=>$('st').textContent='',3000);
-  }catch(error){$('st').textContent='Could not copy image. Check clipboard permissions and try again.'}finally{URL.revokeObjectURL(svgUrl)}
+    if(!navigator.clipboard?.write||!window.ClipboardItem)throw new Error('image clipboard is unavailable in this browser');
+    const png=new Promise(resolve=>output.toBlob(resolve,'image/png'));
+    await navigator.clipboard.write([new ClipboardItem({'image/png':png})]);$('st').textContent=`Copied ${label} · ${output.width} × ${output.height}px`;setTimeout(()=>$('st').textContent='',3000);
+  }catch(error){$('st').textContent=`Could not copy ${label}: ${error.message||'check clipboard permissions'}`}
 }
 document.addEventListener('click',e=>{const button=e.target.closest('[data-copy-section]');if(button)copySectionImage(button.dataset.copySection,button.dataset.copyLabel||button.dataset.copySection)});
 ['t', 's', 'f', 'fl'].forEach(id => {
@@ -1276,10 +1297,9 @@ async function copyChartImage(){
     _renderFrame();
     s.ctx = liveCtx;
     _renderFrame();
-    const blob = await new Promise(resolve => image.toBlob(resolve, 'image/png'));
-    if(!blob) throw new Error('PNG encoding failed');
     if(!navigator.clipboard?.write || !window.ClipboardItem) throw new Error('Image clipboard is unavailable in this browser');
-    await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+    const png = new Promise(resolve => image.toBlob(resolve, 'image/png'));
+    await navigator.clipboard.write([new ClipboardItem({'image/png':png})]);
     _setStatus(`Copied ${image.width} × ${image.height} high-resolution PNG.`);
     setTimeout(()=>_setStatus(''),2500);
   }catch(error){
