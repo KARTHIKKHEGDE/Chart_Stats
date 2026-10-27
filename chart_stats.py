@@ -23,7 +23,7 @@ VWAP everywhere = continuous VWAP from 04:00 ET (premarket + regular), like a ch
 Everything fetched from Polygon is cached in ./.gapcache so repeat runs are fast.
 (Cache note: 1-min files are reused as-is, nothing to refetch for the new sections.)
 """
-import os, re, json, time, math, threading, uuid, warnings, hashlib, secrets, datetime as dt
+import os, re, json, time, math, random, threading, uuid, warnings, hashlib, secrets, datetime as dt
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
