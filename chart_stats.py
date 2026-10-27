@@ -2785,10 +2785,9 @@ def api_keyword_events():
     try:
         start = dt.date.fromisoformat(request.args.get("start") or (dt.date.today()-dt.timedelta(days=365)).isoformat())
         end = dt.date.fromisoformat(request.args.get("end") or dt.date.today().isoformat())
-        min_gap = 0.10
-        min_rvol = 10.0
+        min_premarket_premium = 0.50
+        min_dollar_volume = 10_000_000
         max_events = 12
-        include_pm = True
     except (TypeError, ValueError):
         return jsonify({"error": "Invalid historical chart filters."}), 400
     if start > end:
@@ -2803,18 +2802,12 @@ def api_keyword_events():
             if day < start or day > end or row["date"] in split_dates or prev.get("c", 0) <= 0 or row.get("o", 0) <= 0:
                 continue
             volume = float(row.get("v") or 0)
-            prior = daily[max(0, i-20):i]
-            if len(prior) < 20:
+            dvol = volume * float(row.get("vw") or row.get("c") or 0)
+            if dvol <= min_dollar_volume:
                 continue
-            avgvol = float(np.mean([x["v"] for x in prior]))
-            gap = float(row["o"] / prev["c"] - 1)
-            rvol = volume / avgvol if avgvol > 0 else None
-            dvol = volume * float(row.get("c") or 0)
-            if gap < min_gap or rvol is None or rvol <= min_rvol:
-                continue
-            candidates.append({"index": i, "date": row["date"], "gap": gap, "rvol": rvol,
+            candidates.append({"index": i, "date": row["date"],
                                "volume": volume, "dollar_volume": dvol,
-                               "score": gap/min_gap + (rvol or 0)/min_rvol})
+                               "score": dvol/min_dollar_volume})
         candidates.sort(key=lambda x: x["date"])
         selected = sorted(candidates, key=lambda x: x["score"], reverse=True)[:max_events]
         selected.sort(key=lambda x: x["date"])
@@ -2826,13 +2819,13 @@ def api_keyword_events():
                 output.append({**{k:v for k,v in candidate.items() if k not in ("index", "score")},
                                "error": "No intraday candles are available from Polygon for this session."})
                 continue
-            if not include_pm:
-                minute = df.index.hour*60+df.index.minute
-                df = df[minute >= RG_START]
-            if df.empty:
-                continue
             previous_close = float(daily[i-1]["c"])
             m = metrics(df, previous_close, True)
+            pmh=m.get("pm_high")
+            premarket_premium=(float(pmh)/previous_close-1) if pmh and previous_close>0 else None
+            session_dollar_volume=float((((df["h"]+df["l"]+df["c"])/3)*df["v"]).sum())
+            if premarket_premium is None or premarket_premium <= min_premarket_premium or session_dollar_volume <= min_dollar_volume:
+                continue
             bar_minutes = df.index.hour*60+df.index.minute
             opening_bars = df[(bar_minutes >= RG_START) & (bar_minutes < RG_START+5)]
             opening_volume = float(opening_bars["v"].sum()) if not opening_bars.empty else None
@@ -2842,6 +2835,7 @@ def api_keyword_events():
             next_close = float(daily[i+1]["c"]) if i+1 < len(daily) else None
             next_ret = next_close / float(row["c"]) - 1 if next_close and row.get("c") else None
             event = {k:v for k,v in candidate.items() if k not in ("index", "score")}
+            event.update({"dollar_volume":session_dollar_volume,"premarket_high_pct":premarket_premium})
             event.update({"prev_close": previous_close, "premarket_high": m.get("pm_high"),
                           "premarket_low": m.get("pm_low"), "open": open_price, "high": m.get("hod"),
                           "low": m.get("lod"), "close": close_price, "hod_min": m.get("hod_min"),
@@ -2852,7 +2846,7 @@ def api_keyword_events():
                           "next_session_return": next_ret,
                           "chart": chart_pack(df, m, previous_close, dt.date.fromisoformat(row["date"]))})
             output.append(event)
-        return jsonify({"ticker": ticker, "count": len(candidates), "shown": len(output),
+        return jsonify({"ticker": ticker, "count": len(output), "shown": len(output),
                         "events": output, "source": "Polygon daily aggregates and 1-minute aggregates"})
     except Exception as exc:
         app.logger.exception("Keyword event loading failed for %s", ticker)
@@ -5903,7 +5897,7 @@ input[type=text]{width:min(420px,70vw)}input[type=date]{width:140px}select{min-w
   <button class="primary" type="submit">Search SEC</button><button id="clearBtn" type="button">Clear</button>
   <button id="moreBtn" type="button" style="display:none">Load more</button>
 </form>
-<div id="status" class="status">Search SEC filings by keyword and date. Charts only show sessions with a gap up of at least 10% and volume above 10× the prior 20-session average.</div>
+<div id="status" class="status">Search SEC filings by keyword and date. Charts only show sessions where the premarket high is >50% above the previous close and session dollar volume is >$10M.</div>
 <div id="resultSummary"></div><div id="tableRoot"></div><div id="stocksRoot"></div>
 </main>
 <div id="chartModal" class="chartModal" onclick="if(event.target===this)closeKWModal()"><div class="chartModalBox"><div class="chartModalHead"><button id="kwPrev">‹</button><span id="kwModalTitle" class="chartModalTitle"></span><button id="kwNext">›</button><select id="kwModalTf"><option>1m</option><option>2m</option><option>5m</option><option>15m</option><option>30m</option><option>1h</option><option>1D</option></select><button onclick="closeKWModal()">✕</button></div><canvas id="kwModalCanvas" class="chartModalCanvas" height="720"></canvas></div></div>
@@ -5927,25 +5921,25 @@ function buildTable(){
 function groupCompanies(){const map=new Map();for(const r of rows){const key=r.ticker||r.cik;if(!map.has(key))map.set(key,{key,ticker:r.ticker,company:r.company,filings:[]});map.get(key).filings.push(r)}return [...map.values()]}
 function renderStocks(){
  if(observer)observer.disconnect();const companies=groupCompanies();
- $('#stocksRoot').innerHTML=companies.map((c,i)=>`<section class="stock" id="stock-${i}" data-stock="${esc(c.key)}" data-ticker="${esc(c.ticker)}"><div class="stockhead"><h2>${c.ticker?`<a class="ticker" href="https://finance.yahoo.com/quote/${encodeURIComponent(c.ticker)}" target="_blank" rel="noopener">${esc(c.ticker)}</a>`:esc(c.company)}</h2><div class="evidence">${c.filings.length} SEC filing matches · charts load as you scroll</div></div><div class="stockCharts"><div class="status loading">Loading qualifying charts: gap ≥10% and volume >10× prior 20-session average.</div></div></section>`).join('');
+ $('#stocksRoot').innerHTML=companies.map((c,i)=>`<section class="stock" id="stock-${i}" data-stock="${esc(c.key)}" data-ticker="${esc(c.ticker)}"><div class="stockhead"><h2>${c.ticker?`<a class="ticker" href="https://finance.yahoo.com/quote/${encodeURIComponent(c.ticker)}" target="_blank" rel="noopener">${esc(c.ticker)}</a>`:esc(c.company)}</h2><div class="evidence">${c.filings.length} SEC filing matches · charts load as you scroll</div></div><div class="stockCharts"><div class="status loading">Loading charts: premarket high >50% above previous close and session dollar volume >$10M.</div></div></section>`).join('');
  observer=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){observer.unobserve(entry.target);loadStockCharts(entry.target)}}),{rootMargin:'500px'});
  $('#stocksRoot').querySelectorAll('.stock').forEach(el=>observer.observe(el));
 }
 function fmtPct(v){return v==null?'—':`${v>=0?'+':''}${(v*100).toFixed(1)}%`}function fmtNum(v){if(v==null)return'—';if(v>=1e9)return (v/1e9).toFixed(2)+'B';if(v>=1e6)return (v/1e6).toFixed(2)+'M';if(v>=1e3)return (v/1e3).toFixed(1)+'K';return Math.round(v).toLocaleString()}
 async function loadStockCharts(section){
  const ticker=section.dataset.ticker,root=section.querySelector('.stockCharts');if(!ticker){root.innerHTML='<div class="noevents">No ticker mapping is available for this SEC filer, so historical candles cannot be requested.</div>';return}
- root.innerHTML='<div class="status loading">Loading charts for sessions with gap ≥10% and volume >10× prior 20-session average…</div>';
+ root.innerHTML='<div class="status loading">Loading charts for sessions with premarket high >50% above previous close and dollar volume >$10M…</div>';
  const start=$('#startDate').value,end=$('#endDate').value;
  const q=new URLSearchParams({ticker,user,token,start,end});
  try{const res=await fetch('/api/keyword-events?'+q),data=await res.json();if(!res.ok)throw Error(data.error||'Market data request failed');
-   if(!data.events.length){root.innerHTML=`<div class="noevents">No sessions matched: gap ≥10% and volume >10× the prior 20-session average, between ${esc(start)} and ${esc(end)}. Data source: ${esc(data.source)}.</div>`;return}
+   if(!data.events.length){root.innerHTML=`<div class="noevents">No sessions matched: premarket high >50% above previous close and session dollar volume >$10M, between ${esc(start)} and ${esc(end)}.</div>`;return}
    renderEvents(root,data);
  }catch(e){root.innerHTML=`<div class="noevents error">${esc(e.message)}</div>`}
 }
 function aggregate(bars,tf){const src=bars;if(tf==='1D'){if(!src.t.length)return src;const i=[...src.t.keys()];return{t:[570],o:[src.o[i[0]]],h:[Math.max(...i.map(k=>src.h[k]))],l:[Math.min(...i.map(k=>src.l[k]))],c:[src.c[i[i.length-1]]],v:[i.reduce((s,k)=>s+(src.v[k]||0),0)],vw:[src.vw[i[i.length-1]]]}}
  const mins=tf==='1h'?60:Number(tf.replace('m',''))||2,out={t:[],o:[],h:[],l:[],c:[],v:[],vw:[]},g=new Map();for(let i=0;i<src.t.length;i++){const x=Math.floor(src.t[i]/mins)*mins;if(!g.has(x))g.set(x,[]);g.get(x).push(i)}for(const [t,idx]of g){out.t.push(t);out.o.push(src.o[idx[0]]);out.h.push(Math.max(...idx.map(i=>src.h[i])));out.l.push(Math.min(...idx.map(i=>src.l[i])));out.c.push(src.c[idx.at(-1)]);out.v.push(idx.reduce((s,i)=>s+(src.v[i]||0),0));out.vw.push(src.vw[idx.at(-1)])}return out}
 function renderEvents(root,data){
- const events=data.events;root.innerHTML=`<div class="status">${events.length} qualifying charts · Gap ≥10% and volume >10× prior 20 sessions</div><div class="eventGrid">`+
+ const events=data.events;root.innerHTML=`<div class="status">${events.length} qualifying charts · Premarket high >50% above previous close · Dollar volume >$10M</div><div class="eventGrid">`+
  events.map((e,i)=>`<article class="event" data-event="${i}"><div class="eventhead"><span class="eventtitle">${esc(data.ticker)} · ${esc(fmtDate(e.date))}</span><select class="eventTf" aria-label="Chart timeframe"><option>1m</option><option selected>2m</option><option>5m</option><option>15m</option><option>30m</option><option>1h</option><option>1D</option></select></div>${e.error?`<div class="noevents">${esc(e.error)}</div>`:`<canvas class="priceChart" height="300" aria-label="${esc(data.ticker)} ${esc(fmtDate(e.date))} chart"></canvas>`}</article>`).join('')+`</div>`;
  if(!chartObserver)chartObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){const cv=entry.target;chartObserver.unobserve(cv);drawKWChart(cv);bindKWChart(cv)}}),{rootMargin:'300px'});
  events.forEach((e,i)=>{const card=root.querySelector(`[data-event="${i}"]`);if(!e.error){const cv=card.querySelector('.priceChart');cv._chart=e.chart;cv._event={...e,ticker:data.ticker};cv._timeframe='2m';chartObserver.observe(cv);}
@@ -5974,7 +5968,7 @@ function drawNormalized(root,events){const chosen=[...root.querySelectorAll('.co
 function drawCrossStockNormalized(){const checks=[...document.querySelectorAll('#stocksRoot .compareCheck:checked')],chosen=checks.map(c=>({...c._kwEvent,compareTicker:c._kwTicker})).filter(e=>e.chart);const cv=$('.crossNormalized');if(!cv)return;const dpr=devicePixelRatio||1,W=Math.max(320,cv.parentElement.clientWidth-18),H=200;cv.width=W*dpr;cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';const x=cv.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle='#050607';x.fillRect(0,0,W,H);$('#crossStockCompareStatus').textContent=chosen.length<2?'Select events from multiple ticker sections to compare their price paths on the same previous-close percentage scale.':`${chosen.length} selected events · normalized from previous regular-session close.`;if(chosen.length<2){x.fillStyle='#8e98a3';x.fillText('Select at least two charts above.',12,25);return}const L=42,R=8,T=25,B=22,pw=W-L-R,ph=H-T-B,series=chosen.map(e=>e.chart.bars.c.map(v=>(v/e.prev_close-1)*100)),all=series.flat(),lo=Math.min(-5,...all),hi=Math.max(5,...all),Y=v=>T+ph*(1-(v-lo)/(hi-lo));x.strokeStyle='#2b3239';x.fillStyle='#9aa4ae';for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,yy=Y(v);x.beginPath();x.moveTo(L,yy);x.lineTo(W-R,yy);x.stroke();x.fillText(v.toFixed(0)+'%',2,yy+3)}const colors=['#55bfff','#ffc857','#57d996','#ee7db4','#b39cff','#ff8e66','#ff7373','#9ae66e'];chosen.forEach((e,j)=>{const bars=e.chart.bars;x.strokeStyle=colors[j%colors.length];x.beginPath();series[j].forEach((v,i)=>{const xx=L+pw*(bars.t[i]-240)/720,yy=Y(v);i?x.lineTo(xx,yy):x.moveTo(xx,yy)});x.stroke();x.fillStyle=colors[j%colors.length];x.fillText(`${e.compareTicker} ${e.date}`,L+(j%4)*(pw/4),12+Math.floor(j/4)*11)});}
 async function search(reset=true){if(!await verify())return;if(reset){rows=[];offset=0;$('#tableRoot').innerHTML='';$('#stocksRoot').innerHTML=''}const gen=++searchGeneration;$('#moreBtn').disabled=true;$('#moreBtn').textContent='Searching…';setStatus('Searching EDGAR full text; inspecting filing excerpts…');try{const body=payload();const res=await fetch('/api/keyword-search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await res.json();if(gen!==searchGeneration)return;if(!res.ok)throw Error(data.error||'SEC search failed');rows=reset?data.rows:rows.concat(data.rows);offset=data.from+data.size;total=data.total;setStatus(`Search complete: ${data.rows.length} filing matches returned on this page.`);buildTable();$('#moreBtn').style.display=offset<total?'inline-block':'none';$('#moreBtn').disabled=false;$('#moreBtn').textContent='Load more';}catch(e){if(gen===searchGeneration){setStatus(e.message,true);$('#moreBtn').disabled=false;$('#moreBtn').textContent='Load more'}}}
 $('#searchForm').onsubmit=e=>{e.preventDefault();search(true)};$('#moreBtn').onclick=()=>search(false);
-$('#clearBtn').onclick=()=>{searchGeneration++;rows=[];offset=0;total=0;$('#keyword').value='';$('#tableRoot').innerHTML='';$('#stocksRoot').innerHTML='';$('#resultSummary').innerHTML='';$('#moreBtn').style.display='none';$('#status').textContent='Search SEC filings by keyword and date. Charts only show sessions with a gap up of at least 10% and volume above 10× the prior 20-session average.';$('#startDate').value=isoDate(twoYears);$('#endDate').value=isoDate(now)};
+$('#clearBtn').onclick=()=>{searchGeneration++;rows=[];offset=0;total=0;$('#keyword').value='';$('#tableRoot').innerHTML='';$('#stocksRoot').innerHTML='';$('#resultSummary').innerHTML='';$('#moreBtn').style.display='none';$('#status').textContent='Search SEC filings by keyword and date. Charts only show sessions where the premarket high is >50% above the previous close and session dollar volume is >$10M.';$('#startDate').value=isoDate(twoYears);$('#endDate').value=isoDate(now)};
 $('#keyword').addEventListener('keydown',e=>{if(e.key==='Escape')$('#clearBtn').click()});
 </script></body></html>"""
 
