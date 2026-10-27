@@ -2495,6 +2495,332 @@ def session_chart():
         return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 502
 
 
+_KW_FINANCING_FORMS = ("8-K,6-K,S-1,S-3,S-4,F-1,F-3,F-4,8-A,424B1,424B2,424B3,424B4,424B5,424B6,424B7,10-K,10-Q,20-F,40-F")
+_kw_sec_request_lock = threading.Lock()
+_kw_sec_last_request = 0.0
+
+
+def _keyword_sec_get(url, params=None, timeout=25):
+    """Serialize keyword-search SEC traffic to stay comfortably below 10 req/s."""
+    global _kw_sec_last_request
+    with _kw_sec_request_lock:
+        wait = 0.12 - (time.monotonic() - _kw_sec_last_request)
+        if wait > 0:
+            time.sleep(wait)
+        for attempt in range(3):
+            try:
+                response = requests.get(url, params=params,
+                                        headers={"User-Agent": SEC_UA, "Accept-Encoding": "gzip, deflate"},
+                                        timeout=timeout)
+                _kw_sec_last_request = time.monotonic()
+                if response.status_code not in (429, 503) or attempt == 2:
+                    return response
+            except requests.RequestException:
+                if attempt == 2:
+                    raise
+                _kw_sec_last_request = time.monotonic()
+            time.sleep(0.5 * (attempt + 1))
+        return response
+_KW_PLAYER_ROLES = [
+    ("Legal counsel", r"\blegal\s+counsel|\bcounsel\s+to\b|\battorneys?\s+for\b"),
+    ("Auditor", r"\bauditors?\b|\bindependent\s+accountants?\b"),
+    ("Underwriter", r"\bunderwrit(?:er|ers|ing)\b"),
+    ("Placement agent", r"\bplacement\s+agent\b"),
+    ("Investment bank", r"\binvestment\s+banks?\b|\binvestment\s+bankers?\b"),
+    ("Investor", r"\binvestors?\b"),
+    ("Lender", r"\blender|loan\s+agreement\b"),
+    ("Equity-line provider", r"\bequity\s+line|\bcommon\s+stock\s+purchase\s+agreement\b"),
+    ("Convertible-note holder", r"\bconvertible\s+(?:note|notes|debenture)|\bnoteholder\b"),
+    ("Warrant holder", r"\bwarrant\s+(?:holder|holders|exercise)|\bholder\s+of\s+the\s+warrants\b"),
+    ("Selling shareholder", r"\bselling\s+stockholder|\bselling\s+shareholder\b"),
+]
+
+
+def _keyword_ticker_map():
+    cached = cget("sec_keyword_ticker_map", 86400)
+    if cached:
+        return cached
+    response = _keyword_sec_get("https://www.sec.gov/files/company_tickers.json", timeout=25)
+    response.raise_for_status()
+    raw = response.json()
+    result = {}
+    for row in raw.values():
+        cik = str(row.get("cik_str") or "").strip()
+        if cik:
+            result[str(int(cik)).zfill(10)] = {"ticker": str(row.get("ticker") or "").upper(),
+                                               "name": str(row.get("title") or "")}
+    cput("sec_keyword_ticker_map", result)
+    return result
+
+
+def _keyword_plain_text(value):
+    if isinstance(value, dict):
+        return " ".join(_keyword_plain_text(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return " ".join(_keyword_plain_text(v) for v in value)
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", value)).strip()
+
+
+def _keyword_match_excerpt(hit, keyword, fetch_document=False):
+    source = hit.get("_source") or {}
+    highlight = hit.get("highlight") or source.get("highlight") or {}
+    highlighted = _keyword_plain_text(highlight)
+    if highlighted:
+        return highlighted[:700]
+    if not fetch_document:
+        return ""
+    try:
+        hit_id = str(hit.get("_id") or "")
+        accession_match = re.search(r"\d{10}-\d{2}-\d{6}", hit_id)
+        if not accession_match:
+            return ""
+        accession = accession_match.group(0)
+        document = hit_id[accession_match.end():].lstrip(":/")
+        ciks = source.get("ciks") or source.get("cik") or []
+        cik_raw = ciks[0] if isinstance(ciks, list) and ciks else ciks
+        cik = int(str(cik_raw).lstrip("0") or "0")
+        if not re.fullmatch(r"[\w.\-]+\.(?:htm|html|txt|xml)", document, re.I):
+            return ""
+        accession_path = accession.replace("-", "")
+        url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession_path}/{quote(document, safe='.-_')}"
+        response = _keyword_sec_get(url, timeout=15)
+        response.raise_for_status()
+        body = response.text[:8_000_000]
+        import html as _html
+        body = re.sub(r"(?is)<(script|style).*?</\1>", " ", body)
+        body = re.sub(r"<[^>]+>", " ", body)
+        plain = _html.unescape(re.sub(r"\s+", " ", body)).strip()
+        pos = plain.casefold().find(keyword.casefold())
+        if pos < 0:
+            words = [w for w in re.findall(r"[\w.-]+", keyword) if len(w) > 2]
+            pos = next((plain.casefold().find(w.casefold()) for w in words
+                        if plain.casefold().find(w.casefold()) >= 0), -1)
+        return ("…" + plain[max(0, pos-220):pos+len(keyword)+420] + "…") if pos >= 0 else ""
+    except Exception:
+        return ""
+
+
+def _keyword_classify_role(excerpt):
+    text = excerpt or ""
+    for role, pattern in _KW_PLAYER_ROLES:
+        if re.search(pattern, text, re.I):
+            return role
+    return "Unverified mention"
+
+
+def _keyword_share_amount(excerpt):
+    text = excerpt or ""
+    m = re.search(r"\b(\d[\d,]*(?:\.\d+)?\s*(?:million|billion|thousand|[KMB])?)\s+(?:shares|ordinary shares|common shares)\b", text, re.I)
+    if not m:
+        return "—"
+    return re.sub(r"\s+", " ", m.group(1)).strip()
+
+
+def _keyword_headline(form, source, excerpt):
+    text = f"{source.get('file_description') or ''} {excerpt}".casefold()
+    for name, pattern in (("ATM", r"\batm\b|at.the.market"), ("Convertible note", r"convertible.{0,20}note"),
+                          ("Registered direct offering", r"registered direct offering"), ("IPO", r"\binitial public offering\b"),
+                          ("Private placement", r"private placement"), ("Registered offering", r"registered offering"),
+                          ("Equity line", r"equity line|common stock purchase agreement")):
+        if re.search(pattern, text, re.I):
+            return name
+    return str(source.get("file_description") or f"{form} filing")[:120]
+
+
+def _sec_keyword_search(keyword, start_date, end_date, forms, offset=0, size=100):
+    cache_key = "kw_" + hashlib.sha1(json.dumps([keyword, start_date, end_date, forms, offset, size]).encode()).hexdigest()
+    cached = cget(cache_key, 3600)
+    if cached is not None:
+        return cached
+    ticker_map = _keyword_ticker_map()
+    if len(keyword.split()) > 1:
+        cleaned = " ".join(re.findall(r"[\w]+", keyword, re.UNICODE))
+        queries = list(dict.fromkeys([f'"{keyword}"', f'"{cleaned}"', keyword]))
+    else:
+        queries = [keyword]
+    response_data = None
+    for query in queries:
+        params = {"q": query, "dateRange": "custom", "startdt": start_date,
+                  "enddt": end_date, "from": max(0, int(offset)), "size": min(100, max(1, int(size)))}
+        if forms:
+            params["forms"] = forms
+        response = _keyword_sec_get("https://efts.sec.gov/LATEST/search-index", params=params, timeout=30)
+        response.raise_for_status()
+        response_data = response.json()
+        total = (response_data.get("hits") or {}).get("total") or 0
+        total_value = total.get("value", 0) if isinstance(total, dict) else total
+        if total_value:
+            break
+    hits = ((response_data or {}).get("hits") or {}).get("hits") or []
+    rows, seen = [], set()
+    for n, hit in enumerate(hits):
+        source = hit.get("_source") or {}
+        hit_id = str(hit.get("_id") or "")
+        accession_match = re.search(r"\d{10}-\d{2}-\d{6}", hit_id)
+        accession = accession_match.group(0) if accession_match else hit_id.split(":", 1)[0]
+        ciks = source.get("ciks") or source.get("cik") or []
+        cik_raw = ciks[0] if isinstance(ciks, list) and ciks else ciks
+        display_names = source.get("display_names") or []
+        if not cik_raw:
+            name_cik = re.search(r"\bCIK\s*0*(\d{1,10})\b", " ".join(map(str, display_names)), re.I)
+            cik_raw = name_cik.group(1) if name_cik else ""
+        try:
+            cik_padded = str(int(str(cik_raw).lstrip("0") or "0")).zfill(10)
+        except (TypeError, ValueError):
+            cik_padded = ""
+        dedup = (cik_padded, accession)
+        if dedup in seen:
+            continue
+        seen.add(dedup)
+        company = ticker_map.get(cik_padded) or {}
+        entity_name = company.get("name") or (str(display_names[0]).split("  (")[0] if display_names else "Unknown filer")
+        ticker = company.get("ticker") or ""
+        form = str(source.get("form") or source.get("form_type") or "—")
+        excerpt = _keyword_match_excerpt(hit, keyword, fetch_document=(n < 25))
+        role = _keyword_classify_role(excerpt)
+        filing_url = (f"https://www.sec.gov/Archives/edgar/data/{int(cik_padded)}/{accession.replace('-', '')}/{accession}-index.html"
+                      if cik_padded else f"https://www.sec.gov/edgar/search/#/q={quote(accession, safe='')}")
+        if ticker and role in ("Investor", "Lender", "Convertible-note holder", "Warrant holder"):
+            investor = keyword
+        else:
+            investor = "—"
+        bank = keyword if role in ("Underwriter", "Placement agent", "Investment bank", "Equity-line provider") else "—"
+        rows.append({"ticker": ticker, "company": entity_name, "headline": _keyword_headline(form, source, excerpt),
+                     "investors": investor, "bank": bank, "form": form,
+                     "share_amount": _keyword_share_amount(excerpt), "share_category": "Unverified; inspect filing",
+                     "filing_date": source.get("file_date") or source.get("display_date_filed") or "",
+                     "cik": cik_padded, "accession": accession, "filing_url": filing_url,
+                     "role": role, "excerpt": excerpt or "SEC full-text match; open the filing to inspect the surrounding context.",
+                     "verification": "Context classified from filing excerpt" if excerpt else "Unverified mention"})
+    total = (response_data.get("hits") or {}).get("total") or 0
+    total = total.get("value", 0) if isinstance(total, dict) else total
+    result = {"rows": rows, "total": int(total or 0), "from": int(offset), "size": int(size)}
+    cput(cache_key, result)
+    return result
+
+
+@app.route("/api/keyword-search", methods=["POST"])
+def api_keyword_search():
+    data = request.get_json(silent=True) or {}
+    user = str(data.get("user") or "").strip().lower()
+    token = str(data.get("token") or "").strip()
+    keyword = str(data.get("keyword") or "").strip()
+    if user not in ALLOWED_USERS or not _db_validate_session(user, token):
+        return jsonify({"error": "Session expired. Please sign in again."}), 401
+    if not keyword or len(keyword) > 120:
+        return jsonify({"error": "Enter a keyword or name up to 120 characters."}), 400
+    try:
+        start_date = dt.date.fromisoformat(str(data.get("start_date")))
+        end_date = dt.date.fromisoformat(str(data.get("end_date")))
+        if start_date > end_date or (end_date-start_date).days > 3650:
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify({"error": "Choose a valid filing date range (maximum 10 years)."}), 400
+    requested_forms = data.get("forms") or []
+    allowed_forms = set(_KW_FINANCING_FORMS.split(","))
+    forms = ",".join(form for form in requested_forms if form in allowed_forms) if isinstance(requested_forms, list) else ""
+    try:
+        result = _sec_keyword_search(keyword, start_date.isoformat(), end_date.isoformat(), forms,
+                                     offset=int(data.get("offset") or 0), size=100)
+        return jsonify(result)
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else 502
+        return jsonify({"error": f"SEC search returned HTTP {status}. Please retry shortly."}), 502
+    except Exception as exc:
+        app.logger.exception("SEC keyword search failed")
+        return jsonify({"error": f"SEC search failed: {type(exc).__name__}: {exc}"}), 502
+
+
+@app.route("/api/keyword-events")
+def api_keyword_events():
+    user = (request.args.get("user") or "").strip().lower()
+    token = (request.args.get("token") or "").strip()
+    ticker = (request.args.get("ticker") or "").strip().upper()
+    if user not in ALLOWED_USERS or not _db_validate_session(user, token):
+        return jsonify({"error": "Session expired. Please sign in again."}), 401
+    if not re.fullmatch(r"[A-Z.\-]{1,10}", ticker):
+        return jsonify({"error": "This filing has no valid public ticker to chart."}), 400
+    try:
+        start = dt.date.fromisoformat(request.args.get("start") or (dt.date.today()-dt.timedelta(days=365)).isoformat())
+        end = dt.date.fromisoformat(request.args.get("end") or dt.date.today().isoformat())
+        min_gap = max(0.0, float(request.args.get("min_gap", "10"))) / 100
+        min_rvol = max(0.0, float(request.args.get("min_rvol", "2")))
+        min_dvol = max(0.0, float(request.args.get("min_dvol", "1000000")))
+        min_volume = max(0, int(float(request.args.get("min_volume", "100000"))))
+        max_events = min(12, max(1, int(request.args.get("max_events", "5"))))
+        include_pm = request.args.get("premarket", "1") != "0"
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid historical chart filters."}), 400
+    if start > end:
+        return jsonify({"error": "Chart start date must be on or before end date."}), 400
+    try:
+        daily = load_daily(ticker)
+        split_dates = {x["date"] for x in load_splits(ticker)}
+        candidates = []
+        for i in range(1, len(daily)):
+            row, prev = daily[i], daily[i-1]
+            day = dt.date.fromisoformat(row["date"])
+            if day < start or day > end or row["date"] in split_dates or prev.get("c", 0) <= 0 or row.get("o", 0) <= 0:
+                continue
+            volume = float(row.get("v") or 0)
+            if volume < min_volume:
+                continue
+            prior = daily[max(0, i-20):i]
+            avgvol = float(np.mean([x["v"] for x in prior])) if prior else 0.0
+            gap = float(row["o"] / prev["c"] - 1)
+            rvol = volume / avgvol if avgvol > 0 else None
+            dvol = volume * float(row.get("c") or 0)
+            if dvol < min_dvol or not (gap >= min_gap or (rvol is not None and rvol >= min_rvol)):
+                continue
+            candidates.append({"index": i, "date": row["date"], "gap": gap, "rvol": rvol,
+                               "volume": volume, "dollar_volume": dvol,
+                               "score": max(gap/max(min_gap, .01), (rvol or 0)/max(min_rvol, .1)) + math.log1p(dvol/max(min_dvol, 1))})
+        candidates.sort(key=lambda x: x["date"])
+        selected = sorted(candidates, key=lambda x: x["score"], reverse=True)[:max_events]
+        selected.sort(key=lambda x: x["date"])
+        output = []
+        for candidate in selected:
+            i, row = candidate["index"], daily[candidate["index"]]
+            df = minute_df(ticker, row["date"])
+            if df is None or df.empty:
+                output.append({**{k:v for k,v in candidate.items() if k not in ("index", "score")},
+                               "error": "No intraday candles are available from Polygon for this session."})
+                continue
+            if not include_pm:
+                minute = df.index.hour*60+df.index.minute
+                df = df[minute >= RG_START]
+            if df.empty:
+                continue
+            previous_close = float(daily[i-1]["c"])
+            m = metrics(df, previous_close, True)
+            bar_minutes = df.index.hour*60+df.index.minute
+            opening_bars = df[(bar_minutes >= RG_START) & (bar_minutes < RG_START+5)]
+            opening_volume = float(opening_bars["v"].sum()) if not opening_bars.empty else None
+            opening_dollar_volume = (float((((opening_bars["h"]+opening_bars["l"]+opening_bars["c"])/3)*opening_bars["v"]).sum())
+                                     if not opening_bars.empty else None)
+            open_price, close_price = m.get("open"), m.get("close")
+            next_close = float(daily[i+1]["c"]) if i+1 < len(daily) else None
+            next_ret = next_close / float(row["c"]) - 1 if next_close and row.get("c") else None
+            event = {k:v for k,v in candidate.items() if k not in ("index", "score")}
+            event.update({"prev_close": previous_close, "premarket_high": m.get("pm_high"),
+                          "premarket_low": m.get("pm_low"), "open": open_price, "high": m.get("hod"),
+                          "low": m.get("lod"), "close": close_price, "hod_min": m.get("hod_min"),
+                          "open_to_close": (close_price/open_price-1) if close_price and open_price else None,
+                          "hod_to_close": (close_price/m["hod"]-1) if close_price and m.get("hod") else None,
+                          "premarket_volume": m.get("pm_vol"), "premarket_dollar_volume": m.get("pm_dv"),
+                          "opening_5m_volume": opening_volume, "opening_5m_dollar_volume": opening_dollar_volume,
+                          "next_session_return": next_ret,
+                          "chart": chart_pack(df, m, previous_close, dt.date.fromisoformat(row["date"]))})
+            output.append(event)
+        return jsonify({"ticker": ticker, "count": len(candidates), "shown": len(output),
+                        "events": output, "source": "Polygon daily aggregates and 1-minute aggregates"})
+    except Exception as exc:
+        app.logger.exception("Keyword event loading failed for %s", ticker)
+        return jsonify({"error": f"Market data load failed: {type(exc).__name__}: {exc}"}), 502
+
+
 _scanner_cache = {"at": 0.0, "rows": []}
 _scanner_cache_lock = threading.Lock()
 _scanner_scan_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scanner-universe")
@@ -3199,6 +3525,7 @@ canvas{display:block;width:100%}
     <div style="margin-left:auto;display:flex;align-items:center;gap:10px;font-size:13px;color:#8a8a8a">
       <button id="scanner_open_btn" style="display:none;height:36px;padding:0 14px;border:2px solid #29a8ff;background:#071a28;color:#6cc4ff;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Live gap-up scanner">🔎 Scanner</button>
       <button id="nav_multiday_btn" style="height:36px;padding:0 14px;border:2px solid #00c9a7;background:#002b24;color:#00c9a7;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Multi-day Rally & First Red Day (FRD) Structure Tool">📊 Runner Stats</button>
+      <button id="nav_keyword_btn" style="height:36px;padding:0 14px;border:2px solid #8b74ff;background:#120f24;color:#b7a8ff;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Search SEC filings by financing player">⌕ Search Keyword</button>
       <span>User: <span id="u_name" style="color:#29a8ff;font-weight:bold"></span><span id="u_badge"></span></span>
       <button id="logout_btn" style="height:34px;font-size:12px;padding:0 12px;border-color:#444">Exit</button>
     </div>
@@ -5142,6 +5469,7 @@ function openRunnerStats(){
 }
 if($('#nav_multiday_btn')) $('#nav_multiday_btn').onclick = openRunnerStats;
 if($('#open_multiday_newtab')) $('#open_multiday_newtab').onclick = openRunnerStats;
+if($('#nav_keyword_btn')) $('#nav_keyword_btn').onclick = () => window.open('/keyword-search', '_blank', 'noopener');
 let scannerTimer = null;
 let scannerBusy = false;
 let scannerAlertSession = '';
@@ -5475,6 +5803,128 @@ window.addEventListener('keydown', e => {
 
 initAuth();
 </script></body></html>"""
+
+
+KEYWORD_HTML = r"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Search Keyword · EDGAR Financing Research</title>
+<style>
+:root{color-scheme:dark;--bg:#050607;--panel:#0c0e11;--line:#252a30;--muted:#8e98a3;--blue:#60baff;--green:#47d890;--red:#ff626c;--yellow:#ffd66b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#e6e9ed;font:13px/1.45 Consolas,"SF Mono",monospace}
+header{position:sticky;top:0;z-index:5;background:#080a0d;border-bottom:1px solid var(--line);padding:10px 18px;display:flex;align-items:center;gap:14px}
+header a{color:var(--blue);text-decoration:none}header strong{color:#b7a8ff}main{padding:16px 18px 60px;max-width:1800px;margin:auto}
+.toolbar{background:#0b0d10;border:1px solid var(--line);padding:12px;display:flex;align-items:end;gap:9px;flex-wrap:wrap}
+label{display:flex;flex-direction:column;gap:4px;color:#aeb6c0;font-size:11px}input,select,button{background:#080a0d;color:#eee;border:1px solid #343a42;border-radius:2px;font:inherit;height:32px;padding:4px 8px}
+input[type=text]{width:min(420px,70vw)}input[type=date]{width:140px}select{min-width:125px}select[multiple]{height:74px}button{cursor:pointer;font-weight:bold}button:hover{border-color:var(--blue);color:var(--blue)}button.primary{background:#102033;border-color:#3285c4;color:#b5ddff}.small{height:26px;font-size:11px;padding:2px 7px}
+.filters{margin-top:8px;display:flex;gap:9px;align-items:end;flex-wrap:wrap}.status{padding:9px 2px;color:var(--muted);min-height:36px}.error{color:var(--red)}
+.tablewrap{max-height:52vh;overflow:auto;border:1px solid var(--line);background:#08090b}.tablewrap table{border-collapse:collapse;width:100%;min-width:850px;font-size:12px}th{position:sticky;top:0;background:#15181d;color:#d6dbe1;text-align:left;padding:7px 8px;border-bottom:1px solid #3a414a;cursor:pointer;white-space:nowrap}td{padding:6px 8px;border-bottom:1px solid #20242a;vertical-align:top}tbody tr:nth-child(even){background:#111317}tbody tr:hover{background:#171d25}.ticker{font-weight:bold;color:var(--blue);text-decoration:none}.deal a{color:#7cc9ff}.sub{display:block;color:#828b95;font-size:10px;margin-top:2px}.excerpt{max-width:420px;color:#adb6c0;font-size:11px}details summary{color:#8fcfff;cursor:pointer}.count{color:var(--green);font-weight:bold}
+.stock{border-top:1px solid #39414b;margin-top:18px;padding-top:10px}.stockhead{position:sticky;top:51px;z-index:2;background:#0a0c0f;border-left:3px solid #3285c4;padding:9px 10px;margin-bottom:8px}.stockhead h2{font-size:16px;margin:0;color:#d8e8f5}.evidence{font-size:11px;color:#adb5be;margin-top:5px}.evidence a{color:#69baff}.divider{border:0;border-top:1px solid #292f36;margin:8px 0}
+.event{border:1px solid #272d34;background:#090b0e;margin:8px 0 14px;padding:6px}.eventhead{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:2px 0 6px}.eventtitle{font-weight:bold;color:#d7e7f2;margin-right:auto}.eventstats{font-size:11px;color:#a9b3bd}.event select{height:25px;min-width:65px;font-size:11px;padding:2px 5px}.event button{height:25px;font-size:11px;padding:2px 7px}.event canvas,.compare canvas{width:100%;display:block;background:#050607}.compare{border:1px solid #252a30;padding:7px;margin-top:12px}.compare h3{font-size:12px;margin:0 0 6px;color:#9fd2ff}.loading{color:#82c8ff}.noevents{color:#9aa4af;padding:8px}
+@media(max-width:720px){main{padding:10px}.stockhead{top:45px}.toolbar{align-items:stretch}input[type=text]{width:100%}}
+</style></head><body>
+<header><a href="/">← Gap-Up Fade</a><strong>⌕ Search Keyword</strong><span style="margin-left:auto;color:#78838e">SEC EDGAR · financing-player research</span></header>
+<main>
+<form id="searchForm" class="toolbar">
+  <label>Player / keyword<input id="keyword" type="text" maxlength="120" placeholder="e.g. AC Sunshine, underwriter, fund name" required></label>
+  <label>Start date<input id="startDate" type="date"></label><label>End date<input id="endDate" type="date"></label>
+  <label>Filing forms (Ctrl/⌘ click multiple)<select id="forms" multiple>
+    <option selected>8-K</option><option selected>6-K</option><option selected>S-1</option><option selected>S-3</option><option selected>S-4</option><option selected>F-1</option><option selected>F-3</option><option selected>F-4</option><option selected>8-A</option><option selected>424B1</option><option selected>424B2</option><option selected>424B3</option><option selected>424B4</option><option selected>424B5</option><option selected>424B6</option><option selected>424B7</option><option selected>10-K</option><option selected>10-Q</option><option selected>20-F</option><option selected>40-F</option>
+  </select></label>
+  <button class="primary" type="submit">Search SEC</button><button id="clearBtn" type="button">Clear</button>
+  <button id="moreBtn" type="button" style="display:none">Load more</button>
+</form>
+<div class="filters">
+  <label>Filter ticker<input id="filterTicker" type="text" placeholder="All tickers" style="width:140px"></label>
+  <label>Player role<select id="filterRole"><option value="">All roles</option><option>Underwriter</option><option>Placement agent</option><option>Investment bank</option><option>Investor</option><option>Lender</option><option>Equity-line provider</option><option>Convertible-note holder</option><option>Warrant holder</option><option>Selling shareholder</option><option>Legal counsel</option><option>Auditor</option><option>Unverified mention</option></select></label>
+  <label>Chart history<select id="historyRange"><option value="365">12 months</option><option value="180">6 months</option><option value="730">24 months</option></select></label>
+  <label>Minimum gap %<input id="minGap" type="number" min="0" step="1" value="10" style="width:85px"></label>
+  <label>Minimum relative volume<input id="minRvol" type="number" min="0" step="0.5" value="2" style="width:100px"></label>
+  <label>Minimum dollar volume<input id="minDvol" type="number" min="0" step="100000" value="1000000" style="width:130px"></label>
+  <label>Min session volume<input id="minVol" type="number" min="0" step="10000" value="100000" style="width:110px"></label>
+  <label>Charts per stock<input id="maxEvents" type="number" min="1" max="12" value="5" style="width:75px"></label>
+  <label style="flex-direction:row;align-items:center;padding-bottom:7px"><input id="includePm" type="checkbox" checked style="height:auto"> Include premarket</label>
+</div>
+<div id="status" class="status">Enter a financing player's name or keyword to search full-text EDGAR filings.</div>
+<div id="resultSummary"></div><div id="tableRoot"></div><div id="stocksRoot"></div>
+<div class="compare" id="crossStockCompare"><h3>Cross-stock normalized comparison · choose event checkboxes above</h3><div class="eventstats" id="crossStockCompareStatus">Select events from multiple ticker sections to compare their price paths on the same previous-close percentage scale.</div><canvas class="crossNormalized" height="200"></canvas></div>
+</main>
+<script>
+const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const user=localStorage.getItem('gap_user')||'', token=localStorage.getItem('gap_token')||'';
+let rows=[],offset=0,total=0,sortKey='filing_date',sortDir=-1,observer=null,searchGeneration=0;
+const formDefaults=['8-K','6-K','S-1','S-3','S-4','F-1','F-3','F-4','8-A','424B1','424B2','424B3','424B4','424B5','424B6','424B7','10-K','10-Q','20-F','40-F'];
+const now=new Date(), isoDate=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+$('#endDate').value=isoDate(now);const twoYears=new Date(now);twoYears.setFullYear(twoYears.getFullYear()-2);$('#startDate').value=isoDate(twoYears);
+async function verify(){if(!user||!token){$('#status').innerHTML='<span class="error">Please sign in to the main app first, then reopen this page.</span>';return false}try{const r=await fetch('/api/auth/verify-session?user='+encodeURIComponent(user)+'&token='+encodeURIComponent(token));if(!r.ok)throw 0;return true}catch{$('#status').innerHTML='<span class="error">Your session is not valid. Return to the main app and sign in again.</span>';return false}}
+function chosenForms(){return [...$('#forms').selectedOptions].map(o=>o.value)}
+function payload(){return {user,token,keyword:$('#keyword').value.trim(),start_date:$('#startDate').value,end_date:$('#endDate').value,forms:chosenForms(),offset}}
+function setStatus(t,err=false){$('#status').innerHTML=err?`<span class="error">${esc(t)}</span>`:esc(t)}
+function buildTable(){
+ const role=$('#filterRole').value,ticker=$('#filterTicker').value.trim().toUpperCase();
+ const visible=rows.filter(r=>(!role||r.role===role)&&(!ticker||r.ticker.toUpperCase().includes(ticker)));
+ $('#resultSummary').innerHTML=rows.length?`<div class="status"><span class="count">${total.toLocaleString()}</span> SEC filing hits · ${rows.length.toLocaleString()} distinct deals loaded · ${new Set(rows.map(r=>r.ticker||r.cik)).size} companies represented</div>`:'';
+ if(!visible.length){$('#tableRoot').innerHTML=rows.length?'<div class="status">No rows match the current ticker/role filters.</div>':'';return}
+ const cols=[['ticker','Ticker'],['headline','Headline'],['investors','Investors'],['bank','Bank'],['form','Offering Type'],['share_amount','Share Amt']];
+ const sorted=[...visible].sort((a,b)=>{const av=a[sortKey]??'',bv=b[sortKey]??'';return (String(av).localeCompare(String(bv),undefined,{numeric:true,sensitivity:'base'}))*sortDir});
+ $('#tableRoot').innerHTML=`<div class="tablewrap"><table><thead><tr>${cols.map(([k,n])=>`<th data-sort="${k}">${esc(n)} ${sortKey===k?(sortDir>0?'▲':'▼'):''}</th>`).join('')}</tr></thead><tbody>${sorted.map(r=>`<tr title="${esc(r.verification)}"><td>${r.ticker?`<a class="ticker" target="_blank" rel="noopener" href="https://finance.yahoo.com/quote/${encodeURIComponent(r.ticker)}">${esc(r.ticker)}</a>`:'—'}<span class="sub">${esc(r.company)}</span></td><td class="deal"><a target="_blank" rel="noopener" href="${esc(r.filing_url)}">${esc(r.headline)}</a><span class="sub">${esc(r.filing_date||'—')} · ${esc(r.role)}</span><details><summary>Filing excerpt / source context</summary><div class="excerpt">${esc(r.excerpt)}</div><span class="sub">${esc(r.share_category)} · Accession ${esc(r.accession)}</span></details></td><td>${esc(r.investors||'—')}</td><td>${esc(r.bank||'—')}</td><td>${esc(r.form||'—')}</td><td title="${esc(r.share_category)}">${esc(r.share_amount||'—')}</td></tr>`).join('')}</tbody></table></div>`;
+ $('#tableRoot').querySelectorAll('th[data-sort]').forEach(th=>th.onclick=()=>{const k=th.dataset.sort;if(sortKey===k)sortDir*=-1;else{sortKey=k;sortDir=1}buildTable()});
+ renderStocks();
+}
+function groupCompanies(){const map=new Map();for(const r of rows){const key=r.ticker||r.cik;if(!map.has(key))map.set(key,{key,ticker:r.ticker,company:r.company,filings:[]});map.get(key).filings.push(r)}return [...map.values()]}
+function renderStocks(){
+ if(observer)observer.disconnect();const companies=groupCompanies();
+ $('#stocksRoot').innerHTML=companies.map((c,i)=>`<section class="stock" data-stock="${esc(c.key)}" data-ticker="${esc(c.ticker)}"><div class="stockhead"><h2>${c.ticker?`<a class="ticker" href="https://finance.yahoo.com/quote/${encodeURIComponent(c.ticker)}" target="_blank" rel="noopener">${esc(c.ticker)}</a> — `:''}${esc(c.company)}</h2><div class="evidence">Matching player: ${esc($('#keyword').value.trim())} · ${c.filings.length} matching filing${c.filings.length===1?'':'s'} · charts load automatically when this section scrolls into view</div>${c.filings.map(f=>`<div class="evidence">${esc(f.role)} · ${esc(f.form)} filed ${esc(f.filing_date||'—')} · <a href="${esc(f.filing_url)}" target="_blank" rel="noopener">SEC filing</a> · ${esc(f.verification)}</div>`).join('')}<div class="evidence" style="color:#7f8994">A name match does not establish financing participation; inspect excerpts and source filings. Roles are only classified when nearby filing text supports them.</div></div><div class="stockCharts"><div class="status loading">Historical gap/high-volume charts will load as this stock section enters view.</div></div></section>`).join('');
+ observer=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){observer.unobserve(entry.target);loadStockCharts(entry.target)}}),{rootMargin:'500px'});
+ $('#stocksRoot').querySelectorAll('.stock').forEach(el=>observer.observe(el));
+}
+function fmtPct(v){return v==null?'—':`${v>=0?'+':''}${(v*100).toFixed(1)}%`}function fmtNum(v){if(v==null)return'—';if(v>=1e9)return (v/1e9).toFixed(2)+'B';if(v>=1e6)return (v/1e6).toFixed(2)+'M';if(v>=1e3)return (v/1e3).toFixed(1)+'K';return Math.round(v).toLocaleString()}
+async function loadStockCharts(section){
+ const ticker=section.dataset.ticker,root=section.querySelector('.stockCharts');if(!ticker){root.innerHTML='<div class="noevents">No ticker mapping is available for this SEC filer, so historical candles cannot be requested.</div>';return}
+ root.innerHTML='<div class="status loading">Loading Polygon daily history and qualifying intraday event charts…</div>';
+ const end=isoDate(now),days=Number($('#historyRange').value),startD=new Date(end+'T12:00:00');startD.setDate(startD.getDate()-days);
+ const q=new URLSearchParams({ticker,user,token,start:isoDate(startD),end,min_gap:$('#minGap').value,min_rvol:$('#minRvol').value,min_dvol:$('#minDvol').value,min_volume:$('#minVol').value,max_events:$('#maxEvents').value,premarket:$('#includePm').checked?'1':'0'});
+ try{const res=await fetch('/api/keyword-events?'+q),data=await res.json();if(!res.ok)throw Error(data.error||'Market data request failed');
+   if(!data.events.length){root.innerHTML=`<div class="noevents">No qualifying gap-up/high-volume event found for the selected filters and date window. Data source: ${esc(data.source)}.</div>`;return}
+   renderEvents(root,data);
+ }catch(e){root.innerHTML=`<div class="noevents error">${esc(e.message)}</div>`}
+}
+function aggregate(bars,tf){const src=bars;if(tf==='1D'){if(!src.t.length)return src;const i=[...src.t.keys()];return{t:[570],o:[src.o[i[0]]],h:[Math.max(...i.map(k=>src.h[k]))],l:[Math.min(...i.map(k=>src.l[k]))],c:[src.c[i[i.length-1]]],v:[i.reduce((s,k)=>s+(src.v[k]||0),0)],vw:[src.vw[i[i.length-1]]]}}
+ const mins=tf==='1h'?60:Number(tf.replace('m',''))||2,out={t:[],o:[],h:[],l:[],c:[],v:[],vw:[]},g=new Map();for(let i=0;i<src.t.length;i++){const x=Math.floor(src.t[i]/mins)*mins;if(!g.has(x))g.set(x,[]);g.get(x).push(i)}for(const [t,idx]of g){out.t.push(t);out.o.push(src.o[idx[0]]);out.h.push(Math.max(...idx.map(i=>src.h[i])));out.l.push(Math.min(...idx.map(i=>src.l[i])));out.c.push(src.c[idx.at(-1)]);out.v.push(idx.reduce((s,i)=>s+(src.v[i]||0),0));out.vw.push(src.vw[idx.at(-1)])}return out}
+function renderEvents(root,data){
+ const events=data.events;root.innerHTML=`<div class="status">${events.length} of ${data.count} qualifying events shown · ${esc(data.source)} · RVOL uses prior 20-session average daily volume.</div><div class="compare"><h3>Normalized event comparison · selected events, % from previous close</h3><div class="eventstats">Select two or more event checkboxes below, then press Compare.</div><canvas class="normalized" height="170"></canvas></div>`+
+ events.map((e,i)=>`<article class="event" data-event="${i}"><div class="eventhead"><label style="flex-direction:row;align-items:center"><input class="compareCheck" type="checkbox" data-index="${i}" style="height:auto"> Compare</label><span class="eventtitle">${esc(data.ticker)} · ${esc(e.date)} · Gap ${fmtPct(e.gap)} · O→C ${fmtPct(e.open_to_close)} · HOD→C ${fmtPct(e.hod_to_close)}</span><button class="eventPrev" data-step="-1" title="Previous qualifying event">‹</button><button class="eventNext" data-step="1" title="Next qualifying event">›</button><select class="eventTf" aria-label="Chart timeframe"><option>1m</option><option selected>2m</option><option>5m</option><option>15m</option><option>30m</option><option>1h</option><option>1D</option></select><button class="resetZoom">Reset zoom</button><button class="fullSession">Full session</button></div><div class="eventstats">Prev close ${fmtNum(e.prev_close)} · PM high ${fmtNum(e.premarket_high)} · Open ${fmtNum(e.open)} · HOD ${fmtNum(e.high)} ${e.hod_min!=null?'at '+esc(hm(e.hod_min,e.chart.off||0))+' IST':''} · LOD ${fmtNum(e.low)} · Close ${fmtNum(e.close)} · Vol ${fmtNum(e.volume)} · RVOL ${e.rvol==null?'—':e.rvol.toFixed(1)+'x'} · $Vol ${fmtNum(e.dollar_volume)} · PM vol ${fmtNum(e.premarket_volume)} · Open 5m vol ${fmtNum(e.opening_5m_volume)} · Next session ${fmtPct(e.next_session_return)}</div>${e.error?`<div class="noevents">${esc(e.error)}</div>`:`<canvas class="priceChart" height="360" aria-label="${esc(data.ticker)} ${esc(e.date)} historical candlestick chart"></canvas>`}</article>`).join('');
+ events.forEach((e,i)=>{const card=root.querySelector(`[data-event="${i}"]`);const compareCheck=card.querySelector('.compareCheck');compareCheck._kwEvent=e;compareCheck._kwTicker=data.ticker;if(!e.error){const cv=card.querySelector('.priceChart');cv._chart=e.chart;cv._event=e;cv._timeframe='2m';drawKWChart(cv);bindKWChart(cv);}
+   card.querySelector('.eventTf').onchange=ev=>{ev.stopPropagation();if(!e.error){const cv=card.querySelector('.priceChart');cv._timeframe=ev.target.value;cv._view=null;drawKWChart(cv)}};
+   card.querySelector('.resetZoom').onclick=()=>{const cv=card.querySelector('.priceChart');if(cv){cv._view=null;drawKWChart(cv)}};
+   card.querySelector('.fullSession').onclick=()=>{const cv=card.querySelector('.priceChart');if(cv){cv._view=null;drawKWChart(cv)}};
+   card.querySelectorAll('.eventPrev,.eventNext').forEach(btn=>btn.onclick=()=>{const target=Math.max(0,Math.min(events.length-1,i+Number(btn.dataset.step)));const other=root.querySelector(`[data-event="${target}"]`);if(other)other.scrollIntoView({behavior:'smooth',block:'center'})});
+ });
+ root.querySelectorAll('.compareCheck').forEach(ch=>ch.onchange=()=>{drawNormalized(root,events);drawCrossStockNormalized()});drawNormalized(root,events);drawCrossStockNormalized();
+}
+function drawKWChart(cv){
+ const chart=cv._chart,tf=cv._timeframe||'2m',b=aggregate(chart.bars,tf);if(!b||!b.t.length)return;const dpr=devicePixelRatio||1,W=Math.max(320,cv.parentElement.clientWidth-16),H=Number(cv.getAttribute('height'))||360;cv.width=W*dpr;cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';const x=cv.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);
+ const L=58,R=14,T=12,VH=Math.round(H*.18),B=24,ph=H-T-VH-B-7,pw=W-L-R,vy=T+ph+7,vb=vy+VH,fullStart=tf==='1D'?0:240,fullEnd=tf==='1D'?1:960;let a=cv._view?cv._view[0]:fullStart,z=cv._view?cv._view[1]:fullEnd;if(tf==='1D'){a=0;z=1}const X=t=>L+pw*(t-a)/(z-a), lo=Math.min(...b.l),hi=Math.max(...b.h),pad=(hi-lo)*.06||hi*.02,y0=lo-pad,y1=hi+pad,Y=v=>T+ph*(1-(v-y0)/(y1-y0));
+ x.fillStyle='#080a0d';x.fillRect(0,0,W,H);x.strokeStyle='#252b32';x.fillStyle='#bac4cd';x.font='11px Consolas,monospace';for(let k=0;k<=5;k++){const v=y0+(y1-y0)*k/5,yy=Y(v);x.beginPath();x.moveTo(L,yy);x.lineTo(W-R,yy);x.stroke();x.fillText(v.toFixed(v<1?3:2),3,yy+4)}
+ if(tf!=='1D'){const preX=X(Math.max(a,240)),openX=X(Math.min(z,570));x.fillStyle='rgba(255,255,255,.07)';x.fillRect(preX,T,Math.max(0,openX-preX),ph+7+VH);x.fillStyle='#a0a9b1';x.fillText('PRE-MARKET',Math.max(L,preX+4),T+12);for(let m=Math.ceil(a/60)*60;m<=z;m+=60){const xx=X(m);x.strokeStyle='#1b2026';x.beginPath();x.moveTo(xx,T);x.lineTo(xx,vb);x.stroke();const local=((m+(chart.off||0))%1440+1440)%1440;x.fillStyle='#aeb7c0';x.fillText(String(Math.floor(local/60)).padStart(2,'0')+':'+String(local%60).padStart(2,'0'),xx-16,H-5)}if(a<=570&&z>=570){x.strokeStyle='#777';x.setLineDash([3,3]);x.beginPath();x.moveTo(X(570),T);x.lineTo(X(570),vb);x.stroke();x.setLineDash([])}}else{x.fillStyle='#aeb7c0';x.fillText(cv._event.date||'Daily',W/2-20,H-5)}
+ const ref=(v,color,label)=>{if(v==null||v<y0||v>y1)return;x.strokeStyle=color;x.setLineDash([4,4]);x.beginPath();x.moveTo(L,Y(v));x.lineTo(W-R,Y(v));x.stroke();x.setLineDash([]);x.fillStyle=color;x.fillText(label,W-R-70,Y(v)-3)};ref(chart.pc,'#8a939b','Prev close');ref(chart.pmh,'#ffd66b','PM high');ref(cv._event.high,'#47d890','HOD');ref(cv._event.low,'#ff626c','LOD');
+ const spacing=pw/(tf==='1D'?1:(z-a)/((tf==='1h'?60:Number(tf.replace('m','')))||2)),bw=Math.max(1.5,Math.min(spacing*.72,tf==='1D'?26:18)),maxVol=Math.max(...b.v)||1,vis=[];for(let i=0;i<b.t.length;i++)if(tf==='1D'||(b.t[i]>=a&&b.t[i]<=z))vis.push(i);
+ for(const i of vis){const t=tf==='1D'?.5:b.t[i]+(tf==='1h'?30:(Number(tf.replace('m',''))||2)/2),xx=X(t),up=b.c[i]>=b.o[i],color=up?'#47d890':'#ff626c';x.fillStyle=up?'rgba(71,216,144,.72)':'rgba(255,98,108,.72)';const volH=VH*b.v[i]/maxVol;x.fillRect(xx-bw/2,vb-volH,bw,volH);x.strokeStyle=color;x.lineWidth=1.3;x.beginPath();x.moveTo(xx,Y(b.h[i]));x.lineTo(xx,Y(b.l[i]));x.stroke();x.fillStyle=color;x.fillRect(xx-bw/2,Y(Math.max(b.o[i],b.c[i])),bw,Math.max(1.6,Math.abs(Y(b.o[i])-Y(b.c[i]))))}
+ if(chart.bars.vw){x.strokeStyle='#55bfff';x.lineWidth=1.5;x.beginPath();let on=false;for(let i=0;i<chart.bars.t.length;i++){const t=chart.bars.t[i],v=chart.bars.vw[i];if(v==null||t<a||t>z){on=false;continue}const xx=X(t+(tf==='1h'?30:(Number(tf.replace('m',''))||2)/2)),yy=Y(v);if(!on){x.moveTo(xx,yy);on=true}else x.lineTo(xx,yy)}x.stroke();x.lineWidth=1}
+ x.fillStyle='#9ba5af';x.fillText('Volume',L+3,vy+12);if(cv._hover){const i=vis.reduce((best,k)=>Math.abs(X(tf==='1D'?.5:b.t[k])-cv._hover.x)<Math.abs(X(tf==='1D'?.5:b.t[best])-cv._hover.x)?k:best,vis[0]);if(i!=null){const xx=X(tf==='1D'?.5:b.t[i]+(Number(tf.replace('m',''))||2)/2);x.strokeStyle='#d8e2eb';x.setLineDash([3,3]);x.beginPath();x.moveTo(xx,T);x.lineTo(xx,vb);x.stroke();x.setLineDash([]);x.fillStyle='#e6edf3';x.fillRect(L+6,T+5,230,52);x.fillStyle='#080a0d';x.fillText(`O ${fmtNum(b.o[i])}  H ${fmtNum(b.h[i])}  L ${fmtNum(b.l[i])}  C ${fmtNum(b.c[i])}`,L+12,T+20);x.fillText(`Vol ${fmtNum(b.v[i])} · ${tf==='1D'?cv._event.date:hm(b.t[i],chart.off||0)+' IST'}`,L+12,T+39)}}
+}
+function hm(m,off){m=((m+(off||0))%1440+1440)%1440;return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0')}
+function bindKWChart(cv){if(cv._bound)return;cv._bound=true;cv.addEventListener('mousemove',e=>{const r=cv.getBoundingClientRect(),xx=e.clientX-r.left;if(cv._drag){const dx=(xx-cv._drag.x)/(cv.clientWidth-72)*(cv._drag.end-cv._drag.start);cv._view=[cv._drag.start-dx,cv._drag.end-dx]}else cv._hover={x:xx};drawKWChart(cv)});cv.addEventListener('mouseleave',()=>{cv._hover=null;cv._drag=null;drawKWChart(cv)});cv.addEventListener('mousedown',e=>{if(cv._timeframe==='1D')return;cv._drag={x:e.offsetX,start:(cv._view||[240,960])[0],end:(cv._view||[240,960])[1]}});window.addEventListener('mouseup',()=>{if(cv._drag){cv._drag=null}});cv.addEventListener('wheel',e=>{if(cv._timeframe==='1D')return;e.preventDefault();const view=cv._view||[240,960],factor=e.deltaY<0?.8:1.25,span=(view[1]-view[0])*factor,rect=cv.getBoundingClientRect(),ratio=(e.clientX-rect.left-58)/(rect.width-72),center=view[0]+(view[1]-view[0])*ratio;cv._view=[Math.max(240,center-span*ratio),Math.min(960,center+span*(1-ratio))];if(cv._view[1]-cv._view[0]<10)cv._view=[center-5,center+5];drawKWChart(cv)},{passive:false})}
+function drawNormalized(root,events){const chosen=[...root.querySelectorAll('.compareCheck:checked')].map(c=>events[Number(c.dataset.index)]).filter(e=>e.chart);const cv=root.querySelector('.normalized');if(!cv)return;const dpr=devicePixelRatio||1,W=Math.max(300,cv.parentElement.clientWidth-18),H=170;cv.width=W*dpr;cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';const x=cv.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle='#050607';x.fillRect(0,0,W,H);if(chosen.length<2){x.fillStyle='#8e98a3';x.fillText('Select at least two historical events below to compare normalized session paths.',12,25);return}const L=42,R=8,T=10,B=20,pw=W-L-R,ph=H-T-B;let vals=[];for(const e of chosen){const b=e.chart.bars;vals.push(b.c.map(v=>(v/e.prev_close-1)*100))}const all=vals.flat(),lo=Math.min(-5,...all),hi=Math.max(5,...all),Y=v=>T+ph*(1-(v-lo)/(hi-lo));x.strokeStyle='#2b3239';x.fillStyle='#9aa4ae';for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,yy=Y(v);x.beginPath();x.moveTo(L,yy);x.lineTo(W-R,yy);x.stroke();x.fillText(v.toFixed(0)+'%',2,yy+3)}const colors=['#55bfff','#ffc857','#57d996','#ee7db4','#b39cff','#ff8e66'];chosen.forEach((e,j)=>{const bars=e.chart.bars,series=vals[j];x.strokeStyle=colors[j%colors.length];x.beginPath();series.forEach((v,i)=>{const xx=L+pw*(bars.t[i]-240)/720,yy=Y(v);i?x.lineTo(xx,yy):x.moveTo(xx,yy)});x.stroke();x.fillStyle=colors[j%colors.length];x.fillText(e.date,L+5+j*100,12)});}
+function drawCrossStockNormalized(){const checks=[...document.querySelectorAll('#stocksRoot .compareCheck:checked')],chosen=checks.map(c=>({...c._kwEvent,compareTicker:c._kwTicker})).filter(e=>e.chart);const cv=$('.crossNormalized');if(!cv)return;const dpr=devicePixelRatio||1,W=Math.max(320,cv.parentElement.clientWidth-18),H=200;cv.width=W*dpr;cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';const x=cv.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle='#050607';x.fillRect(0,0,W,H);$('#crossStockCompareStatus').textContent=chosen.length<2?'Select events from multiple ticker sections to compare their price paths on the same previous-close percentage scale.':`${chosen.length} selected events · normalized from previous regular-session close.`;if(chosen.length<2){x.fillStyle='#8e98a3';x.fillText('Select at least two charts above.',12,25);return}const L=42,R=8,T=25,B=22,pw=W-L-R,ph=H-T-B,series=chosen.map(e=>e.chart.bars.c.map(v=>(v/e.prev_close-1)*100)),all=series.flat(),lo=Math.min(-5,...all),hi=Math.max(5,...all),Y=v=>T+ph*(1-(v-lo)/(hi-lo));x.strokeStyle='#2b3239';x.fillStyle='#9aa4ae';for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,yy=Y(v);x.beginPath();x.moveTo(L,yy);x.lineTo(W-R,yy);x.stroke();x.fillText(v.toFixed(0)+'%',2,yy+3)}const colors=['#55bfff','#ffc857','#57d996','#ee7db4','#b39cff','#ff8e66','#ff7373','#9ae66e'];chosen.forEach((e,j)=>{const bars=e.chart.bars;x.strokeStyle=colors[j%colors.length];x.beginPath();series[j].forEach((v,i)=>{const xx=L+pw*(bars.t[i]-240)/720,yy=Y(v);i?x.lineTo(xx,yy):x.moveTo(xx,yy)});x.stroke();x.fillStyle=colors[j%colors.length];x.fillText(`${e.compareTicker} ${e.date}`,L+(j%4)*(pw/4),12+Math.floor(j/4)*11)});}
+async function search(reset=true){if(!await verify())return;if(reset){rows=[];offset=0;$('#tableRoot').innerHTML='';$('#stocksRoot').innerHTML=''}const gen=++searchGeneration;$('#moreBtn').disabled=true;$('#moreBtn').textContent='Searching…';setStatus('Searching EDGAR full text; inspecting filing excerpts…');try{const body=payload();const res=await fetch('/api/keyword-search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await res.json();if(gen!==searchGeneration)return;if(!res.ok)throw Error(data.error||'SEC search failed');rows=reset?data.rows:rows.concat(data.rows);offset=data.from+data.size;total=data.total;setStatus(`Search complete: ${data.rows.length} filing matches returned on this page.`);buildTable();$('#moreBtn').style.display=offset<total?'inline-block':'none';$('#moreBtn').disabled=false;$('#moreBtn').textContent='Load more';}catch(e){if(gen===searchGeneration){setStatus(e.message,true);$('#moreBtn').disabled=false;$('#moreBtn').textContent='Load more'}}}
+$('#searchForm').onsubmit=e=>{e.preventDefault();search(true)};$('#moreBtn').onclick=()=>search(false);$('#filterRole').onchange=buildTable;$('#filterTicker').oninput=buildTable;
+$('#clearBtn').onclick=()=>{searchGeneration++;rows=[];offset=0;total=0;$('#keyword').value='';$('#filterTicker').value='';$('#filterRole').value='';$('#tableRoot').innerHTML='';$('#stocksRoot').innerHTML='';$('#resultSummary').innerHTML='';$('#moreBtn').style.display='none';$('#status').textContent='Enter a financing player\'s name or keyword to search full-text EDGAR filings.';$('#startDate').value=isoDate(twoYears);$('#endDate').value=isoDate(now);[...$('#forms').options].forEach(o=>o.selected=formDefaults.includes(o.value))};
+$('#keyword').addEventListener('keydown',e=>{if(e.key==='Escape')$('#clearBtn').click()});
+</script></body></html>"""
+
+
+@app.route("/keyword-search")
+def keyword_search_page():
+    return Response(KEYWORD_HTML, mimetype="text/html")
 
 # ----------------------------------------------------------------------------- runner_stats integration
 # Load runner_stats.py from the same directory so Multiday Stats runs inside
