@@ -951,6 +951,7 @@ h2{font-size:12px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;ma
   <button id="csvCreate">Create CSV</button>
   <button id="csvAppend" disabled>Append current setup</button>
   <button id="csvDownload" disabled>Download CSV</button>
+  <button id="csvDelete" disabled style="color:var(--r);border-color:var(--r)">Delete CSV</button>
   <span id="csvState" class="csvState">Loading your saved CSVs…</span>
   <span class="csvHint">Each row contains only the requested rally and FRD summary fields, with one dollar-move column for each manually drawn leg. Your CSV autosaves privately to your account.</span>
 </div>
@@ -1253,7 +1254,7 @@ function renderCsvWorkspace(){
   csvCollections.forEach(c=>select.add(new Option(c.name+' ('+(c.rows?.length||0)+')',c.id)));
   if(!csvCollections.some(c=>c.id===selectedCsvId))selectedCsvId=csvCollections[0]?.id||'';
   select.value=selectedCsvId;const hasSelection=!!csvCollections.find(c=>c.id===selectedCsvId);
-  $('csvDownload').disabled=!hasSelection;$('csvAppend').disabled=!hasSelection||!currentCsvSetup();writeLocalCsvWorkspace();
+  $('csvDownload').disabled=!hasSelection;$('csvDelete').disabled=!hasSelection;$('csvAppend').disabled=!hasSelection||!currentCsvSetup();writeLocalCsvWorkspace();
 }
 async function loadCsvWorkspace(){
   const local=readLocalCsvWorkspace();csvCollections=Array.isArray(local.collections)?local.collections:[];selectedCsvId=local.selected||'';renderCsvWorkspace();
@@ -1313,6 +1314,11 @@ function csvSetupRow(){
   return row;
 }
 function csvCell(value){const text=String(value??'');return /[",\r\n]/.test(text)?'"'+text.replace(/"/g,'""')+'"':text}
+function csvRowKey(row){
+  const ticker=String(row?.Ticker||'').trim().toUpperCase();
+  const start=String(row?.['Rally Start Date']||row?.['Rally start input']||'').trim();
+  return ticker&&start?ticker+'|'+start:'';
+}
 function downloadSelectedCsv(){
   const file=selectedCsv();if(!file)return;
   const columns=[...(file.columns||[])];(file.rows||[]).forEach(row=>Object.keys(row).forEach(key=>{if(!columns.includes(key))columns.push(key)}));
@@ -1329,9 +1335,18 @@ $('csvCreate').onclick=async()=>{
 };
 $('csvAppend').onclick=async()=>{
   const file=selectedCsv(),row=csvSetupRow();if(!file||!row){csvState('Load a setup and select a CSV first',true);return}
-  Object.keys(row).forEach(key=>{if(!file.columns.includes(key))file.columns.push(key)});file.rows.push(row);renderCsvWorkspace();await saveCsvWorkspace();
+  const key=csvRowKey(row),existingIndex=key?file.rows.findIndex(existing=>csvRowKey(existing)===key):-1;
+  if(existingIndex>=0)file.rows[existingIndex]=row;else file.rows.push(row);
+  file.columns=[...new Set(file.rows.flatMap(existing=>Object.keys(existing)))];renderCsvWorkspace();await saveCsvWorkspace();
+  csvState(existingIndex>=0?'Existing ticker and rally-start row replaced':'Setup appended as a new ticker and rally-start row');
 };
 $('csvDownload').onclick=downloadSelectedCsv;
+$('csvDelete').onclick=async()=>{
+  const file=selectedCsv();if(!file)return;
+  if(!confirm('Delete the CSV "'+file.name+'" and all rows in it? This cannot be undone.'))return;
+  csvCollections=csvCollections.filter(item=>item.id!==file.id);selectedCsvId=csvCollections[0]?.id||'';
+  renderCsvWorkspace();await saveCsvWorkspace();csvState('Deleted CSV "'+file.name+'"');
+};
 ['t', 's', 'f', 'fl'].forEach(id => {
   const el = $(id);
   if(el) el.addEventListener('keydown', e => { if(e.key === 'Enter') run(false); });
