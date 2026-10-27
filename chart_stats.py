@@ -6564,19 +6564,15 @@ function buildTable(){
 }
 function groupCompanies(){const map=new Map();for(const r of rows){const key=r.ticker||r.cik;if(!map.has(key))map.set(key,{key,ticker:r.ticker,company:r.company,filings:[]});map.get(key).filings.push(r)}return [...map.values()]}
 async function renderStocks(companies){
- const scanId=++eventScreenGeneration;if(observer)observer.disconnect();qualifiedTickers=new Set();kwEventCache.clear();$('#stocksRoot').innerHTML='';let scanned=0;
+ const scanId=++eventScreenGeneration;if(observer)observer.disconnect();qualifiedTickers=new Set();kwEventCache.clear();$('#stocksRoot').innerHTML='';$('#tableRoot').innerHTML='<div class="tickerIndex"></div>';let scanned=0,shown=new Set();
+ observer=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){observer.unobserve(entry.target);loadStockCharts(entry.target)}}),{rootMargin:'350px'});
+ const appendQualified=()=>{for(const c of companies){if(!qualifiedTickers.has(c.ticker)||shown.has(c.ticker))continue;shown.add(c.ticker);const i=shown.size-1;$('#tableRoot .tickerIndex').insertAdjacentHTML('beforeend',`<a href="#stock-${i}">${esc(c.ticker)}</a>`);const holder=document.createElement('div');holder.innerHTML=`<section class="stock" id="stock-${i}" data-stock="${esc(c.key)}" data-ticker="${esc(c.ticker)}"><div class="stockhead"><h2><a class="ticker" href="https://finance.yahoo.com/quote/${encodeURIComponent(c.ticker)}" target="_blank" rel="noopener">${esc(c.ticker)}</a></h2><div class="evidence">${c.filings.length} keyword-matched filing${c.filings.length===1?'':'s'} · charts load as you scroll</div></div><div class="stockCharts"></div></section>`;const section=holder.firstElementChild;section._filings=c.filings;section._kwEvents=kwEventCache.get(c.ticker)||[];$('#stocksRoot').appendChild(section);observer.observe(section)}};
  for(let i=0;i<companies.length;i+=3){const batch=companies.slice(i,i+3);const results=await Promise.allSettled(batch.map(c=>fetchKeywordEvents(c.ticker,true)));
   if(scanId!==eventScreenGeneration)return;
-  results.forEach((result,j)=>{scanned++;if(result.status==='fulfilled'&&result.value.length)qualifiedTickers.add(batch[j].ticker)});
+  results.forEach((result,j)=>{scanned++;if(result.status==='fulfilled'&&result.value.length)qualifiedTickers.add(batch[j].ticker)});appendQualified();
   $('#resultSummary').innerHTML=`<div class="status">Screened ${scanned}/${companies.length} tickers · <span class="count">${qualifiedTickers.size} qualify</span> · premarket high >70% and session dollar volume ≥$50M.</div>`;
  }
- const eligible=companies.filter(c=>qualifiedTickers.has(c.ticker));
- if(!eligible.length){$('#stocksRoot').innerHTML='<div class="status">No filing-linked tickers had a qualifying event in this date range.</div>';return}
- $('#tableRoot').innerHTML=`<div class="tickerIndex">${eligible.map((c,i)=>`<a href="#stock-${i}">${esc(c.ticker)}</a>`).join('')}</div>`;
- $('#stocksRoot').innerHTML=eligible.map((c,i)=>`<section class="stock" id="stock-${i}" data-stock="${esc(c.key)}" data-ticker="${esc(c.ticker)}"><div class="stockhead"><h2><a class="ticker" href="https://finance.yahoo.com/quote/${encodeURIComponent(c.ticker)}" target="_blank" rel="noopener">${esc(c.ticker)}</a></h2><div class="evidence">${c.filings.length} keyword-matched filing${c.filings.length===1?'':'s'} · charts load as you scroll</div></div><div class="stockCharts"></div></section>`).join('');
- $('#stocksRoot').querySelectorAll('.stock').forEach((el,i)=>{el._filings=eligible[i].filings;el._kwEvents=kwEventCache.get(eligible[i].ticker)||[];});
- observer=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){observer.unobserve(entry.target);loadStockCharts(entry.target)}}),{rootMargin:'100px'});
- $('#stocksRoot').querySelectorAll('.stock').forEach(el=>observer.observe(el));
+ if(!shown.size)$('#stocksRoot').innerHTML='<div class="status">No filing-linked tickers had a qualifying event in this date range.</div>';
 }
 function fmtPct(v){return v==null?'—':`${v>=0?'+':''}${(v*100).toFixed(1)}%`}function fmtNum(v){if(v==null)return'—';if(v>=1e9)return (v/1e9).toFixed(2)+'B';if(v>=1e6)return (v/1e6).toFixed(2)+'M';if(v>=1e3)return (v/1e3).toFixed(1)+'K';return Math.round(v).toLocaleString()}
 async function loadStockCharts(section){
