@@ -2209,6 +2209,15 @@ def _scanner_session_date(now=None):
     return local.date().isoformat()
 
 
+def _scanner_is_premarket_window(now=None):
+    """Use the premarket mover source from the user's 13:30 IST reset to the open."""
+    now = now or dt.datetime.now(IST)
+    local = now.astimezone(IST)
+    eastern = now.astimezone(ET)
+    return (local.time() >= dt.time(13, 30) and
+            eastern.weekday() < 5 and eastern.time() < dt.time(9, 30))
+
+
 def _yahoo_scanner_rows():
     """Fetch Yahoo's free gainers screener and apply the scanner's local filters."""
     query = yf.EquityQuery("and", [
@@ -2225,16 +2234,28 @@ def _yahoo_scanner_rows():
         quotes = result.get("quotes") or []
         for quote in quotes:
             state = str(quote.get("marketState") or "").upper()
-            if not state:
-                et_now = dt.datetime.now(ET).time()
-                if dt.time(4, 0) <= et_now < dt.time(9, 30) and quote.get("preMarketPrice"):
-                    state = "PRE"
-                elif dt.time(16, 0) <= et_now < dt.time(20, 0) and quote.get("postMarketPrice"):
-                    state = "POST"
-            if state in ("PRE", "PREPRE"):
-                price = quote.get("preMarketPrice") or quote.get("regularMarketPrice") or quote.get("intradayprice")
-                volume = quote.get("preMarketVolume") or quote.get("dayvolume") or quote.get("regularMarketVolume")
-            elif state in ("POST", "POSTPOST"):
+            et_now = dt.datetime.now(ET)
+            premarket = (state in ("PRE", "PREPRE") or
+                         dt.time(4, 0) <= et_now.time() < dt.time(9, 30))
+            postmarket = (not premarket and
+                          (state in ("POST", "POSTPOST") or
+                           dt.time(16, 0) <= et_now.time() < dt.time(20, 0)))
+            if premarket:
+                # The screener's percentchange/dayvolume fields describe the
+                # regular session and can belong to yesterday. Require a
+                # timestamped quote and volume from today's premarket instead.
+                price = quote.get("preMarketPrice")
+                volume = quote.get("preMarketVolume")
+                quote_time = quote.get("preMarketTime")
+                if not price or not volume or not quote_time:
+                    continue
+                try:
+                    quote_date = dt.datetime.fromtimestamp(float(quote_time), ET).date()
+                except (TypeError, ValueError, OSError, OverflowError):
+                    continue
+                if quote_date != et_now.date():
+                    continue
+            elif postmarket:
                 price = quote.get("postMarketPrice") or quote.get("regularMarketPrice") or quote.get("intradayprice")
                 volume = quote.get("postMarketVolume") or quote.get("regularMarketVolume") or quote.get("dayvolume")
             else:
@@ -2267,6 +2288,59 @@ def _yahoo_scanner_rows():
         total = result.get("total")
         if not quotes or len(quotes) < page_size or (total is not None and offset >= int(total)):
             break
+
+    rows.sort(key=lambda row: (-row["gap_pct"], -row["dollar_volume"], row["ticker"]))
+    return rows
+
+
+def _tradingview_premarket_rows():
+    """Discover today's premarket gappers from TradingView's extended-hours screener."""
+    columns = ["name", "description", "premarket_close", "premarket_change",
+               "premarket_change_abs", "premarket_volume"]
+    payload = {
+        "filter": [{"left": "premarket_change", "operation": "greater", "right": 0}],
+        "options": {"lang": "en"},
+        "markets": ["america"],
+        "symbols": {"query": {"types": ["stock"]}, "tickers": []},
+        "columns": columns,
+        "sort": {"sortBy": "premarket_change", "sortOrder": "desc"},
+        "range": [0, 1000],
+    }
+    response = requests.post("https://scanner.tradingview.com/america/scan",
+                             json=payload, timeout=12,
+                             headers={"User-Agent": "Mozilla/5.0", "Origin": "https://www.tradingview.com",
+                                      "Referer": "https://www.tradingview.com/"})
+    response.raise_for_status()
+    data = response.json().get("data") or []
+
+    rows = []
+    for item in data:
+        values = item.get("d") or []
+        if len(values) < len(columns):
+            continue
+        symbol, company, price, gap_pct, change_abs, volume = values
+        try:
+            price = float(price)
+            gap_pct = float(gap_pct)
+            volume = float(volume)
+            change_abs = float(change_abs) if change_abs is not None else None
+        except (TypeError, ValueError):
+            continue
+        if price <= 0 or gap_pct <= 0 or volume <= 0:
+            continue
+        previous_close = price - change_abs if change_abs is not None else price / (1 + gap_pct / 100)
+        if previous_close <= 0:
+            continue
+        # Use the absolute change when supplied so the displayed gap is tied
+        # directly to the premarket price and previous regular-session close.
+        gap_pct = (price / previous_close - 1) * 100
+        dollar_volume = price * volume
+        ticker = str(item.get("s") or "").rsplit(":", 1)[-1].upper()
+        if ticker and 0.40 < price < 20 and gap_pct > 40 and dollar_volume >= 500_000:
+            rows.append({"ticker": ticker, "company": str(company or ""),
+                         "price": round(price, 4), "previous_close": round(previous_close, 4),
+                         "gap_pct": round(gap_pct, 2), "dollar_volume": round(dollar_volume),
+                         "volume": round(volume)})
 
     rows.sort(key=lambda row: (-row["gap_pct"], -row["dollar_volume"], row["ticker"]))
     return rows
@@ -2518,7 +2592,8 @@ def scanner_market_scan():
         if (_scanner_cache.get("session_date") != session_date or
                 now - _scanner_cache["at"] >= 25):
             try:
-                rows = _yahoo_scanner_rows()
+                rows = (_tradingview_premarket_rows() if _scanner_is_premarket_window()
+                        else _yahoo_scanner_rows())
                 _scanner_cache.update(at=now, rows=rows, session_date=session_date)
             except Exception as exc:
                 return jsonify({"error": str(exc)}), 502
