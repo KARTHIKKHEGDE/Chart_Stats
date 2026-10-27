@@ -2197,8 +2197,13 @@ _scanner_cache = {"at": 0.0, "rows": []}
 _scanner_cache_lock = threading.Lock()
 _scanner_scan_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scanner-universe")
 _scanner_scan_state = {"running": False, "session_date": "", "done": 0, "total": 0,
-                       "error": "", "completed_at": 0.0}
+                       "symbols_done": 0, "symbols_total": 0, "universe_total": 0,
+                       "phase": "", "error": "", "completed_at": 0.0}
 _SCANNER_RESCAN_SECONDS = 60
+
+
+def _scanner_log(message):
+    print(f"[gap-scanner] {message}", flush=True)
 
 
 def _scanner_session_date(now=None):
@@ -2220,6 +2225,28 @@ def _scanner_is_premarket_window(now=None):
     eastern = now.astimezone(ET)
     return (local.time() >= dt.time(13, 30) and
             eastern.weekday() < 5 and eastern.time() < dt.time(9, 30))
+
+
+def _load_tc2000_scanner_symbols():
+    """Load the exact US Common Stocks universe exported from the user's TC2000 list."""
+    path = ROOT_DIR / "us_common_stocks.txt"
+    if not path.is_file():
+        raise FileNotFoundError(f"TC2000 universe file is missing: {path}")
+    symbols = []
+    seen = set()
+    with path.open("r", encoding="utf-8-sig") as source:
+        for line in source:
+            symbol = line.strip().upper()
+            if not symbol or symbol.startswith("#") or symbol == "SYMBOLS FROM TC2000":
+                continue
+            if not re.fullmatch(r"[A-Z][A-Z0-9.-]*", symbol):
+                continue
+            if symbol not in seen:
+                symbols.append(symbol)
+                seen.add(symbol)
+    if not symbols:
+        raise RuntimeError(f"TC2000 universe file contains no symbols: {path}")
+    return symbols
 
 
 def _yahoo_scanner_rows():
@@ -2298,73 +2325,112 @@ def _yahoo_scanner_rows():
 
 
 def _yahoo_all_premarket_rows(session_date):
-    """Scan every US screener page using Yahoo's current premarket quote fields."""
-    query = yf.EquityQuery("eq", ["region", "us"])
-    page_size = 250
-    first = yf.screen(query, offset=0, size=page_size, sortField="ticker", sortAsc=True)
-    pages = [(0, first)]
-    total = int(first.get("total") or 0)
-    offsets = list(range(page_size, min(total, 50000), page_size))
+    """Check today's premarket bars for every symbol in the supplied TC2000 universe."""
+    scan_started = time.monotonic()
+    symbols = _load_tc2000_scanner_symbols()
+    total = len(symbols)
     with _scanner_cache_lock:
-        _scanner_scan_state.update(done=1, total=1 + len(offsets), error="")
+        _scanner_scan_state.update(done=0, total=1, symbols_done=0,
+                                   symbols_total=total, universe_total=total,
+                                   phase="history", error="")
+    _scanner_log(f"TC2000 US Common Stocks scan started for {session_date}; "
+                 f"universe contains {total} unique symbols; testing all symbols via Yahoo 1m history")
 
-    def load_page(offset):
-        return offset, yf.screen(query, offset=offset, size=page_size,
-                                 sortField="ticker", sortAsc=True)
-
-    if total:
-        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="scanner-yahoo-page") as pool:
-            futures = [pool.submit(load_page, offset) for offset in offsets]
-            for future in as_completed(futures):
-                pages.append(future.result())
-                with _scanner_cache_lock:
-                    _scanner_scan_state["done"] += 1
-    else:
-        offset = page_size
-        while offset < 50000:
-            page = yf.screen(query, offset=offset, size=page_size,
-                             sortField="ticker", sortAsc=True)
-            page_quotes = page.get("quotes") or []
-            if not page_quotes:
-                break
-            pages.append((offset, page))
-            with _scanner_cache_lock:
-                _scanner_scan_state.update(done=len(pages), total=len(pages))
-            if len(page_quotes) < page_size:
-                break
-            offset += len(page_quotes)
-
-    quotes = []
-    for _, page in sorted(pages, key=lambda pair: pair[0]):
-        quotes.extend(page.get("quotes") or [])
-    if not quotes:
-        raise RuntimeError("Yahoo returned no US ticker quotes")
+    with _scanner_cache_lock:
+        _scanner_scan_state["done"] = 0
 
     today = dt.date.fromisoformat(session_date)
-    rows = []
-    for quote in quotes:
-        price = quote.get("preMarketPrice")
-        volume = quote.get("preMarketVolume")
-        previous_close = quote.get("regularMarketPreviousClose") or quote.get("previousClose")
-        quote_time = quote.get("preMarketTime")
+    rows_by_ticker = {}
+    counts = {"history_with_bars": 0, "history_without_today": 0,
+              "history_errors": 0, "history_not_gap": 0, "history_error_types": {}}
+
+    def scan_symbol(ticker):
         try:
-            price, volume, previous_close = float(price), float(volume), float(previous_close)
-            timestamp = float(quote_time)
-            if timestamp > 10_000_000_000:
-                timestamp /= 1000
-            quote_date = dt.datetime.fromtimestamp(timestamp, ET).date()
-        except (TypeError, ValueError, OSError, OverflowError):
-            continue
-        if quote_date != today or price <= 0 or previous_close <= 0 or volume <= 0:
-            continue
-        gap_pct = (price / previous_close - 1) * 100
-        dollar_volume = price * volume
-        ticker = str(quote.get("symbol") or "").upper()
-        if ticker and 0.40 < price < 20 and gap_pct > 40 and dollar_volume >= 500_000:
-            rows.append({"ticker": ticker, "price": round(price, 4),
-                         "previous_close": round(previous_close, 4), "gap_pct": round(gap_pct, 2),
-                         "dollar_volume": round(dollar_volume), "volume": round(volume)})
-    rows.sort(key=lambda row: (-row["gap_pct"], -row["dollar_volume"], row["ticker"]))
+            yahoo_ticker = ticker.replace(".", "-")
+            bars = yf.Ticker(yahoo_ticker).history(period="2d", interval="1m", prepost=True,
+                                             auto_adjust=False, timeout=10)
+            if bars is None or bars.empty or "Close" not in bars or "Volume" not in bars or bars.index.tz is None:
+                return ticker, None, "history_without_today"
+            eastern_index = bars.index.tz_convert(ET)
+            current_mask = eastern_index.date == today
+            current = bars.loc[current_mask]
+            if current.empty:
+                return ticker, None, "history_without_today"
+            times = current.index.tz_convert(ET).time
+            current = current.loc[[dt.time(4, 0) <= t < dt.time(9, 30) for t in times]]
+            if current.empty:
+                return ticker, None, "history_without_today"
+            previous_mask = [(d < today and dt.time(9, 30) <= t < dt.time(16, 0))
+                             for d, t in zip(eastern_index.date, eastern_index.time)]
+            previous = bars.loc[previous_mask]
+            previous_close = float(previous["Close"].iloc[-1]) if not previous.empty else None
+            if not previous_close or previous_close <= 0:
+                return ticker, None, "history_without_today"
+            price = float(current["Close"].iloc[-1])
+            volume = float(current["Volume"].fillna(0).clip(lower=0).sum())
+            if price <= 0 or volume <= 0:
+                return ticker, None, "history_without_today"
+            gap_pct = (price / previous_close - 1) * 100
+            dollar_volume = price * volume
+            if 0.40 < price < 20 and gap_pct > 40 and dollar_volume >= 500_000:
+                return ticker, {"ticker": ticker, "price": round(price, 4),
+                                "previous_close": round(previous_close, 4),
+                                "gap_pct": round(gap_pct, 2), "dollar_volume": round(dollar_volume),
+                                "volume": round(volume)}, "match"
+            return ticker, None, "history_not_gap"
+        except Exception as exc:
+            return ticker, None, ("history_error", type(exc).__name__)
+
+    batch_size = 240
+    workers = 6
+    for start in range(0, total, batch_size):
+        batch = symbols[start:start + batch_size]
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="scanner-yahoo-history") as pool:
+            futures = [pool.submit(scan_symbol, ticker) for ticker in batch]
+            for future in as_completed(futures):
+                ticker, row, outcome = future.result()
+                if row:
+                    rows_by_ticker[ticker] = row
+                elif isinstance(outcome, tuple) and outcome[0] == "history_error":
+                    counts["history_errors"] += 1
+                    error_type = outcome[1]
+                    counts["history_error_types"][error_type] = counts["history_error_types"].get(error_type, 0) + 1
+                elif outcome == "history_without_today":
+                    counts["history_without_today"] += 1
+                else:
+                    counts["history_not_gap"] += 1
+                counts["history_with_bars"] += outcome == "history_not_gap" or outcome == "match"
+                with _scanner_cache_lock:
+                    _scanner_scan_state["symbols_done"] += 1
+                    done = _scanner_scan_state["symbols_done"]
+                if done % 250 == 0 or done == total:
+                    _scanner_log(f"Yahoo history tested {done}/{total} TC2000 tickers; "
+                                 f"current gap matches={len(rows_by_ticker)}; "
+                                 f"request errors={counts['history_errors']}")
+            with _scanner_cache_lock:
+                if (_scanner_cache.get("session_date") == session_date and
+                        _scanner_cache.get("source") == "premarket"):
+                    partial = sorted(rows_by_ticker.values(),
+                                     key=lambda row: (-row["gap_pct"], -row["dollar_volume"], row["ticker"]))
+                    _scanner_cache.update(at=time.time(), rows=partial)
+
+    rows = sorted(rows_by_ticker.values(),
+                  key=lambda row: (-row["gap_pct"], -row["dollar_volume"], row["ticker"]))
+    _scanner_log(f"TC2000 Yahoo scan finished in {time.monotonic() - scan_started:.1f}s; "
+                 f"universe={total}, histories tested={_scanner_scan_state['symbols_done']}, "
+                 f"histories with today's PM bars={counts['history_with_bars']}, "
+                 f"no current bars={counts['history_without_today']}, "
+                 f"request errors={counts['history_errors']} {counts['history_error_types']}, "
+                 f"nonmatching quotes={counts['history_not_gap']}, matches={len(rows)}")
+    with _scanner_cache_lock:
+        if counts["history_errors"]:
+            _scanner_scan_state["error"] = (f"Yahoo history failed for {counts['history_errors']} of "
+                                             f"{total} TC2000 symbols; see local [gap-scanner] log")
+        _scanner_scan_state["done"] = 1
+    for row in rows:
+        _scanner_log(f"MATCH {row['ticker']} gap=+{row['gap_pct']:.1f}% "
+                     f"price=${row['price']:.2f} volume={row['volume']:,} "
+                     f"dollar_volume=${row['dollar_volume']:,}")
     return rows
 
 
@@ -2379,11 +2445,17 @@ def _refresh_yahoo_premarket_universe(session_date):
     except Exception as exc:
         with _scanner_cache_lock:
             _scanner_scan_state["error"] = str(exc)
+        _scanner_log(f"Yahoo premarket scan failed for {session_date}: {type(exc).__name__}: {exc}")
     finally:
         with _scanner_cache_lock:
             if _scanner_scan_state.get("session_date") == session_date:
                 _scanner_scan_state["running"] = False
                 _scanner_scan_state["completed_at"] = time.time()
+                _scanner_log(f"Yahoo premarket scan finished for {session_date}; "
+                             f"tickers checked={_scanner_scan_state['symbols_done']}/"
+                             f"{_scanner_scan_state['symbols_total']}, "
+                             f"matches={len(_scanner_cache['rows'])}, "
+                             f"error={_scanner_scan_state['error'] or 'none'}")
 
 
 _scanner_details = {}
@@ -2639,7 +2711,8 @@ def scanner_market_scan():
             _scanner_cache["source"] = "premarket"
             if scan_due:
                 _scanner_scan_state.update(running=True, session_date=session_date,
-                                           done=0, total=0, error="")
+                                           done=0, total=0, symbols_done=0, symbols_total=0,
+                                           universe_total=0, phase="history", error="")
                 _scanner_scan_pool.submit(_refresh_yahoo_premarket_universe, session_date)
         elif (_scanner_cache.get("source") != "regular" or
               now - _scanner_cache["at"] >= 25):
@@ -2662,6 +2735,10 @@ def scanner_market_scan():
                         "scanning": premarket_scan and _scanner_scan_state.get("running", False),
                         "scan_done": _scanner_scan_state.get("done", 0),
                         "scan_total": _scanner_scan_state.get("total", 0),
+                        "scan_symbols_done": _scanner_scan_state.get("symbols_done", 0),
+                        "scan_symbols_total": _scanner_scan_state.get("symbols_total", 0),
+                        "scan_universe_total": _scanner_scan_state.get("universe_total", 0),
+                        "scan_phase": _scanner_scan_state.get("phase", ""),
                         "scan_error": _scanner_scan_state.get("error", "")})
 
 
@@ -4839,8 +4916,8 @@ async function refreshScanner(){
     }
     const stamp = new Date((data.updated || Date.now()/1000)*1000).toLocaleTimeString();
     status.textContent = data.scanning
-      ? `Scanning Yahoo US ticker pages · ${Number(data.scan_done||0).toLocaleString()} / ${Number(data.scan_total||0).toLocaleString()} pages`
-      : `${tickers.length} matching ticker${tickers.length===1?'':'s'} · Updated ${stamp} · Full scan refreshes every 60 seconds`;
+      ? `Scanning TC2000 US Common Stocks · ${Number(data.scan_symbols_done||0).toLocaleString()} / ${Number(data.scan_universe_total||0).toLocaleString()} tickers checked`
+      : `${tickers.length} matching ticker${tickers.length===1?'':'s'} · ${data.scan_error ? 'Coverage incomplete: '+esc(data.scan_error)+' · ' : ''}Updated ${stamp} · Full scan refreshes every 60 seconds`;
     if(scannerAlarmEnabled){
       const now = Date.now();
       tickers.forEach(row=>{
