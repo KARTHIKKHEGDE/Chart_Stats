@@ -1956,20 +1956,18 @@ def clear_old_searches():
 
 
 DEFAULT_SCANNER_SETTINGS = {
-    "version": 3,
+    "version": 4,
     "voice_enabled": False,
-    "voice_volume": 100,
     "voice_uri": "",
     "approach_pct": 2.0,
     "vwap_enabled": True,
-    "news_enabled": True,
 }
 _scanner_user_settings_lock = threading.RLock()
 _scanner_user_settings_file = Path(__file__).resolve().parent / ".scanner_user_settings.json"
 _APP_UI_VISIBILITY_KEY = "app_ui_visibility"
 _APP_UI_VISIBILITY_USER_KEY = "app_ui_visibility_user"
 _APP_UI_VISIBILITY_DEFAULT_KEY = "app_ui_visibility_default"
-_APP_UI_VISIBILITY_DEFAULTS = {"scanner": True, "runner_stats": True}
+_APP_UI_VISIBILITY_DEFAULTS = {"scanner": False, "runner_stats": True}
 _app_ui_visibility_file = Path(__file__).resolve().parent / ".app_ui_visibility.json"
 _app_ui_user_visibility_file = Path(__file__).resolve().parent / ".app_ui_user_visibility.json"
 _app_ui_visibility_lock = threading.RLock()
@@ -1978,21 +1976,19 @@ _app_ui_visibility_lock = threading.RLock()
 def _normalize_scanner_settings(value):
     source = value if isinstance(value, dict) else {}
     try:
+        version = int(source.get("version", 0))
+    except (TypeError, ValueError):
+        version = 0
+    try:
         approach_pct = float(source.get("approach_pct", DEFAULT_SCANNER_SETTINGS["approach_pct"]))
     except (TypeError, ValueError):
         approach_pct = DEFAULT_SCANNER_SETTINGS["approach_pct"]
-    try:
-        voice_volume = int(source.get("voice_volume", DEFAULT_SCANNER_SETTINGS["voice_volume"]))
-    except (TypeError, ValueError):
-        voice_volume = DEFAULT_SCANNER_SETTINGS["voice_volume"]
     return {
-        "version": 3,
-        "voice_enabled": bool(source.get("voice_enabled", DEFAULT_SCANNER_SETTINGS["voice_enabled"])),
-        "voice_volume": max(0, min(100, voice_volume)),
+        "version": 4,
+        "voice_enabled": False if version < 4 else bool(source.get("voice_enabled", DEFAULT_SCANNER_SETTINGS["voice_enabled"])),
         "voice_uri": str(source.get("voice_uri") or "")[:300],
         "approach_pct": round(max(0.1, min(10.0, approach_pct)), 2),
         "vwap_enabled": bool(source.get("vwap_enabled", DEFAULT_SCANNER_SETTINGS["vwap_enabled"])),
-        "news_enabled": bool(source.get("news_enabled", DEFAULT_SCANNER_SETTINGS["news_enabled"])),
     }
 
 
@@ -2017,7 +2013,7 @@ def _write_local_scanner_settings(username, settings):
 def _normalize_app_ui_visibility(value):
     source = value if isinstance(value, dict) else {}
     return {
-        "scanner": source.get("scanner") is not False,
+        "scanner": False,
         "runner_stats": source.get("runner_stats") is not False,
     }
 
@@ -2303,7 +2299,6 @@ def admin_user_details(target):
     if target not in ALLOWED_USERS and not record:
         return jsonify({"error": "User not found"}), 404
 
-    settings, settings_configured, settings_storage = _get_user_scanner_settings(target)
     profile_fields = ("username", "is_admin", "can_rename", "created_at", "updated_at", "session_updated_at")
     profile = {key: record[key] for key in profile_fields if key in record}
     profile.setdefault("username", target)
@@ -2334,9 +2329,8 @@ def admin_user_details(target):
     else:
         search_error = "Supabase is not configured; search history is unavailable."
 
-    return jsonify({"profile": profile, "settings": settings,
+    return jsonify({"profile": profile,
                     "ui_visibility": _get_app_ui_visibility(target),
-                    "settings_configured": settings_configured, "settings_storage": settings_storage,
                     "recent_searches": searches, "search_error": search_error})
 
 
@@ -2945,6 +2939,7 @@ def _queue_scanner_details(row):
 
 @app.route("/api/scanner")
 def scanner_market_scan():
+    return jsonify({"error": "Scanner has been removed."}), 404
     user = (request.args.get("user") or "").strip().lower()
     token = (request.args.get("token") or "").strip()
     if not user or not token or not _db_validate_session(user, token):
@@ -3095,7 +3090,7 @@ canvas{display:block;width:100%}
     <button id="cp">Copy all</button>
 
     <div style="margin-left:auto;display:flex;align-items:center;gap:10px;font-size:13px;color:#8a8a8a">
-      <button id="scanner_open_btn" style="height:36px;padding:0 14px;border:2px solid #29a8ff;background:#071a28;color:#6cc4ff;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Live gap-up scanner">🔎 Scanner</button>
+      <button id="scanner_open_btn" style="display:none;height:36px;padding:0 14px;border:2px solid #29a8ff;background:#071a28;color:#6cc4ff;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Live gap-up scanner">🔎 Scanner</button>
       <button id="nav_multiday_btn" style="height:36px;padding:0 14px;border:2px solid #00c9a7;background:#002b24;color:#00c9a7;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Multi-day Rally & First Red Day (FRD) Structure Tool">📊 Runner Stats</button>
       <span>User: <span id="u_name" style="color:#29a8ff;font-weight:bold"></span><span id="u_badge"></span></span>
       <button id="logout_btn" style="height:34px;font-size:12px;padding:0 12px;border-color:#444">Exit</button>
@@ -3126,17 +3121,13 @@ canvas{display:block;width:100%}
       <div style="font-size:17px;font-weight:bold;color:#6cc4ff">🔎 Live Gap-Up Scanner</div>
       <div style="font-size:12px;color:#999">Price &gt;$0.40 and &lt;$20 · Gap &gt;40% · Dollar volume ≥$500K</div>
       <div style="margin-left:auto;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-        <label style="display:flex;align-items:center;gap:8px;color:#ffd23f;font-size:13px;cursor:pointer"><input id="scanner_alarm" type="checkbox" style="width:17px;height:17px"> Voice alerts (off by default)</label>
-        <label style="display:flex;align-items:center;gap:7px;color:#aaa;font-size:12px">Volume <input id="scanner_alarm_volume" type="range" min="0" max="100" step="5" value="100" style="width:92px;height:18px;padding:0;accent-color:#ffd23f"><span id="scanner_alarm_volume_value" style="color:#ffd23f;min-width:34px">100%</span></label>
+        <label style="display:flex;align-items:center;gap:8px;color:#ffd23f;font-size:13px;cursor:pointer"><input id="scanner_alarm" type="checkbox" style="width:17px;height:17px"> Voice alerts</label>
       </div>
       <button id="scanner_refresh_btn" style="height:32px;font-size:13px;padding:0 12px">Refresh</button>
       <button id="scanner_close_btn" style="height:32px;font-size:13px;padding:0 12px" onclick="closeScanner()">Close</button>
     </header>
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:10px 18px;background:#0d1014;border-bottom:1px solid #252b31;font-size:12px">
-      <strong style="color:#aaa">Alert settings:</strong>
       <label style="display:flex;align-items:center;gap:5px"><input id="scanner_vwap_alert" type="checkbox" style="width:15px;height:15px"> VWAP</label>
-      <label style="display:flex;align-items:center;gap:5px"><input id="scanner_news_alert" type="checkbox" style="width:15px;height:15px"> Announce News / PR</label>
-      <label style="display:flex;align-items:center;gap:6px;color:#aaa">Alert within <input id="scanner_approach_pct" type="number" min="0.1" max="10" step="0.1" value="2" style="width:76px;height:30px;padding:2px 6px;font-size:13px"> %</label>
       <span id="scanner_settings_status" style="margin-left:auto;color:#777">Settings save per user</span>
     </div>
     <div style="padding:10px 18px;color:#888;font-size:12px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
@@ -3171,16 +3162,6 @@ canvas{display:block;width:100%}
       <button id="manage_users_btn" style="height:36px;font-size:13px;padding:0 18px;background:#1a1008;border:1px solid #ffd23f;color:#ffd23f;cursor:pointer;border-radius:3px;font-weight:bold" title="Add or remove authorized users">👥 Manage Users</button>
       <button id="admin_rename_btn" style="height:36px;font-size:13px;padding:0 18px;background:#1a102a;border:1px solid #a855f7;color:#d8b4fe;cursor:pointer;border-radius:3px;font-weight:bold" title="Rename your username (karthik/locke only)">✏️ Rename Username</button>
       <button id="admin_back_btn" style="height:36px;font-size:13px;padding:0 14px;border-color:#29a8ff;color:#29a8ff">Back to Terminal</button>
-    </div>
-  </div>
-  <div class="panel" style="margin:0 0 18px;padding:16px 20px;border:1px solid #333">
-    <div style="font-weight:bold;color:#ffd23f;font-size:14px;margin-bottom:5px">App-wide button visibility</div>
-    <div style="color:#888;font-size:12px;margin-bottom:12px">Choose which optional tools everyone can see. The main terminal remains available.</div>
-    <div style="display:flex;align-items:center;gap:22px;flex-wrap:wrap">
-      <label style="display:flex;align-items:center;gap:7px;color:#ddd;font-size:13px"><input id="admin_show_scanner" type="checkbox" style="width:16px;height:16px"> Show Scanner button to everyone</label>
-      <label style="display:flex;align-items:center;gap:7px;color:#ddd;font-size:13px"><input id="admin_show_runner_stats" type="checkbox" style="width:16px;height:16px"> Show Runner Stats button to everyone</label>
-      <button id="admin_save_ui_visibility" style="height:34px;padding:0 14px;font-size:12px;border:1px solid #29a8ff;background:#071a28;color:#6cc4ff;cursor:pointer;border-radius:3px;font-weight:bold">Save visibility</button>
-      <span id="admin_ui_visibility_status" style="color:#888;font-size:12px"></span>
     </div>
   </div>
   <div id="admin_list" style="margin-top:10px"></div>
@@ -4451,7 +4432,7 @@ $('#logout_btn').onclick=()=>{
 };
 
 let adminPwd = '';
-let appUiVisibility = {scanner:true, runner_stats:true};
+let appUiVisibility = {scanner:false, runner_stats:true};
 let appUiVisibilityTimer = null;
 
 function applyAppUiVisibility(value){
@@ -4475,49 +4456,6 @@ async function loadAppUiVisibility(){
     const response = await fetch('/api/ui-visibility?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken));
     if(response.ok) applyAppUiVisibility(await response.json());
   } catch(e){}
-}
-
-async function loadAdminUiVisibility(){
-  const status = $('#admin_ui_visibility_status');
-  if(status) status.textContent = 'Loading…';
-  try{
-    const url = '/api/admin/ui-visibility?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken)+'&pwd='+encodeURIComponent(adminPwd);
-    const response = await fetch(url);
-    const data = await response.json();
-    if(!response.ok) throw new Error(data.error || 'Could not load settings');
-    const visibility = data.visibility || {};
-    $('#admin_show_scanner').checked = visibility.scanner !== false;
-    $('#admin_show_runner_stats').checked = visibility.runner_stats !== false;
-    if(status) status.textContent = 'Saved globally';
-  } catch(error){
-    if(status) status.textContent = error.message;
-  }
-}
-
-async function saveAdminUiVisibility(){
-  const button = $('#admin_save_ui_visibility');
-  const status = $('#admin_ui_visibility_status');
-  if(!button || !status) return;
-  button.disabled = true;
-  status.textContent = 'Saving…';
-  try{
-    const visibility = {
-      scanner: $('#admin_show_scanner').checked,
-      runner_stats: $('#admin_show_runner_stats').checked
-    };
-    const response = await fetch('/api/admin/ui-visibility', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({user:currentUser, token:sessionToken, pwd:adminPwd, visibility})
-    });
-    const data = await response.json();
-    if(!response.ok) throw new Error(data.error || 'Could not save settings');
-    applyAppUiVisibility(data.visibility);
-    status.textContent = 'Saved for everyone';
-  } catch(error){
-    status.textContent = error.message;
-  } finally{
-    button.disabled = false;
-  }
 }
 
 function openPwdModal(){
@@ -4746,7 +4684,6 @@ function renderAdminView(){
 }
 
 async function loadAdminSearches(){
-  loadAdminUiVisibility();
   $('#admin_list').innerHTML = '<span class="d">Loading search logs…</span>';
   try {
     const res = await fetch('/api/admin/searches?user=' + encodeURIComponent(currentUser) + '&pwd=' + encodeURIComponent(adminPwd));
@@ -4832,7 +4769,6 @@ $('#admin_back_btn').onclick=()=>{
   $('#t').focus();
 };
 $('#admin_rf_btn').onclick=loadAdminSearches;
-$('#admin_save_ui_visibility').onclick=saveAdminUiVisibility;
 
 // --- User Management Modal ---
 let liveAllowed = [];
@@ -4885,26 +4821,19 @@ window.viewUserDetails = async function(name){
     const response = await fetch(url);
     const data = await response.json();
     if(!response.ok) throw new Error(data.error || 'Could not load user details');
-    const p = data.profile || {}, s = data.settings || {};
+    const p = data.profile || {};
     const yesNo = v => v ? 'Yes' : 'No';
     const row = (label, value) => `<div style="display:flex;gap:10px;padding:5px 0;border-bottom:1px solid #1c1c1c"><span style="color:#888;min-width:190px">${esc(label)}</span><strong style="color:#ddd;overflow-wrap:anywhere">${esc(value === undefined || value === null || value === '' ? '—' : String(value))}</strong></div>`;
     const searches = (data.recent_searches || []).map(item=>`<div style="padding:5px 0;border-bottom:1px solid #1c1c1c"><strong style="color:#6cc4ff">${esc(item.ticker || '—')}</strong><span style="color:#888;margin-left:12px">${esc([item.date_ist,item.time_ist].filter(Boolean).join(' '))}</span></div>`).join('') || '<div style="color:#777;padding:6px 0">No recent searches found.</div>';
-    const visibility = data.ui_visibility || {scanner:true,runner_stats:true};
-    panel.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><strong style="color:#6cc4ff;font-size:15px">${esc((p.username || name).toUpperCase())} · Account details</strong><span style="color:#777;font-size:11px">Preferences: ${esc(data.settings_storage || 'unknown')}</span></div>`+
+    const visibility = data.ui_visibility || {scanner:false,runner_stats:true};
+    panel.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><strong style="color:#6cc4ff;font-size:15px">${esc((p.username || name).toUpperCase())} · Account details</strong></div>`+
       `<div style="font-weight:bold;color:#ffd23f;margin:10px 0 4px">Tool access for this user</div>`+
-      `<div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin:7px 0 10px"><label style="color:#ddd"><input id="user_access_scanner" type="checkbox" ${visibility.scanner?'checked':''}> Scanner</label><label style="color:#ddd"><input id="user_access_runner" type="checkbox" ${visibility.runner_stats?'checked':''}> Runner Stats</label><button onclick="saveUserUiVisibility('${esc(name)}')" style="background:#071a28;border:1px solid #29a8ff;color:#6cc4ff;padding:5px 10px;cursor:pointer">Save access</button><span id="user_access_status" style="color:#888;font-size:12px"></span></div>`+
+      `<div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin:7px 0 10px"><label style="color:#ddd"><input id="user_access_runner" type="checkbox" ${visibility.runner_stats?'checked':''}> Runner Stats</label><button onclick="saveUserUiVisibility('${esc(name)}')" style="background:#071a28;border:1px solid #29a8ff;color:#6cc4ff;padding:5px 10px;cursor:pointer">Save access</button><span id="user_access_status" style="color:#888;font-size:12px"></span></div>`+
       `<div style="font-weight:bold;color:#ffd23f;margin:10px 0 4px">Account</div>`+
       row('Role', p.is_admin ? 'Admin' : p.can_rename ? 'Account manager' : 'User')+
       row('Password configured', yesNo(p.has_password))+
       row('Active session', yesNo(p.active_session))+
       row('Created', p.created_at)+row('Updated', p.updated_at)+row('Last session update', p.session_updated_at)+
-      `<div style="font-weight:bold;color:#ffd23f;margin:14px 0 4px">Scanner alert settings</div>`+
-      row('Voice alerts enabled', yesNo(s.voice_enabled))+
-      row('Voice volume', `${Number(s.voice_volume ?? 100)}%`)+
-      row('Selected voice', s.voice_uri || 'Automatic')+
-      row('Approach threshold', `${Number(s.approach_pct ?? 2)}%`)+
-      row('VWAP alerts', yesNo(s.vwap_enabled))+
-      row('News / PR announcements', yesNo(s.news_enabled))+
       `<div style="font-weight:bold;color:#ffd23f;margin:14px 0 4px">Recent searches</div>${searches}`+
       (data.search_error ? `<div style="color:#888;font-size:11px;margin-top:7px">${esc(data.search_error)}</div>` : '');
   } catch(error){ panel.innerHTML = `<span style="color:#ff7373">${esc(error.message)}</span>`; }
@@ -4916,7 +4845,7 @@ window.saveUserUiVisibility = async function(name){
   try{
     const response = await fetch('/api/admin/users/'+encodeURIComponent(name)+'/ui-visibility?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken)+'&pwd='+encodeURIComponent(adminPwd), {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({visibility:{scanner:$('#user_access_scanner').checked,runner_stats:$('#user_access_runner').checked}})
+      body:JSON.stringify({visibility:{scanner:false,runner_stats:$('#user_access_runner').checked}})
     });
     const data = await response.json();
     if(!response.ok) throw new Error(data.error || 'Could not save access');
@@ -5000,17 +4929,14 @@ if($('#nav_multiday_btn')) $('#nav_multiday_btn').onclick = openRunnerStats;
 if($('#open_multiday_newtab')) $('#open_multiday_newtab').onclick = openRunnerStats;
 let scannerTimer = null;
 let scannerBusy = false;
-let scannerLastSpoken = new Map();
-let scannerNewsSpoken = new Map();
 let scannerAlertSession = '';
 let scannerSeenApproaches = new Set();
-const scannerSettingsDefaults = {version:3,voice_enabled:false,voice_volume:100,voice_uri:'',approach_pct:2,vwap_enabled:true,news_enabled:true};
+const scannerSettingsDefaults = {version:4,voice_enabled:false,voice_uri:'',approach_pct:2,vwap_enabled:true};
 let scannerSettings = {...scannerSettingsDefaults};
 let scannerSettingsUser = '';
 let scannerSettingsLoadPromise = null;
 let scannerSettingsSaveTimer = null;
 let scannerAlarmEnabled = false;
-let scannerVoiceVolume = 100;
 let scannerVoices = [];
 let scannerSpeechQueue = [];
 let scannerSpeechActive = false;
@@ -5028,38 +4954,31 @@ function startScannerPolling(){
 function migrateScannerSettings(settings){
   const source = settings && typeof settings === 'object' ? settings : {};
   const migrated = {...scannerSettingsDefaults, ...source};
+  if(Number(source.version || 0) < 4) migrated.voice_enabled = false;
   delete migrated.bone_2m_enabled;
   delete migrated.bone_5m_enabled;
-  migrated.version = 3;
+  delete migrated.voice_volume;
+  delete migrated.news_enabled;
+  migrated.version = 4;
   return migrated;
 }
 
 function applyScannerSettings(settings){
   scannerSettings = migrateScannerSettings(settings);
   scannerAlarmEnabled = !!scannerSettings.voice_enabled;
-  scannerVoiceVolume = Math.max(0, Math.min(100, Number(scannerSettings.voice_volume) || 0));
   $('#scanner_alarm').checked = scannerAlarmEnabled;
-  $('#scanner_alarm_volume').value = scannerVoiceVolume;
-  $('#scanner_alarm_volume_value').textContent = scannerVoiceVolume + '%';
   $('#scanner_vwap_alert').checked = !!scannerSettings.vwap_enabled;
-  $('#scanner_news_alert').checked = !!scannerSettings.news_enabled;
-  $('#scanner_approach_pct').value = scannerSettings.approach_pct;
   const voice = scannerVoices[0];
   if(voice) scannerSettings.voice_uri = voice.voiceURI;
 }
 
 function readScannerSettingsControls(){
-  let approachPct = Number($('#scanner_approach_pct').value);
-  if(!Number.isFinite(approachPct)) approachPct = scannerSettings.approach_pct || 2;
-  approachPct = Math.max(0.1, Math.min(10, approachPct));
   return {
-    version: 3,
+    version: 4,
     voice_enabled: $('#scanner_alarm').checked,
-    voice_volume: Number($('#scanner_alarm_volume').value),
     voice_uri: scannerVoices[0]?.voiceURI || scannerSettings.voice_uri || '',
-    approach_pct: Math.round(approachPct*10)/10,
-    vwap_enabled: $('#scanner_vwap_alert').checked,
-    news_enabled: $('#scanner_news_alert').checked
+    approach_pct: scannerSettings.approach_pct || 2,
+    vwap_enabled: $('#scanner_vwap_alert').checked
   };
 }
 
@@ -5070,7 +4989,7 @@ async function loadScannerSettings(){
   if(scannerSettingsUser === username) return;
   const previousUser = scannerSettingsUser;
   if(previousUser && previousUser !== username){
-    scannerLastSpoken.clear(); scannerNewsSpoken.clear(); scannerAlertSession = ''; scannerSeenApproaches.clear();
+    scannerAlertSession = ''; scannerSeenApproaches.clear();
   }
   scannerSettingsLoadPromise = (async()=>{
     let settings = {...scannerSettingsDefaults};
@@ -5106,7 +5025,6 @@ async function loadScannerSettings(){
 function saveScannerSettings(){
   scannerSettings = readScannerSettingsControls();
   scannerAlarmEnabled = scannerSettings.voice_enabled;
-  scannerVoiceVolume = scannerSettings.voice_volume;
   try { localStorage.setItem('gap_scanner_user_settings_'+currentUser, JSON.stringify(scannerSettings)); } catch(e){}
   $('#scanner_settings_status').textContent = 'Saving…';
   clearTimeout(scannerSettingsSaveTimer);
@@ -5178,7 +5096,7 @@ function playNextScannerAnnouncement(){
     const complete = ()=>{ if(completed) return; completed = true; onDone(); };
     utterance.rate = 1.0;
     utterance.pitch = 1.08;
-    utterance.volume = scannerVoiceVolume / 100;
+    utterance.volume = 1;
     const feminineVoice = scannerVoices[0];
     const voice = feminineVoice;
     if(!voice){
@@ -5243,10 +5161,6 @@ async function refreshScanner(){
     if(!res.ok) throw new Error(data.error || 'Scanner request failed');
     const tickers = data.tickers || [];
     loadScannerApproachHistory(data.session_date || new Date().toISOString().slice(0,10));
-    const current = new Set(tickers.map(row=>row.ticker));
-    for(const oldTicker of scannerLastSpoken.keys()){
-      if(!current.has(oldTicker)) scannerLastSpoken.delete(oldTicker);
-    }
     const body = $('#scanner_rows');
     if(!tickers.length){
       body.innerHTML = '<tr><td colspan="5" style="padding:18px;color:#777;text-align:center">'+
@@ -5269,18 +5183,7 @@ async function refreshScanner(){
         : `Checking Yahoo premarket gaps · ${Number(data.scan_symbols_done||0).toLocaleString()} / ${Number(data.scan_universe_total||0).toLocaleString()} TC2000 tickers`)
       : `${tickers.length} matching ticker${tickers.length===1?'':'s'} · ${data.scan_error ? 'Coverage incomplete: '+esc(data.scan_error)+' · ' : ''}Updated ${stamp} · Full scan refreshes every 60 seconds`;
     if(scannerAlarmEnabled){
-      const now = Date.now();
       tickers.forEach(row=>{
-        const last = scannerLastSpoken.get(row.ticker);
-        const repeatDue = last === undefined || now-last >= 300000;
-        const news = (row.news || [])[0];
-        const newsKey = news ? (news.url || news.title) : '';
-        const publishedAt = news ? Date.parse(news.published || '') : NaN;
-        const newsAge = now - publishedAt;
-        const newsWithin48Hours = Number.isFinite(publishedAt) && newsAge >= 0 && newsAge <= 48*60*60*1000;
-        const newsState = scannerNewsSpoken.get(row.ticker);
-        const newsDue = scannerSettings.news_enabled && newsWithin48Hours && !!newsKey &&
-          (!newsState || newsState.key !== newsKey || now-newsState.at >= 15*60*1000);
         const newEvents = (row.approaches || []).filter(event=>{
           const enabled = event.code === 'VWAP' && scannerSettings.vwap_enabled;
           const approachPct = Number(scannerSettings.approach_pct);
@@ -5292,16 +5195,7 @@ async function refreshScanner(){
           saveScannerApproach(id);
           return true;
         });
-        if(repeatDue || newsDue || newEvents.length){
-          const extras = [];
-          if(newsDue && news){
-            extras.push(`Latest news. ${String(news.title || '').slice(0,180)}`);
-            scannerNewsSpoken.set(row.ticker, {key: newsKey, at: now});
-          }
-          newEvents.forEach(event=>extras.push(event.label));
-          announceScannerTicker(row.ticker, extras.join('. '));
-          scannerLastSpoken.set(row.ticker, now);
-        }
+        if(newEvents.length) announceScannerTicker(row.ticker, newEvents.map(event=>event.label).join('. '));
       });
     }
   } catch(e){
@@ -5334,23 +5228,7 @@ if($('#scanner_alarm')) $('#scanner_alarm').onchange = e=>{
     window.speechSynthesis.cancel();
   }
 };
-['scanner_vwap_alert','scanner_news_alert'].forEach(id=>{
-  if($('#'+id)) $('#'+id).onchange = saveScannerSettings;
-});
-if($('#scanner_approach_pct')) $('#scanner_approach_pct').onchange = e=>{
-  const value = Math.max(0.1, Math.min(10, Number(e.target.value) || 2));
-  e.target.value = value.toFixed(1);
-  saveScannerSettings();
-};
-if($('#scanner_alarm_volume')){
-  $('#scanner_alarm_volume').value = scannerVoiceVolume;
-  $('#scanner_alarm_volume_value').textContent = scannerVoiceVolume + '%';
-  $('#scanner_alarm_volume').oninput = e=>{
-    scannerVoiceVolume = Number(e.target.value);
-    $('#scanner_alarm_volume_value').textContent = scannerVoiceVolume + '%';
-    saveScannerSettings();
-  };
-}
+if($('#scanner_vwap_alert')) $('#scanner_vwap_alert').onchange = saveScannerSettings;
 loadScannerVoices();
 if('speechSynthesis' in window) window.speechSynthesis.onvoiceschanged = loadScannerVoices;
 if($('#multiday_stats_btn')) $('#multiday_stats_btn').onclick = () => {
