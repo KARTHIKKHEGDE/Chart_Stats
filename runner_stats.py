@@ -501,6 +501,7 @@ def legs_15min(tkr, start_date, high_date, flt, chart_end_date=None):
             "l": round(b["l"], 4),
             "c": round(b["c"], 4),
             "v": int(b["v"]),
+            "dv": round(b["_dv"], 2),
             "pm": bool(240 <= (b["_et"].hour * 60 + b["_et"].minute) < 570),
             "sess": ("pm" if 240 <= (b["_et"].hour * 60 + b["_et"].minute) < 570 else
                      ("rth" if 570 <= (b["_et"].hour * 60 + b["_et"].minute) < 960 else "ah")),
@@ -912,6 +913,7 @@ h2{font-size:12px;letter-spacing:.1em;color:var(--c);text-transform:uppercase;ma
   <button id="go">Get stats</button>
   <button id="rf">Refresh</button>
   <button id="cp">Copy all</button>
+  <button id="cpimg" title="Copy the full report as a high-resolution PNG">Copy Details Image</button>
   <span id="st" class="status"></span>
   <button class="back-btn" id="backbtn">← Back to Chart Stats</button>
 </div>
@@ -1118,7 +1120,7 @@ function render(j, restoredLegs){
       +'<label style="font-size:12px;color:var(--d);cursor:pointer;display:inline-flex;align-items:center;margin:0;flex-direction:row;gap:4px"><input type="checkbox" id="bz15" style="margin:0;vertical-align:middle"> Bone zone</label>'
       +'<span style="color:#444;font-size:11px">|</span>'
       +'<button id="btnEnlarge" class="btn-tool" style="border-color:var(--c);color:var(--c);font-weight:bold" title="Enlarge Chart to Fullscreen (F)">⛶ Enlarge View</button>'
-      +'<button id="btnOpenImg" class="btn-tool" style="border-color:#ffd23f;color:#ffd23f;font-weight:bold" title="Open Full Chart as Image to view completely">📷 Open Image</button>'
+      +'<button id="btnCopyImg" class="btn-tool" style="border-color:#47d890;color:#47d890;font-weight:bold" title="Copy a high-resolution PNG of the chart">📋 Copy Image</button>'
       +'</div></div>';
     h+='<div id="drawStatus" style="color:#ffd23f;font-size:12px;font-family:Consolas,monospace;min-height:18px;margin:4px 0 4px"></div>';
     h+='<div id="legRibbon" style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap"></div>';
@@ -1162,6 +1164,45 @@ function copyAll(){
 $('go').onclick=()=>run(false);
 $('rf').onclick=()=>run(true);
 $('cp').onclick=copyAll;
+async function copyDetailsImage(){
+  const source = document.getElementById('out');
+  if(!LAST || !source){$('st').textContent='Load a report first.';return;}
+  const clone = source.cloneNode(true);
+  const sourceCanvases = source.querySelectorAll('canvas'), clonedCanvases = clone.querySelectorAll('canvas');
+  sourceCanvases.forEach((canvas,i)=>{
+    const target = clonedCanvases[i];
+    if(!target) return;
+    const image = document.createElement('img');
+    try{image.src=canvas.toDataURL('image/png');}catch{return;}
+    image.width=canvas.width; image.height=canvas.height;
+    image.style.cssText=canvas.getAttribute('style')||'display:block;max-width:100%;height:auto';
+    target.replaceWith(image);
+  });
+  clone.querySelectorAll('button,input,select').forEach(el=>el.remove());
+  const css = [...document.querySelectorAll('style')].map(style=>style.textContent).join('\n').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const width = Math.ceil(Math.max(source.scrollWidth,source.getBoundingClientRect().width));
+  const height = Math.ceil(source.scrollHeight);
+  const scale = Math.max(1,Math.min(2,16000/Math.max(width,height)));
+  const markup = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;min-height:${height}px;background:#000;color:#e8e8e8"><style>${css}</style>${clone.outerHTML}</div></foreignObject></svg>`;
+  const svgUrl = URL.createObjectURL(new Blob([markup],{type:'image/svg+xml;charset=utf-8'}));
+  try{
+    const image = new Image();
+    image.src=svgUrl;
+    await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=reject});
+    const output=document.createElement('canvas');
+    output.width=Math.ceil(width*scale);output.height=Math.ceil(height*scale);
+    const ctx=output.getContext('2d');if(!ctx)throw new Error('Canvas unavailable');
+    ctx.fillStyle='#000';ctx.fillRect(0,0,output.width,output.height);ctx.scale(scale,scale);ctx.drawImage(image,0,0,width,height);
+    const blob=await new Promise(resolve=>output.toBlob(resolve,'image/png'));
+    if(!blob||!navigator.clipboard?.write||!window.ClipboardItem)throw new Error('Clipboard image support unavailable');
+    await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+    $('st').textContent=`Copied full report image · ${output.width} × ${output.height}px`;
+    setTimeout(()=>$('st').textContent='',3000);
+  }catch(error){
+    $('st').textContent='Could not copy image. Check clipboard permissions and try again.';
+  }finally{URL.revokeObjectURL(svgUrl);}
+}
+$('cpimg').onclick=copyDetailsImage;
 ['t', 's', 'f', 'fl'].forEach(id => {
   const el = $(id);
   if(el) el.addEventListener('keydown', e => { if(e.key === 'Enter') run(false); });
@@ -1245,34 +1286,32 @@ function toggleEnlarge(){
   _setupAndMountCanvas();
 }
 
-function openChartAsImage(){
+async function copyChartImage(){
   const s = _chartState;
   if(!s || !s.cv) return;
-  const imgUrl = s.cv.toDataURL('image/png');
-  const w = window.open('');
-  if(!w){
-    alert('Pop-up blocked. Please allow popups or right click the chart to Save Image.');
-    return;
+  const scale = Math.max(1, Math.min(3, 16000 / Math.max(s.TW, s.TH))), image = document.createElement('canvas');
+  image.width = Math.round(s.TW * scale); image.height = Math.round(s.TH * scale);
+  const imageCtx = image.getContext('2d');
+  if(!imageCtx){_setStatus('Could not create the chart image.');return;}
+  imageCtx.scale(scale, scale);
+  const liveCtx = s.ctx;
+  try{
+    s.ctx = imageCtx;
+    _renderFrame();
+    s.ctx = liveCtx;
+    _renderFrame();
+    const blob = await new Promise(resolve => image.toBlob(resolve, 'image/png'));
+    if(!blob) throw new Error('PNG encoding failed');
+    if(!navigator.clipboard?.write || !window.ClipboardItem) throw new Error('Image clipboard is unavailable in this browser');
+    await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
+    _setStatus(`Copied ${image.width} × ${image.height} high-resolution PNG.`);
+    setTimeout(()=>_setStatus(''),2500);
+  }catch(error){
+    s.ctx = liveCtx;
+    _renderFrame();
+    _setStatus('Could not copy image. Check clipboard permissions and try again.');
   }
-  const tkr = (LAST && LAST.ticker) || 'Chart';
-  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${tkr} 15-Minute Structure Chart</title>
-  <style>
-    body{margin:0;background:#050507;color:#e0e0e0;font-family:Consolas,monospace;display:flex;flex-direction:column;align-items:center;padding:16px}
-    .top{margin-bottom:12px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
-    .top a{background:#111;color:#ffd23f;border:1px solid #ffd23f;padding:6px 14px;text-decoration:none;font-weight:bold;border-radius:2px}
-    .top a:hover{background:#282000}
-    .tip{color:#888;font-size:12px}
-    img{border:1px solid #222;max-width:100%;height:auto;cursor:zoom-in;box-shadow:0 8px 30px rgba(0,0,0,.95)}
-  </style></head><body>
-  <div class="top">
-    <span><strong>${tkr} — 15-Minute Structure Chart</strong></span>
-    <span class="tip">(Click image to toggle 100% full-resolution zoom)</span>
-    <a href="${imgUrl}" download="${tkr}_15min_structure_chart.png">💾 Download High-Res PNG</a>
-  </div>
-  <img src="${imgUrl}" title="Click to zoom in/out" onclick="this.style.maxWidth=this.style.maxWidth==='none'?'100%':'none';this.style.cursor=this.style.maxWidth==='none'?'zoom-out':'zoom-in'"/>
-  </body></html>`);
 }
-
 function initChart15(data){
   const wrap = $('c15wrap');
   if(!wrap || !data || !data.bars || !data.bars.length) return;
@@ -1315,7 +1354,7 @@ function initChart15(data){
   const btnBadgeMode = document.getElementById('btnBadgeMode');
   const btnBases = document.getElementById('btnBases');
   const btnEnlarge = document.getElementById('btnEnlarge');
-  const btnOpenImg = document.getElementById('btnOpenImg');
+  const btnCopyImg = document.getElementById('btnCopyImg');
 
   if(btnDraw) btnDraw.onclick = () => {
     _chartState.drawMode = !_chartState.drawMode;
@@ -1380,7 +1419,7 @@ function initChart15(data){
   };
 
   if(btnEnlarge) btnEnlarge.onclick = () => toggleEnlarge();
-  if(btnOpenImg) btnOpenImg.onclick = () => openChartAsImage();
+  if(btnCopyImg) btnCopyImg.onclick = () => copyChartImage();
 
   // Mouse wheel zoom
   wrap.onwheel = (e) => {
@@ -1744,14 +1783,14 @@ function _renderFrame(){
     const dolG = lg.hiPx - lg.loPx;
     const lo = Math.min(lg.loI, lg.hiI), hi = Math.max(lg.loI, lg.hiI);
     const vol = bars.slice(lo, hi + 1).reduce((a, b) => a + b.v, 0);
-    const dv  = bars.slice(lo, hi + 1).reduce((a, b) => a + (b.v * (b.c || b.h)), 0);
+    const dv  = bars.slice(lo, hi + 1).reduce((a, b) => a + (b.dv ?? b.v * (b.c || b.h)), 0);
     const barsCount = hi - lo + 1;
 
     let lines = [];
     if(s.badgeMode === 'compact'){
       lines = [
         `L${li + 1}  +${pctG.toFixed(0)}%  (+$${dolG.toFixed(2)})`,
-        `${fmtV(vol)} vol · ${fmtRot(vol, flt)}`,
+        `Vol ${fmtV(vol)} · $Vol ${fmtDv(dv)} · Rot ${fmtRot(vol, flt)}`,
       ];
     } else {
       lines = [
@@ -1992,7 +2031,7 @@ function _updateLegPanel(){
     const dolG = lg.hiPx - lg.loPx;
     const lo = Math.min(lg.loI, lg.hiI), hi = Math.max(lg.loI, lg.hiI);
     const vol = bars.slice(lo, hi + 1).reduce((a, b) => a + b.v, 0);
-    const dv  = bars.slice(lo, hi + 1).reduce((a, b) => a + (b.v * (b.c || b.h)), 0);
+    const dv  = bars.slice(lo, hi + 1).reduce((a, b) => a + (b.dv ?? b.v * (b.c || b.h)), 0);
     const barsCount = hi - lo + 1;
     const mcapMult = (lg.hiPx / lg.loPx).toFixed(1) + 'x';
     const mcapPeak = shares ? (shares * lg.hiPx) : null;
