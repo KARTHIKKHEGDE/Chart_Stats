@@ -2855,7 +2855,7 @@ def api_keyword_events():
 
 def _compare_event_features(ticker, day, window, force=False):
     """Real Polygon intraday and daily event features, cached by ticker/date/window."""
-    cache_key = f"kwcompare_v1_{ticker}_{day}_{window}"
+    cache_key = f"kwcompare_v2_{ticker}_{day}_{window}"
     cached = None if force else cget(cache_key, 6 * 3600)
     if cached is not None:
         return cached
@@ -2901,27 +2901,42 @@ def _compare_event_features(ticker, day, window, force=False):
     intraday = []
     for _, group in session.groupby("bucket", sort=True):
         close = float(group["c"].iloc[-1])
+        tp = (group["h"] + group["l"] + group["c"]) / 3
+        vwap = float((tp * group["v"]).sum() / group["v"].sum()) if float(group["v"].sum()) else None
         intraday.append({"t": int(group["bucket"].iloc[0]) * 5 + 240,
                          "prev": (close / pc - 1) * 100,
                          "open": ((close / float(m.get("open")) - 1) * 100 if m.get("open") and int(group["bucket"].iloc[0]) * 5 + 240 >= RG_START else None),
-                         "vol": float(group["v"].sum())})
+                         "high": float(group["h"].max()), "low": float(group["l"].min()),
+                         "vwap": vwap, "vol": float(group["v"].sum()),
+                         "dollar": float((tp * group["v"]).sum())})
     total_intraday_volume = sum(x["vol"] for x in intraday) or 1.0
+    total_intraday_dollars = sum(x["dollar"] for x in intraday) or 1.0
     cumulative_volume = 0.0
+    cumulative_dollars = 0.0
     for point in intraday:
         cumulative_volume += point["vol"]
+        cumulative_dollars += point["dollar"]
         point["cumvol"] = cumulative_volume / total_intraday_volume
+        point["cumdollar"] = cumulative_dollars / total_intraday_dollars
+        point["vwap_rel"] = ((point["prev"] is not None and point["vwap"] is not None) and
+                             ((pc * (1 + point["prev"] / 100) / point["vwap"] - 1) * 100) or None)
     intraday_by_time = {point["t"]: point for point in intraday}
-    intraday = [intraday_by_time.get(minute, {"t": minute, "prev": None, "open": None, "vol": None, "cumvol": None})
+    intraday = [intraday_by_time.get(minute, {"t": minute, "prev": None, "open": None, "high": None, "low": None,
+                                               "vwap": None, "vwap_rel": None, "vol": None, "dollar": None,
+                                               "cumvol": None, "cumdollar": None})
                 for minute in range(240, 960, 5)]
     regular = session[(session.index.hour * 60 + session.index.minute >= RG_START)]
     op = float(m.get("open") or 0)
     hod = float(m.get("hod") or 0)
     close = float(m.get("close") or 0)
+    mark_close = close or (float(session["c"].iloc[-1]) if not session.empty else None)
     day_row = ({"date": day, "o": m.get("open"), "h": m.get("hod"), "l": m.get("lod"), "c": m.get("close"), "v": float(df["v"].sum())}
                if today_live or idx >= len(daily) else daily[idx])
     pre_rows = [split_adjust(row, day) for row in daily[max(0, idx-window-1):idx]]
     prior20 = [split_adjust(row, day) for row in daily[max(0, idx-20):idx]]
+    prior60 = [split_adjust(row, day) for row in daily[max(0, idx-60):idx]]
     avg_volume20 = float(np.mean([float(x["v"]) for x in prior20 if x.get("v")])) if prior20 else None
+    avg_volume60 = float(np.mean([float(x["v"]) for x in prior60 if x.get("v")])) if prior60 else None
     post_rows = [split_adjust(row, day) for row in daily[idx+1:idx+1+window]] if idx < len(daily) and not today_live else []
     base = [float(x["c"]) for x in pre_rows if x.get("c")]
     baseline = base[0] if base else None
@@ -2962,10 +2977,59 @@ def _compare_event_features(ticker, day, window, force=False):
     post_runup = (max((float(x["h"])/float(day_row["c"])-1)*100 for x in post_rows) if post_rows and day_row.get("c") else None)
     post_low_day = (min(range(len(post_rows)), key=lambda i: float(post_rows[i]["l"]))+1 if post_rows else None)
     follow_through = (sum(1 for i, row in enumerate(post_rows) if float(row.get("c") or 0) > (float(day_row.get("c") or 0) if i == 0 else float(post_rows[i-1].get("c") or 0))) if post_rows else None)
+    total_volume = float(df["v"].sum())
+    total_dollar_volume = float((((df["h"]+df["l"]+df["c"])/3)*df["v"]).sum())
+    pm = session[(session.index.hour * 60 + session.index.minute < RG_START)]
+    rth = session[(session.index.hour * 60 + session.index.minute >= RG_START)]
+    def first_window(minutes):
+        bars = rth[(rth.index.hour * 60 + rth.index.minute < RG_START + minutes)]
+        return (float(bars["v"].sum()), float((((bars["h"]+bars["l"]+bars["c"])/3)*bars["v"]).sum())) if not bars.empty else (None, None)
+    first5_vol, first5_dv = first_window(5)
+    first15_vol, first15_dv = first_window(15)
+    first30_vol, first30_dv = first_window(30)
+    cf = ctx_feats(daily, idx)
+    days_since_50 = None
+    for hist_i in range(idx - 1, 19, -1):
+        if daily[hist_i - 20].get("c") and daily[hist_i].get("c") / daily[hist_i - 20]["c"] - 1 >= .50:
+            days_since_50 = idx - 1 - hist_i
+            break
+    close_location = ((close - float(m["lod"])) / (float(m["hod"]) - float(m["lod"]))
+                      if m.get("hod") is not None and m.get("lod") is not None and m["hod"] > m["lod"] and close else None)
+    downlegs = m.get("downlegs") or []
+    pullback_count = 0
+    pullback_depth = 0.0
+    running_peak = 0.0
+    in_pullback = False
+    for point in intraday:
+        if point.get("high") is None or point.get("low") is None: continue
+        running_peak = max(running_peak, float(point["high"]))
+        depth = (float(point["low"])/running_peak-1)*100 if running_peak else 0.0
+        pullback_depth = min(pullback_depth, depth)
+        if depth <= -5 and not in_pullback:
+            pullback_count += 1; in_pullback = True
+        elif in_pullback and point.get("prev") is not None and float(point["prev"]) >= (running_peak/pc-1)*100:
+            in_pullback = False
+    daily_log_returns = []
+    for offset in range(-10, 11):
+        row_i = idx + offset
+        if offset == 0 and (today_live or row_i >= len(daily)):
+            daily_log_returns.append(math.log(mark_close/pc)*100 if mark_close and pc else None)
+        elif row_i >= 1 and row_i < len(daily):
+            left, right = daily[row_i-1], daily[row_i]
+            daily_log_returns.append(math.log(float(right["c"])/float(left["c"]))*100 if right.get("c") and left.get("c") else None)
+        else:
+            daily_log_returns.append(None)
+    daily_path_curve, daily_running = [], 0.0
+    for daily_ret in daily_log_returns:
+        if daily_ret is None: daily_path_curve.append(None)
+        else:
+            daily_running += daily_ret
+            daily_path_curve.append(daily_running)
     features = {
         "ticker": ticker, "date": day, "pc": pc,
+        "as_of_minute": (int(session.index.hour[-1] * 60 + session.index.minute[-1]) if not session.empty else None),
         "intraday": intraday,
-        "close": (close or None),
+        "close": (mark_close or None),
         "hod": (hod or None), "lod": (m.get("lod") or None),
         "rth_open": ((op/pc-1)*100 if op else None),
         "gap": ((op/pc-1)*100 if op else None),
@@ -2974,9 +3038,30 @@ def _compare_event_features(ticker, day, window, force=False):
         "open_close": ((close/op-1)*100 if op else None),
         "pm_vs_open": ((float(m["pm_high"])/op-1)*100 if m.get("pm_high") and op else None),
         "gap_retention": (((close-pc)/(op-pc)*100) if op and op != pc else None),
-        "opening_share": (float(regular.head(5)["v"].sum())/float(df["v"].sum()) if not regular.empty and float(df["v"].sum()) else None),
-        "event_rvol": (float(day_row.get("v") or 0)/avg_volume20 if avg_volume20 else None),
-        "session_dollar_volume": float((((df["h"]+df["l"]+df["c"])/3)*df["v"]).sum()),
+        "opening_share": (first5_vol/total_volume if first5_vol is not None and total_volume else None),
+        "event_rvol": (total_volume/avg_volume20 if avg_volume20 else None),
+        "event_rvol60": (total_volume/avg_volume60 if avg_volume60 else None),
+        "day_volume": total_volume, "premarket_volume": float(pm["v"].sum()) if not pm.empty else None,
+        "first5_volume": first5_vol, "first15_volume": first15_vol, "first30_volume": first30_vol,
+        "premarket_dollar_volume": float((((pm["h"]+pm["l"]+pm["c"])/3)*pm["v"]).sum()) if not pm.empty else None,
+        "first5_dollar_volume": first5_dv, "first15_dollar_volume": first15_dv, "first30_dollar_volume": first30_dv,
+        "session_dollar_volume": total_dollar_volume,
+        "premarket_rvol20": None, "premarket_rvol60": None,
+        "first30_rvol20": None, "first30_rvol60": None,
+        "float": None, "float_rotation_pm": None, "float_rotation_first30": None,
+        "float_rotation_day": None, "float_rotation_curve": [None] * NPTS,
+        "dollar_volume_market_cap_fraction": None,
+        "premarket_high_pct": ((float(m["pm_high"])/pc-1)*100 if m.get("pm_high") and pc else None),
+        "close_vs_vwap": ((close/float(m["vwap_close"])-1)*100 if close and m.get("vwap_close") else None),
+        "close_location": close_location,
+        "pullback_count": pullback_count if intraday else None,
+        "pullback_max_depth": pullback_depth if intraday else None,
+        "context_features": cf, "days_since_50pct_move": days_since_50,
+        "daily_log_return_curve": daily_log_returns,
+        "daily_path_curve": daily_path_curve,
+        "volume_curve": [x.get("cumvol") for x in intraday],
+        "dollar_volume_curve": [x.get("cumdollar") for x in intraday],
+        "vwap_relationship_curve": [x.get("vwap_rel") for x in intraday],
         "pre_path": pre_path, "pre_rvol": pre_vol, "pre_trend_slope": pre_slope,
         "pre_dist_high": pre_dist_high, "pre_dist_low": pre_dist_low, "pre_streak": pre_streak,
         "pre_dollar_volume": [math.log10(max(1.0, float(x.get("v") or 0)*float(x.get("vw") or x.get("c") or 0))) for x in pre_rows[1:]],
@@ -2988,8 +3073,80 @@ def _compare_event_features(ticker, day, window, force=False):
         "chart": chart_pack(df, m, pc, dt.date.fromisoformat(day)),
         "source": "Polygon 1-minute and daily aggregate candles"
     }
+    features["feature_mask"] = {key: (value is not None) for key, value in features.items()
+                                if key not in ("chart", "intraday", "feature_mask")}
+    features["feature_masks"] = {
+        "intraday": [{key: point.get(key) is not None for key in ("prev", "open", "vwap_rel", "cumvol", "cumdollar", "float_rotation")}
+                     for point in intraday],
+        "daily": [value is not None for value in daily_log_returns],
+        "float_rotation": [False] * NPTS,
+        "supply_facts": {"float": False, "registered_shares": False, "atm_capacity": False,
+                         "equity_line_capacity": False, "warrants": False, "converts": False}
+    }
     cput(cache_key, features)
     return features
+
+
+def _compare_feature_asof(feature, cutoff_minute):
+    """Mask every feature after a shared clock cutoff; retain original outcomes elsewhere."""
+    out = dict(feature)
+    bars = []
+    for point in feature.get("intraday", []):
+        p = dict(point)
+        if cutoff_minute is None or p["t"] + 4 > cutoff_minute:
+            for key in ("prev", "open", "high", "low", "vwap", "vwap_rel", "vol", "dollar", "cumvol", "cumdollar"):
+                p[key] = None
+        bars.append(p)
+    active = [p for p in bars if p.get("vol") is not None]
+    total_volume = sum(p["vol"] for p in active)
+    total_dollars = sum(p["dollar"] or 0 for p in active)
+    cumulative_v = cumulative_d = 0.0
+    for p in active:
+        cumulative_v += p["vol"]
+        cumulative_d += p["dollar"] or 0
+        p["cumvol"] = cumulative_v / total_volume if total_volume else None
+        p["cumdollar"] = cumulative_d / total_dollars if total_dollars else None
+    out["intraday"] = bars
+    out["volume_curve"] = [p.get("cumvol") for p in bars]
+    out["dollar_volume_curve"] = [p.get("cumdollar") for p in bars]
+    out["vwap_relationship_curve"] = [p.get("vwap_rel") for p in bars]
+    out["day_volume"] = total_volume if active else None
+    out["session_dollar_volume"] = total_dollars if active else None
+    average_volume = (feature.get("day_volume") / feature.get("event_rvol")
+                      if feature.get("event_rvol") else None)
+    out["event_rvol"] = (total_volume / average_volume if average_volume else None)
+    opening_volume = sum(p["vol"] for p in active if RG_START <= p["t"] < RG_START+5)
+    out["opening_share"] = opening_volume/total_volume if total_volume else None
+    out["premarket_volume"] = sum(p["vol"] for p in active if p["t"] < RG_START) if active else None
+    out["premarket_dollar_volume"] = sum(p["dollar"] or 0 for p in active if p["t"] < RG_START) if active else None
+    if cutoff_minute is not None and cutoff_minute < RG_START:
+        for key in ("gap", "rth_open", "pm_vs_open", "gap_retention", "open_close", "hod_min", "hod_fade", "hod", "lod"):
+            out[key] = None
+    price_points = [p for p in bars if p.get("prev") is not None]
+    if price_points:
+        last = price_points[-1]
+        out["close"] = feature["pc"] * (1 + last["prev"] / 100)
+        out["as_of_minute"] = last["t"] + 4
+        peak = max((p["high"] for p in price_points if p.get("high") is not None), default=None)
+        if peak and peak > 0:
+            out["hod"] = peak
+            out["hod_min"] = next((p["t"] + 4 - RG_START for p in price_points if p.get("high") == peak), None)
+            out["hod_fade"] = (out["close"] / peak - 1) * 100
+        low = min((p["low"] for p in price_points if p.get("low") is not None), default=None)
+        if low is not None and peak > low:
+            out["close_location"] = (out["close"]-low)/(peak-low)
+        latest_vwap = next((p["vwap"] for p in reversed(price_points) if p.get("vwap") is not None), None)
+        out["close_vs_vwap"] = (out["close"]/latest_vwap-1)*100 if latest_vwap else None
+        open_points = [p for p in bars if p.get("open") is not None]
+        if open_points:
+            out["open_close"] = open_points[-1]["open"]
+            opening = feature["pc"] * (1 + out["gap"] / 100) if out.get("gap") is not None else None
+            if opening:
+                out["gap_retention"] = (out["close"] - feature["pc"]) / (opening-feature["pc"])*100 if opening != feature["pc"] else None
+    out["post_coverage"] = 0
+    out["post_path"] = []
+    out["post_open_gap"] = []
+    return out
 
 
 def _compare_similarity(a, b):
@@ -3010,7 +3167,11 @@ def _compare_similarity(a, b):
     intraday = [curve_score([x["prev"] for x in a["intraday"]], [x["prev"] for x in b["intraday"]]),
                 curve_score([x.get("open") for x in a["intraday"]], [x.get("open") for x in b["intraday"]]),
                 curve_score([x.get("cumvol") for x in a["intraday"]], [x.get("cumvol") for x in b["intraday"]]),
-                scalar_score(["gap", "gap_retention", "hod_fade", "open_close", "pm_vs_open", "opening_share"], 50.0),
+                curve_score([x.get("cumdollar") for x in a["intraday"]], [x.get("cumdollar") for x in b["intraday"]]),
+                curve_score(a.get("vwap_relationship_curve"), b.get("vwap_relationship_curve")),
+                scalar_score(["gap", "gap_retention", "hod_fade", "open_close", "pm_vs_open", "close_vs_vwap"], 50.0),
+                scalar_score(["event_rvol", "event_rvol60"], 10.0),
+                scalar_score(["opening_share"], 1.0),
                 scalar_score(["hod_min"], 120.0)]
     A = float(np.mean([x for x in intraday if x is not None])) if any(x is not None for x in intraday) else None
     pre = [curve_score(a.get("pre_path"), b.get("pre_path")),
@@ -3029,6 +3190,46 @@ def _compare_similarity(a, b):
                 scalar_score(["post_low_day", "follow_through"], 10.0)]
         C = float(np.mean([x for x in post if x is not None])) if any(x is not None for x in post) else None
     return {"A": A, "B": B, "C": C}
+
+
+def _learn_compare_weights(events):
+    """Grid-search A/B/C weights using leave-one-event-out open-to-close RMSE."""
+    defaults = {"A": 50.0, "B": 25.0, "C": 25.0}
+    usable = [e for e in events if e.get("features", {}).get("open_close") is not None]
+    if len(usable) < 30:
+        return defaults, {"method": "default", "sample_size": len(usable), "reason": "Fewer than 30 events with outcomes."}
+    groups = ("A", "B", "C")
+    matrices = {}
+    for i, left in enumerate(usable):
+        for j in range(i + 1, len(usable)):
+            right = usable[j]
+            pair = _compare_similarity(left["features"], right["features"])
+            matrices[(i, j)] = pair
+    grids = [0, 25, 50, 75, 100]
+    best = (float("inf"), defaults)
+    for a in grids:
+        for b in grids:
+            for c in grids:
+                if a+b+c == 0: continue
+                weights = {"A": float(a), "B": float(b), "C": float(c)}
+                errors = []
+                for held in range(len(usable)):
+                    neighbors = []
+                    for other in range(len(usable)):
+                        if held == other: continue
+                        pair = matrices[(min(held, other), max(held, other))]
+                        active = [k for k in groups if pair[k] is not None and weights[k] > 0]
+                        denom = sum(weights[k] for k in active)
+                        if denom:
+                            score = sum(pair[k]*weights[k] for k in active)/denom
+                            neighbors.append((score, other))
+                    if neighbors:
+                        nearest = max(neighbors)[1]
+                        errors.append((float(usable[held]["features"]["open_close"])-
+                                       float(usable[nearest]["features"]["open_close"]))**2)
+                rmse = math.sqrt(float(np.mean(errors))) if errors else float("inf")
+                if rmse < best[0]: best = (rmse, weights)
+    return best[1], {"method": "leave-one-out outcome RMSE", "sample_size": len(usable), "rmse": best[0]}
 
 
 def _compare_share_context(ticker, day, price):
@@ -3061,6 +3262,116 @@ def _compare_price_bucket(price):
     return "≥$100"
 
 
+def _compare_validation_metrics(actual, predicted, continuous):
+    pairs = [(float(a), float(p)) for a, p in zip(actual, predicted) if a is not None and p is not None]
+    if not pairs: return {"n": 0, "rmse": None, "rmse_ci95": None, "hit_rate": None, "hit_ci95": None}
+    a = np.array([x[0] for x in pairs]); p = np.array([x[1] for x in pairs])
+    errors = a-p
+    rmse = float(np.sqrt(np.mean(errors**2))) if continuous else None
+    hit = float(np.mean(np.sign(a)==np.sign(p)))
+    rng = np.random.default_rng(71027)
+    if len(a) > 1:
+        samples = rng.integers(0, len(a), size=(500, len(a)))
+        rmses = np.sqrt(np.mean(errors[samples]**2, axis=1)) if continuous else None
+        hits = np.mean((np.sign(a[samples])==np.sign(p[samples])), axis=1)
+        rmse_ci = [float(np.percentile(rmses, 2.5)), float(np.percentile(rmses, 97.5))] if continuous else None
+        hit_ci = [float(np.percentile(hits, 2.5)), float(np.percentile(hits, 97.5))]
+    else:
+        rmse_ci, hit_ci = ([rmse, rmse] if continuous else None), [hit, hit]
+    return {"n": len(a), "rmse": rmse, "rmse_ci95": rmse_ci, "hit_rate": hit, "hit_ci95": hit_ci}
+
+
+@app.route("/api/keyword-validate", methods=["POST"])
+def api_keyword_validate():
+    data = request.get_json(silent=True) or {}
+    user = str(data.get("user") or "").strip().lower()
+    token = str(data.get("token") or "").strip()
+    if user not in ALLOWED_USERS or not _db_validate_session(user, token):
+        return jsonify({"error": "Session expired. Please sign in again."}), 401
+    candidates = data.get("candidates") or []
+    if not isinstance(candidates, list) or any(not isinstance(x, dict) for x in candidates):
+        return jsonify({"error": "Invalid validation event list."}), 400
+    mode = "chronological" if data.get("mode") == "chronological" else "leave-one-out"
+    weights = data.get("weights") or {"A": 50, "B": 25, "C": 25}
+    if not isinstance(weights, dict): weights = {"A": 50, "B": 25, "C": 25}
+    weights = {k: max(0.0, min(100.0, float(weights.get(k, 0)))) for k in ("A", "B", "C")}
+    pool = sorted(candidates, key=lambda x: float(x.get("dollar_volume") or 0), reverse=True)[:60]
+    events = []
+    window = max(5, min(20, int(data.get("window") or 10)))
+    for item in pool:
+        try:
+            symbol, day = str(item.get("ticker") or "").strip().upper(), str(item.get("date") or "")
+            if not re.fullmatch(r"[A-Z.\-]{1,10}", symbol): continue
+            dt.date.fromisoformat(day)
+            feat = _compare_event_features(symbol, day, window)
+            events.append({"ticker": symbol, "date": day, "features": feat})
+        except Exception as exc:
+            app.logger.info("Validation event skipped: %s", exc)
+    fields = ("hod_fade", "open_close", "post_path", "intraday")
+    outcomes = []
+    for event in events:
+        f = event["features"]
+        path = f.get("post_path") or []
+        bars = f.get("intraday") or []
+        mid = bars[102].get("prev") if len(bars) > 102 else None
+        end = bars[143].get("prev") if len(bars) > 143 else None
+        outcomes.append({"fade": f.get("hod_fade"), "open_close": f.get("open_close"),
+                         "d1": path[0] if path else None,
+                         "midday_remaining": end-mid if end is not None and mid is not None else None})
+    model_predictions = {key: [] for key in ("fade", "open_close", "d1", "midday_remaining")}
+    scalar_predictions = {key: [] for key in model_predictions}
+    similar_predictions = {key: [] for key in model_predictions}
+    random_predictions = {key: [] for key in model_predictions}
+    actuals = {key: [] for key in model_predictions}
+    for i, event in enumerate(events):
+        others = [j for j in range(len(events)) if j != i and (mode != "chronological" or events[j]["date"] < event["date"])]
+        if not others: continue
+        target = event["features"]
+        sims = []
+        for j in others:
+            score_parts = _compare_similarity(target, events[j]["features"])
+            active = [k for k in ("A", "B", "C") if score_parts[k] is not None and weights[k] > 0]
+            denom = sum(weights[k] for k in active)
+            score = sum(score_parts[k]*weights[k] for k in active)/denom if denom else 0
+            sims.append((score, j))
+        nearest = max(sims)[1]
+        gap_peers = [j for j in others if target.get("gap") is not None and
+                     events[j]["features"].get("gap") is not None and
+                     abs(target["gap"]-events[j]["features"]["gap"]) <= 10 and
+                     _compare_price_bucket(target.get("close")) == _compare_price_bucket(events[j]["features"].get("close"))]
+        baseline_peer_pool = gap_peers or others
+        scalar_peer = min(others, key=lambda j:
+            abs((target.get("gap") or 0)-(events[j]["features"].get("gap") or 0))/20 +
+            abs(math.log1p(target.get("event_rvol") or 0)-math.log1p(events[j]["features"].get("event_rvol") or 0))/3 +
+            abs(math.log1p(target.get("session_dollar_volume") or 0)-math.log1p(events[j]["features"].get("session_dollar_volume") or 0))/20)
+        rng = random.Random(f"{event['ticker']}:{event['date']}:{mode}")
+        random_peer = rng.choice(others)
+        for key in model_predictions:
+            actual = outcomes[i][key]
+            pred = outcomes[nearest][key]
+            if actual is None or pred is None: continue
+            actuals[key].append(actual); model_predictions[key].append(pred)
+            value = [outcomes[j][key] for j in baseline_peer_pool if outcomes[j][key] is not None]
+            similar_predictions[key].append(float(np.mean(value)) if value else None)
+            scalar_predictions[key].append(outcomes[scalar_peer][key])
+            random_predictions[key].append(outcomes[random_peer][key])
+    results = {}
+    for key in model_predictions:
+        continuous = key in ("fade", "midday_remaining")
+        results[key] = {"matcher": _compare_validation_metrics(actuals[key], model_predictions[key], continuous),
+                        "gap_price_baseline": _compare_validation_metrics(actuals[key], similar_predictions[key], continuous),
+                        "random_keyword_baseline": _compare_validation_metrics(actuals[key], random_predictions[key], continuous),
+                        "scalar_only_baseline": _compare_validation_metrics(actuals[key], scalar_predictions[key], continuous)}
+    wins = sum(1 for key in ("fade", "midday_remaining")
+               if results[key]["matcher"]["rmse"] is not None and
+               all(results[key][base]["rmse"] is None or results[key]["matcher"]["rmse"] < results[key][base]["rmse"]
+                   for base in ("gap_price_baseline", "random_keyword_baseline", "scalar_only_baseline")))
+    return jsonify({"mode": mode, "sample_size": len(events), "evaluated": len(actuals["fade"]),
+                    "metrics": results, "beats_baseline": wins == 2,
+                    "warning": None if wins == 2 else "Matcher did not beat every baseline on both continuous outcomes in this sample.",
+                    "note": "Leave-one-out uses only other real SEC-associated qualifying events. Confidence intervals are deterministic bootstrap 95% intervals; random same-keyword baseline uses a seeded one-event draw. Candidate pool is capped at 60 events."})
+
+
 @app.route("/api/keyword-compare", methods=["POST"])
 def api_keyword_compare():
     data = request.get_json(silent=True) or {}
@@ -3074,10 +3385,11 @@ def api_keyword_compare():
     try:
         day = dt.date.fromisoformat(str(data.get("date") or "" )).isoformat()
         window = max(5, min(20, int(data.get("window") or 10)))
-        top_k = max(1, min(10, int(data.get("top_k") or 5)))
+        top_k = max(1, min(20, int(data.get("top_k") or 8)))
         weights = data.get("weights") or {"A": 50, "B": 25, "C": 25}
         if not isinstance(weights, dict): raise ValueError
         weights = {k: max(0.0, min(100.0, float(weights.get(k, 0)))) for k in ("A", "B", "C")}
+        manual_weights = bool(data.get("manual_weights"))
         candidates = data.get("candidates") or []
         if not isinstance(candidates, list) or len(candidates) > 1000 or any(not isinstance(x, dict) for x in candidates): raise ValueError
     except (TypeError, ValueError):
@@ -3085,6 +3397,9 @@ def api_keyword_compare():
     try:
         force = bool(data.get("force"))
         target = _compare_event_features(ticker, day, window, force=force)
+        partial_day = day == dt.date.today().isoformat()
+        cutoff_minute = target.get("as_of_minute") if partial_day else None
+        target_for_score = _compare_feature_asof(target, cutoff_minute) if cutoff_minute is not None else target
         compare_own = bool(data.get("include_own"))
         eligible = []
         candidate_pool = sorted(candidates, key=lambda item: float(item.get("dollar_volume") or 0), reverse=True)[:60]
@@ -3096,7 +3411,8 @@ def api_keyword_compare():
             try:
                 dt.date.fromisoformat(event_day)
                 feat = _compare_event_features(symbol, event_day, window, force=force)
-                scores = _compare_similarity(target, feat)
+                feature_for_score = _compare_feature_asof(feat, cutoff_minute) if cutoff_minute is not None else feat
+                scores = _compare_similarity(target_for_score, feature_for_score)
                 active = {k: v for k, v in scores.items() if v is not None and weights[k] > 0}
                 total_weight = sum(weights[k] for k in active)
                 if not total_weight: continue
@@ -3108,13 +3424,28 @@ def api_keyword_compare():
                                  "scores": scores, "score": overall, "features": feat})
             except Exception as exc:
                 app.logger.info("Keyword compare candidate %s %s skipped: %s", symbol, event_day, exc)
+        weight_report = {"method": "manual slider override", "sample_size": len(eligible)} if manual_weights else None
+        if not manual_weights:
+            weights, weight_report = _learn_compare_weights(eligible)
+            for item in eligible:
+                active = [k for k in ("A", "B", "C") if item["scores"].get(k) is not None and weights[k] > 0]
+                denominator = sum(weights[k] for k in active)
+                item["score"] = (sum(item["scores"][k]*weights[k] for k in active)/denominator if denominator else 0.0)
         eligible.sort(key=lambda x: x["score"], reverse=True)
         matches = eligible[:top_k]
         target["context"] = _compare_share_context(ticker, day, target.get("close"))
+        target["dollar_volume_market_cap_fraction"] = (target.get("session_dollar_volume")/target["context"]["market_cap"]
+                                                       if target["context"].get("market_cap") else None)
+        target["feature_mask"]["dollar_volume_market_cap_fraction"] = target["dollar_volume_market_cap_fraction"] is not None
         for match in matches:
             match["features"]["context"] = _compare_share_context(match["ticker"], match["date"], match["features"].get("close"))
+            match["features"]["dollar_volume_market_cap_fraction"] = (match["features"].get("session_dollar_volume")/match["features"]["context"]["market_cap"]
+                                                                       if match["features"]["context"].get("market_cap") else None)
+            match["features"]["feature_mask"]["dollar_volume_market_cap_fraction"] = match["features"]["dollar_volume_market_cap_fraction"] is not None
         return jsonify({"target": target, "matches": matches, "candidate_count": len(eligible),
-                        "weights": weights, "window": window, "target_post_coverage": target["post_coverage"],
+                        "partial_day": partial_day, "as_of_minute": cutoff_minute,
+                        "weights": weights, "weight_report": weight_report,
+                        "window": window, "target_post_coverage": target["post_coverage"],
                         "consensus": {"faded": sum(1 for x in eligible[:top_k] if (x["features"].get("hod_fade") or 0) < -20),
                                       "ground_higher": sum(1 for x in eligible[:top_k] if (x["features"].get("post_path") or [0])[-1] > 0),
                                       "early_hod": sum(1 for x in eligible[:top_k] if x["features"].get("hod_min") is not None and x["features"]["hod_min"] < 90)},
@@ -6162,6 +6493,8 @@ input[type=text]{width:min(420px,70vw)}input[type=date]{width:140px}select{min-w
 .tablewrap{max-height:52vh;overflow:auto;border:1px solid var(--line);background:#08090b}.tablewrap table{border-collapse:collapse;width:100%;min-width:850px;font-size:12px}th{position:sticky;top:0;background:#15181d;color:#d6dbe1;text-align:left;padding:7px 8px;border-bottom:1px solid #3a414a;cursor:pointer;white-space:nowrap}td{padding:6px 8px;border-bottom:1px solid #20242a;vertical-align:top}tbody tr:nth-child(even){background:#111317}tbody tr:hover{background:#171d25}.ticker{font-weight:bold;color:var(--blue);text-decoration:none}.deal a{color:#7cc9ff}.sub{display:block;color:#828b95;font-size:10px;margin-top:2px}.excerpt{max-width:420px;color:#adb6c0;font-size:11px}details summary{color:#8fcfff;cursor:pointer}.count{color:var(--green);font-weight:bold}
 .stock{border-top:1px solid #39414b;margin-top:18px;padding-top:10px}.stockhead{position:sticky;top:51px;z-index:2;background:#0a0c0f;border-left:3px solid #3285c4;padding:9px 10px;margin-bottom:8px}.stockhead h2{font-size:16px;margin:0;color:#d8e8f5}.evidence{font-size:11px;color:#adb5be;margin-top:5px}.evidence a{color:#69baff}.divider{border:0;border-top:1px solid #292f36;margin:8px 0}
 .tickerIndex{display:flex;gap:6px;flex-wrap:wrap;padding:6px 0 12px}.tickerIndex a{border:1px solid #303943;background:#0d1116;color:#7dc7ff;padding:5px 9px;text-decoration:none}.tickerIndex a:hover{border-color:#29a8ff}.eventGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.event{border:1px solid #272d34;background:#090b0e;padding:5px;min-width:0}.eventhead{display:flex;align-items:center;gap:4px;padding:1px 0 5px}.eventtitle{font-weight:bold;color:#d7e7f2;margin-right:auto;white-space:nowrap}.event select{height:25px;min-width:58px;font-size:11px;padding:2px 5px}.event button{height:25px;font-size:11px;padding:2px 7px}.event canvas{width:100%;height:300px!important;max-height:300px;display:block;background:#050607;cursor:zoom-in}.chartModal{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.94);display:none;align-items:center;justify-content:center;padding:14px}.chartModal.open{display:flex}.chartModalBox{width:98vw;height:95vh;background:#080a0d;border:1px solid #343a42;display:flex;flex-direction:column}.chartModalHead{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#11151a;border-bottom:1px solid #252a30}.chartModalTitle{color:#60baff;font-weight:bold;margin-right:auto}.chartModalCanvas{width:100%;height:calc(95vh - 54px);background:#050607}#comparePanel{margin-top:28px;border-top:1px solid #39414b;padding-top:14px;scroll-margin-top:58px}#comparePanel h2{margin:0 0 8px;color:#8fd0ff}.compareToolbar{display:flex;gap:9px;align-items:end;flex-wrap:wrap;padding:12px;background:#0b0d10;border:1px solid var(--line)}.compareToolbar input[type=text]{width:125px}.compareToolbar input[type=date]{width:145px}.compareToolbar select{min-width:85px}.compareMatch{border:1px solid #303841;background:#0a0c0f;margin:13px 0;padding:10px}.compareSummary{color:#b4c0ca;margin:8px 0}.scoreline{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0;color:#aab4be}.scorebar{width:105px;height:7px;background:#242a31;display:inline-block;vertical-align:middle;margin-left:4px}.scorebar i{display:block;height:100%;background:#53b9ff}.compareCharts{display:grid;grid-template-columns:1fr 1fr;gap:10px}.compareOverlay{width:100%;height:220px;background:#050607;display:block}.compareStats{border-collapse:collapse;width:100%;margin:8px 0}.compareStats td,.compareStats th{border:1px solid #242a31;padding:5px;text-align:left}.compareStats th{color:#9fcfff}.compareNote{color:#909aa4;font-size:11px;margin:7px 0}.compareFiling{color:#75c6ff}@media(max-width:760px){.eventGrid,.compareCharts{grid-template-columns:1fr}}
+#comparePanel .unifiedProjection{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(280px,1fr);gap:12px;margin:16px 0;padding:10px;border:1px solid #34404b;background:#090b0e}#comparePanel .unifiedChartWrap{min-width:0;position:relative}#comparePanel .unifiedControls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:5px 0}#comparePanel .unifiedControls select,#comparePanel .unifiedControls button{height:26px;font-size:11px}#comparePanel .unifiedCanvas{width:100%;height:440px;display:block;background:#050607}#comparePanel .unifiedLegend{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}#comparePanel .unifiedLegend label{display:inline-flex;flex-direction:row;align-items:center;border:1px solid #252c34;padding:3px 6px}#comparePanel .projectionPanel{border-left:1px solid #292f36;padding:4px 10px}#comparePanel .projectionPanel h3{margin:2px 0 8px;color:#9fd3ff}#comparePanel .projectionGrid{display:grid;grid-template-columns:1fr auto;gap:5px 10px}#comparePanel .projectionGrid span{border-bottom:1px solid #20262d;padding:4px 0}#comparePanel .lowConfidence{display:inline-block;color:#ffd66b;border:1px solid #8c7026;padding:3px 6px;margin:4px 0;font-weight:bold}#comparePanel .confidenceGood{color:#47d890}#comparePanel .chartTip{position:absolute;display:none;pointer-events:none;background:#111820;border:1px solid #4c5a67;padding:6px;white-space:pre;z-index:2;font-size:10px}@media(max-width:900px){#comparePanel .unifiedProjection{grid-template-columns:1fr}#comparePanel .projectionPanel{border-left:0;border-top:1px solid #292f36;padding-top:10px}}
+.compareMatch .compareCharts{display:none}
 @media(max-width:720px){main{padding:10px}.stockhead{top:45px}.toolbar{align-items:stretch}input[type=text]{width:100%}}
 </style></head><body>
 <header><a href="/">← Gap-Up Fade</a><strong>⌕ Search Keyword</strong><a href="#comparePanel">Jump to Compare</a><span style="margin-left:auto;color:#78838e">SEC EDGAR · financing-player research</span></header>
@@ -6174,7 +6507,7 @@ input[type=text]{width:min(420px,70vw)}input[type=date]{width:140px}select{min-w
 </form>
 <div id="status" class="status">Search SEC filings by keyword and date. Charts only show sessions where the premarket high is >50% above the previous close and session dollar volume is >$10M.</div>
 <div id="resultSummary"></div><div id="tableRoot"></div><div id="stocksRoot"></div>
-<section id="comparePanel"><h2>Compare historical event patterns</h2><div class="compareNote">Run a keyword search first. Candidates come only from qualifying charts in that search.</div><form id="compareForm" class="compareToolbar"><label>Target ticker<input id="compareTicker" type="text" maxlength="10" placeholder="TICKER" required></label><label>Target date<input id="compareDate" type="date" required></label><label>Window (trading days)<select id="compareWindow"><option>5</option><option selected>10</option><option>15</option><option>20</option></select></label><label>Top K<select id="compareTopK"><option>3</option><option selected>5</option><option>10</option></select></label><label>A intraday<input id="weightA" type="range" min="0" max="100" value="50"><span id="weightALabel">50%</span></label><label>B pre-gap<input id="weightB" type="range" min="0" max="100" value="25"><span id="weightBLabel">25%</span></label><label>C post-gap<input id="weightC" type="range" min="0" max="100" value="25"><span id="weightCLabel">25%</span></label><label><input id="compareOwn" type="checkbox"> Include own events</label><button class="primary" type="submit">Compare</button><button id="compareRecompute" type="button">Recompute</button></form><div id="compareStatus" class="status">Search for a keyword to populate historical candidate events.</div><div id="compareResults"></div></section>
+<section id="comparePanel"><h2>Compare historical event patterns</h2><div class="compareNote">Run a keyword search first. Candidates come only from qualifying charts in that search.</div><form id="compareForm" class="compareToolbar"><label>Target ticker<input id="compareTicker" type="text" maxlength="10" placeholder="TICKER" required></label><label>Target date<input id="compareDate" type="date" required></label><label>Window (trading days)<select id="compareWindow"><option>5</option><option selected>10</option><option>15</option><option>20</option></select></label><label>Top K<select id="compareTopK"><option>5</option><option selected>8</option><option>10</option><option>20</option></select></label><label>A intraday<input id="weightA" type="range" min="0" max="100" value="50" disabled><span id="weightALabel">50%</span></label><label>B pre-gap<input id="weightB" type="range" min="0" max="100" value="25" disabled><span id="weightBLabel">25%</span></label><label>C post-gap<input id="weightC" type="range" min="0" max="100" value="25" disabled><span id="weightCLabel">25%</span></label><label><input id="manualWeights" type="checkbox"> Manual weights</label><label><input id="compareOwn" type="checkbox"> Include own events</label><button class="primary" type="submit">Compare</button><button id="compareRecompute" type="button">Recompute</button><label>Validation mode<select id="validationMode"><option value="leave-one-out">Leave one out</option><option value="chronological">Prior events only</option></select></label><button id="validateMatcher" type="button">Validate matcher</button></form><div id="compareStatus" class="status">Search for a keyword to populate historical candidate events.</div><div id="unifiedProjectionRoot"></div><div id="compareResults"></div></section>
 </main>
 <div id="chartModal" class="chartModal" onclick="if(event.target===this)closeKWModal()"><div class="chartModalBox"><div class="chartModalHead"><button id="kwPrev">‹</button><span id="kwModalTitle" class="chartModalTitle"></span><button id="kwNext">›</button><select id="kwModalTf"><option>1m</option><option>2m</option><option>5m</option><option selected>15m</option><option>30m</option><option>1h</option><option>1D</option></select><select id="kwModalDays"><option value="1">1 day</option><option value="3">3 days</option><option value="5" selected>5 days</option><option value="10">10 days</option><option value="20">20 days</option></select><button onclick="closeKWModal()">✕</button></div><canvas id="kwModalCanvas" class="chartModalCanvas" height="720"></canvas></div></div>
 <script>
@@ -6260,7 +6593,7 @@ function hm(m,off){m=((m+(off||0))%1440+1440)%1440;return String(Math.floor(m/60
 function bindKWChart(cv){if(cv._bound)return;cv._bound=true;cv.addEventListener('click',()=>openKWModal(cv))}
 function drawNormalized(root,events){const chosen=[...root.querySelectorAll('.compareCheck:checked')].map(c=>events[Number(c.dataset.index)]).filter(e=>e.chart);const cv=root.querySelector('.normalized');if(!cv)return;const dpr=devicePixelRatio||1,W=Math.max(300,cv.parentElement.clientWidth-18),H=170;cv.width=W*dpr;cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';const x=cv.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle='#050607';x.fillRect(0,0,W,H);if(chosen.length<2){x.fillStyle='#8e98a3';x.fillText('Select at least two historical events below to compare normalized session paths.',12,25);return}const L=42,R=8,T=10,B=20,pw=W-L-R,ph=H-T-B;let vals=[];for(const e of chosen){const b=e.chart.bars;vals.push(b.c.map(v=>(v/e.prev_close-1)*100))}const all=vals.flat(),lo=Math.min(-5,...all),hi=Math.max(5,...all),Y=v=>T+ph*(1-(v-lo)/(hi-lo));x.strokeStyle='#2b3239';x.fillStyle='#9aa4ae';for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,yy=Y(v);x.beginPath();x.moveTo(L,yy);x.lineTo(W-R,yy);x.stroke();x.fillText(v.toFixed(0)+'%',2,yy+3)}const colors=['#55bfff','#ffc857','#57d996','#ee7db4','#b39cff','#ff8e66'];chosen.forEach((e,j)=>{const bars=e.chart.bars,series=vals[j];x.strokeStyle=colors[j%colors.length];x.beginPath();series.forEach((v,i)=>{const xx=L+pw*(bars.t[i]-240)/720,yy=Y(v);i?x.lineTo(xx,yy):x.moveTo(xx,yy)});x.stroke();x.fillStyle=colors[j%colors.length];x.fillText(e.date,L+5+j*100,12)});}
 function drawCrossStockNormalized(){const checks=[...document.querySelectorAll('#stocksRoot .compareCheck:checked')],chosen=checks.map(c=>({...c._kwEvent,compareTicker:c._kwTicker})).filter(e=>e.chart);const cv=$('.crossNormalized');if(!cv)return;const dpr=devicePixelRatio||1,W=Math.max(320,cv.parentElement.clientWidth-18),H=200;cv.width=W*dpr;cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';const x=cv.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle='#050607';x.fillRect(0,0,W,H);$('#crossStockCompareStatus').textContent=chosen.length<2?'Select events from multiple ticker sections to compare their price paths on the same previous-close percentage scale.':`${chosen.length} selected events · normalized from previous regular-session close.`;if(chosen.length<2){x.fillStyle='#8e98a3';x.fillText('Select at least two charts above.',12,25);return}const L=42,R=8,T=25,B=22,pw=W-L-R,ph=H-T-B,series=chosen.map(e=>e.chart.bars.c.map(v=>(v/e.prev_close-1)*100)),all=series.flat(),lo=Math.min(-5,...all),hi=Math.max(5,...all),Y=v=>T+ph*(1-(v-lo)/(hi-lo));x.strokeStyle='#2b3239';x.fillStyle='#9aa4ae';for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,yy=Y(v);x.beginPath();x.moveTo(L,yy);x.lineTo(W-R,yy);x.stroke();x.fillText(v.toFixed(0)+'%',2,yy+3)}const colors=['#55bfff','#ffc857','#57d996','#ee7db4','#b39cff','#ff8e66','#ff7373','#9ae66e'];chosen.forEach((e,j)=>{const bars=e.chart.bars;x.strokeStyle=colors[j%colors.length];x.beginPath();series[j].forEach((v,i)=>{const xx=L+pw*(bars.t[i]-240)/720,yy=Y(v);i?x.lineTo(xx,yy):x.moveTo(xx,yy)});x.stroke();x.fillStyle=colors[j%colors.length];x.fillText(`${e.compareTicker} ${e.date}`,L+(j%4)*(pw/4),12+Math.floor(j/4)*11)});}
-const kwEventCache=new Map();let lastComparePayload=null,compareChartObserver=null;
+const kwEventCache=new Map();let lastComparePayload=null,compareChartObserver=null,currentCompareData=null;
 async function fetchKeywordEvents(ticker){if(kwEventCache.has(ticker))return kwEventCache.get(ticker);const q=new URLSearchParams({ticker,user,token,start:$('#startDate').value,end:$('#endDate').value});const r=await fetch('/api/keyword-events?'+q),d=await r.json();if(!r.ok)throw Error(d.error||'Could not load qualifying chart events for '+ticker);kwEventCache.set(ticker,d.events||[]);return d.events||[]}
 function nearestFiling(ticker,date){const filings=rows.filter(x=>x.ticker===ticker&&x.filing_date&&x.filing_date<=date);if(!filings.length)return null;return filings.reduce((best,row)=>{const distance=Math.abs(Date.parse(row.filing_date)-Date.parse(date));return !best||distance<best.distance?{row,distance}:best},null)?.row||null}
 async function collectCompareCandidates(){const symbols=[...new Set(groupCompanies().map(x=>x.ticker).filter(Boolean))].slice(0,40),out=[];let done=0;for(let i=0;i<symbols.length;i+=3){const batch=symbols.slice(i,i+3);const result=await Promise.allSettled(batch.map(fetchKeywordEvents));for(let j=0;j<result.length;j++){done++;$('#compareStatus').textContent=`Loading qualifying keyword-search events… ${done}/${symbols.length} tickers`;if(result[j].status!=='fulfilled')continue;for(const e of result[j].value){const f=nearestFiling(batch[j],e.date);out.push({ticker:batch[j],date:e.date,dollar_volume:e.dollar_volume||0,company:f?.company||batch[j],keyword:$('#keyword').value.trim(),role:f?.role||'',headline:f?.headline||'',filing_url:f?.filing_url||'',filing_date:f?.filing_date||''})}}}return out}
@@ -6268,8 +6601,21 @@ function comparePane(parent,label,feature){const pane=document.createElement('ar
 function drawCompareOverlay(canvas,target,match,type,windowDays){const dpr=devicePixelRatio||1,W=Math.max(360,canvas.parentElement.clientWidth-12),H=220;canvas.width=W*dpr;canvas.height=H*dpr;canvas.style.width=W+'px';canvas.style.height=H+'px';const x=canvas.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle='#050607';x.fillRect(0,0,W,H);const L=45,R=12,T=18,B=25,pw=W-L-R,ph=H-T-B,colors=['#53bfff','#ffc857'];let series=[];if(type==='intraday'){series=[target.intraday.map(p=>p.prev),match.intraday.map(p=>p.prev)];}else{const toPath=f=>{const pre=f.pre_path||[],post=f.post_path||[];return [...Array(Math.max(0,windowDays-pre.length)).fill(null),...pre,0,...post,...Array(Math.max(0,windowDays-post.length)).fill(null)]};series=[toPath(target),toPath(match)]}const vals=series.flat().filter(v=>v!=null&&Number.isFinite(v));if(!vals.length){x.fillStyle='#9ba5af';x.fillText('Not enough real bars for this overlay.',12,30);return}const lo=Math.min(0,...vals),hi=Math.max(0,...vals),Y=v=>T+ph*(1-(v-lo)/(hi-lo||1)),count=Math.max(...series.map(a=>a.length)),X=i=>L+pw*(count<2?0:i/(count-1));x.strokeStyle='#28303a';x.fillStyle='#9ba5af';for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,yy=Y(v);x.beginPath();x.moveTo(L,yy);x.lineTo(W-R,yy);x.stroke();x.fillText(v.toFixed(0)+'%',3,yy+3)}if(type==='intraday'){const openX=L+pw*330/720;x.fillStyle='rgba(255,255,255,.06)';x.fillRect(L,T,openX-L,ph);x.strokeStyle='#8b929a';x.setLineDash([3,3]);x.beginPath();x.moveTo(openX,T);x.lineTo(openX,T+ph);x.stroke();x.setLineDash([]);x.fillStyle='#8e98a3';x.fillText('PREMARKET',L+4,T+12);x.fillText('09:30 ET',openX+4,H-7)}else{x.fillStyle='#8e98a3';x.fillText(`-${windowDays} sessions`,L,H-7);x.fillText('D',L+pw*windowDays/(2*windowDays),H-7);x.fillText(`+${windowDays}`,W-50,H-7)}series.forEach((arr,j)=>{x.strokeStyle=colors[j];x.lineWidth=1.8;x.beginPath();let started=false;arr.forEach((v,i)=>{if(v==null){started=false;return}const xx=X(i),yy=Y(v);started?x.lineTo(xx,yy):x.moveTo(xx,yy);started=true});x.stroke()});x.fillStyle=colors[0];x.fillText(`${target.ticker} target`,L,12);x.fillStyle=colors[1];x.fillText(`${match.ticker} ${fmtDate(match.date)}`,L+130,12)}
 function renderCompare(data){const root=$('#compareResults'),t=data.target;root.innerHTML=`<div class="compareSummary"><b>${esc(t.ticker)} · ${esc(fmtDate(t.date))}</b> · pre-window ${t.pre_coverage}/${data.window} sessions · post-window ${t.post_coverage}/${data.window} sessions available${t.post_coverage<data.window?' (remaining days pending)':''} · weights A/B/C ${data.weights.A}/${data.weights.B}/${data.weights.C}. ${data.formula}</div><div class="compareNote">Intraday candlesticks: Polygon 1-minute candles aggregated to the selected timeframe. Missing data is left blank. Scores describe observed similarity, not a prediction.</div>`;if(!data.matches.length){root.insertAdjacentHTML('beforeend','<div class="status">No qualifying historical candidates were available in the current keyword search.</div>');return}data.matches.forEach((m,index)=>{const box=document.createElement('section');box.className='compareMatch';const bars=['A','B','C'].map(k=>`<span>${k}: ${m.scores[k]==null?'N/A':m.scores[k].toFixed(0)+'%'}<span class="scorebar"><i style="width:${m.scores[k]||0}%"></i></span></span>`).join('');box.innerHTML=`<h3>${index+1}. ${esc(m.ticker)} · ${esc(m.company)} · ${esc(fmtDate(m.date))} · <span class="count">${m.score.toFixed(1)} match</span></h3><div class="evidence">${esc(m.keyword)} ${m.role?'· '+esc(m.role):''} ${m.headline?'· '+esc(m.headline):''} ${m.filing_url?`· <a class="compareFiling" href="${esc(m.filing_url)}" target="_blank" rel="noopener">SEC filing</a>`:''}</div><div class="scoreline">${bars}</div><div class="compareCharts"><div><div class="evidence">Intraday % from previous close · premarket shaded</div><canvas class="compareOverlay intradayOverlay"></canvas></div><div><div class="evidence">Daily path from event · unavailable future sessions blank</div><canvas class="compareOverlay dailyOverlay"></canvas></div></div><div class="evidence">Target and match candlesticks · independent timeframe/day controls · click to enlarge</div><div class="eventGrid compareCandles"></div><table class="compareStats"><tr><th>Observed stat</th><th>${esc(t.ticker)} target</th><th>${esc(m.ticker)} ${esc(fmtDate(m.date))}</th></tr><tr><td>Gap</td><td>${t.gap==null?'Unavailable':fmtPct(t.gap/100)}</td><td>${m.features.gap==null?'Unavailable':fmtPct(m.features.gap/100)}</td></tr><tr><td>Time to HOD</td><td>${t.hod_min==null?'Unavailable':esc(String(t.hod_min))+' min'}</td><td>${m.features.hod_min==null?'Unavailable':esc(String(m.features.hod_min))+' min'}</td></tr><tr><td>HOD to close</td><td>${t.hod_fade==null?'Unavailable':t.hod_fade.toFixed(1)+'%'}</td><td>${m.features.hod_fade==null?'Unavailable':m.features.hod_fade.toFixed(1)+'%'}</td></tr><tr><td>Open to close</td><td>${t.open_close==null?'Unavailable':t.open_close.toFixed(1)+'%'}</td><td>${m.features.open_close==null?'Unavailable':m.features.open_close.toFixed(1)+'%'}</td></tr><tr><td>Next-day return</td><td>${t.post_path?.length?t.post_path[0].toFixed(1)+'%':'Pending / unavailable'}</td><td>${m.features.post_path?.length?m.features.post_path[0].toFixed(1)+'%':'Unavailable'}</td></tr><tr><td>20-day relative volume</td><td>${t.event_rvol==null?'Unavailable':t.event_rvol.toFixed(1)+'×'}</td><td>${m.features.event_rvol==null?'Unavailable':m.features.event_rvol.toFixed(1)+'×'}</td></tr><tr><td>SEC shares outstanding (not float)</td><td>${t.context?.shares_out?fmtNum(t.context.shares_out)+' · filed '+fmtDate(t.context.filed):'Unavailable'}</td><td>${m.features.context?.shares_out?fmtNum(m.features.context.shares_out)+' · filed '+fmtDate(m.features.context.filed):'Unavailable'}</td></tr><tr><td>Market-cap bucket · price bucket · exchange</td><td>${esc(t.context?.market_cap_bucket||'Unavailable')} · ${esc(t.context?.price_bucket||'Unavailable')} · ${esc(t.context?.exchange||'Unavailable')}</td><td>${esc(m.features.context?.market_cap_bucket||'Unavailable')} · ${esc(m.features.context?.price_bucket||'Unavailable')} · ${esc(m.features.context?.exchange||'Unavailable')}</td></tr></table><div class="compareNote">${compareDifference(t,m)}</div>`;root.appendChild(box);drawCompareOverlay(box.querySelector('.intradayOverlay'),t,m.features,'intraday',data.window);drawCompareOverlay(box.querySelector('.dailyOverlay'),t,m.features,'daily',data.window);comparePane(box.querySelector('.compareCandles'),`${t.ticker} target · ${fmtDate(t.date)}`,t);comparePane(box.querySelector('.compareCandles'),`${m.ticker} match · ${fmtDate(m.date)}`,m.features)});root.insertAdjacentHTML('beforeend',`<div class="compareSummary"><b>Observed pattern consensus</b> · ${data.consensus.faded} faded · ${data.consensus.ground_higher} closed above event close after observed post-window · ${data.consensus.early_hod} made HOD within 90 minutes. ${data.candidate_count} candidates scored.</div>`)}
 function compareDifference(t,m){const tf=nearestFiling(t.ticker,t.date);const link=f=>f?.filing_url?`<a class="compareFiling" href="${esc(f.filing_url)}" target="_blank" rel="noopener">${esc(f.headline)} (${fmtDate(f.filing_date)})</a>`:'no prior keyword filing in the loaded results';const ts=t.context?.shares_out?fmtNum(t.context.shares_out)+' shares (SEC, filed '+fmtDate(t.context.filed)+')':'SEC shares unavailable';const ms=m.features.context?.shares_out?fmtNum(m.features.context.shares_out)+' shares (SEC, filed '+fmtDate(m.features.context.filed)+')':'SEC shares unavailable';return `Differences: Target catalyst ${link(tf)} vs candidate ${link({filing_url:m.filing_url,headline:m.headline,filing_date:m.filing_date})}; point-in-time shares outstanding ${esc(ts)} vs ${esc(ms)} (not float; verify dilution details in the filing).`}
-async function runCompare(force=false){if(!rows.length){$('#compareStatus').textContent='Run a keyword search first; there are no keyword-associated candidates yet.';return}if(!await verify())return;const button=$('#compareForm button[type=submit]');button.disabled=true;$('#compareResults').innerHTML='';try{$('#compareStatus').textContent='Collecting qualifying historical events from keyword-search tickers…';const candidates=await collectCompareCandidates();if(!candidates.length)throw Error('No qualifying historical events were found among the current search tickers.');const payload={user,token,ticker:$('#compareTicker').value.trim().toUpperCase(),date:$('#compareDate').value,window:Number($('#compareWindow').value),top_k:Number($('#compareTopK').value),include_own:$('#compareOwn').checked,force,weights:{A:Number($('#weightA').value),B:Number($('#weightB').value),C:Number($('#weightC').value)},candidates};lastComparePayload=payload;$('#compareStatus').textContent=`Scoring up to ${Math.min(60,candidates.length)} historical events; fetching candle features…`;const r=await fetch('/api/keyword-compare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),d=await r.json();if(!r.ok)throw Error(d.error||'Compare failed');$('#compareStatus').textContent=`Compare complete · ${d.candidate_count} candidates scored from ${Math.min(40,new Set(candidates.map(x=>x.ticker)).size)} search tickers.`;renderCompare(d)}catch(e){$('#compareStatus').innerHTML=`<span class="error">${esc(e.message)}</span>`}finally{button.disabled=false}}
-$('#compareDate').value=isoDate(now);$('#compareTicker').addEventListener('input',e=>e.target.value=e.target.value.toUpperCase());for(const k of ['A','B','C'])$('#weight'+k).oninput=e=>$('#weight'+k+'Label').textContent=e.target.value+'%';$('#compareForm').onsubmit=e=>{e.preventDefault();runCompare()};$('#compareRecompute').onclick=()=>{if(lastComparePayload)runCompare(true);else $('#compareStatus').textContent='Run Compare once before recomputing.'};
+function qtile(values,q){const a=values.filter(Number.isFinite).sort((x,y)=>x-y);if(!a.length)return null;const p=(a.length-1)*q,l=Math.floor(p),f=p-l;return a[l]*(1-f)+(a[Math.min(l+1,a.length-1)]||0)*f}
+function drawUnifiedProjection(data){const root=$('#unifiedProjectionRoot'),target=data.target,matches=data.matches;root.innerHTML=`<section class="unifiedProjection"><div class="unifiedChartWrap"><b>Unified normalized path · target vs closest matches</b><div class="compareNote">Weight method: ${esc(data.weight_report?.method||'documented default')} · training n=${data.weight_report?.sample_size??0}; this is a leave-one-event-out open-to-close RMSE weight fit when at least 30 events are available.</div><div class="unifiedControls"><label>Y axis<select id="unifiedMode"><option value="prev">% from previous close</option><option value="open">% from open</option><option value="retention">Gap retention</option></select></label><button id="unifiedDaily">Show D-10…D+10</button><span class="compareNote">Click a ticker below to include/exclude it from the outcome bands.</span></div><div class="unifiedLegend" id="unifiedLegend"></div><canvas class="unifiedCanvas" id="unifiedCanvas"></canvas><div class="chartTip" id="unifiedTip"></div><div class="compareNote">Historical similarity is not causation or a guarantee. Volume below is cumulative session-volume fraction; float rotation is unavailable unless verified float data exists.</div></div><aside class="projectionPanel"><h3>Observed outcomes · not a prediction</h3><div id="projectionConfidence"></div><div class="projectionGrid" id="projectionGrid"></div><div class="compareNote" id="projectionFoot"></div></aside></section>`;const legend=$('#unifiedLegend');matches.forEach((m,i)=>{const label=document.createElement('label');label.innerHTML=`<input type="checkbox" checked data-match="${i}"><span style="color:${['#71c7ff','#ffc857','#66d99a','#f487b5','#b9a1ff','#ff9270','#f46a6a','#a6df67'][i%8]}">${esc(m.ticker)} ${esc(fmtDate(m.date))}</span>`;legend.appendChild(label);label.querySelector('input').onchange=()=>{drawUnifiedCanvas(data);drawProjectionPanel(data)}});$('#unifiedMode').onchange=()=>drawUnifiedCanvas(data);$('#unifiedDaily').onclick=()=>{const b=$('#unifiedDaily');b.dataset.daily=b.dataset.daily==='1'?'0':'1';b.textContent=b.dataset.daily==='1'?'Show intraday':'Show D-10…D+10';drawUnifiedCanvas(data)};drawUnifiedCanvas(data);drawProjectionPanel(data)}
+function selectedUnifiedMatches(data){return [...$('#unifiedLegend').querySelectorAll('input:checked')].map(x=>data.matches[Number(x.dataset.match)]).filter(Boolean)}
+function unifiedValue(feature,point,mode){if(mode==='open')return point?.open??null;if(mode==='retention'){const gap=feature.gap;if(gap==null||Math.abs(gap)<.01)return null;return point?.prev==null?null:point.prev/gap*100}return point?.prev??null}
+function drawUnifiedCanvas(data){const cv=$('#unifiedCanvas');if(!cv)return;const target=data.target,chosen=selectedUnifiedMatches(data),daily=$('#unifiedDaily').dataset.daily==='1',mode=$('#unifiedMode').value,dpr=devicePixelRatio||1,W=Math.max(500,cv.parentElement.clientWidth-10),H=440;cv.width=W*dpr;cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';const x=cv.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle='#050607';x.fillRect(0,0,W,H);const L=52,R=12,T=20,B=26,pw=W-L-R,priceH=H*.68,volTop=T+priceH+18,volH=H-volTop-B,colors=['#71c7ff','#ffc857','#66d99a','#f487b5','#b9a1ff','#ff9270','#f46a6a','#a6df67'];let series=[],lineNames=[];const nowMinute=Number(data.as_of_minute??target.as_of_minute??960),nowIdx=Math.max(0,Math.min(143,Math.floor((nowMinute-240)/5)));if(daily){series=[{name:`${target.ticker} target`,vals:target.daily_path_curve||[],color:'#fff',target:true},...chosen.map((m,j)=>({name:`${m.ticker} ${fmtDate(m.date)}`,vals:m.features.daily_path_curve||[],color:colors[j%colors.length]}))]}else{const modeFor=f=>f.intraday.map(p=>unifiedValue(f,p,mode));const targetVals=modeFor(target);series=[{name:`${target.ticker} target`,vals:targetVals,color:'#fff',target:true}];chosen.forEach((m,j)=>series.push({name:`${m.ticker} ${fmtDate(m.date)}`,vals:modeFor(m.features),color:colors[j%colors.length],feature:m.features}));}
+ const nowTarget=series[0].vals[daily?10:nowIdx];let projected=[];if(nowTarget!=null){const cut=daily?10:nowIdx,end=daily?21:144;for(let j=1;j<series.length;j++){const base=series[j].vals[cut];if(base==null)continue;const arr=[];for(let i=cut;i<end;i++){const v=series[j].vals[i];arr.push(v==null?null:nowTarget+v-base)}projected.push({name:series[j].name,color:series[j].color,from:cut,vals:arr})}}
+ const quantiles=[];if(projected.length){const cut=daily?10:nowIdx,end=daily?21:144;for(let i=cut;i<end;i++){const vs=projected.map(s=>s.vals[i-cut]).filter(Number.isFinite);quantiles.push({i,p10:qtile(vs,.1),p25:qtile(vs,.25),p50:qtile(vs,.5),p75:qtile(vs,.75),p90:qtile(vs,.9)})}}
+ const values=series.flatMap(s=>s.vals.filter(Number.isFinite)).concat(quantiles.flatMap(q=>[q.p10,q.p90].filter(Number.isFinite)));let lo=Math.min(-5,...values),hi=Math.max(5,...values);const Y=v=>T+priceH*(1-(v-lo)/(hi-lo||1)),X=i=>L+pw*(i/(daily?20:143));x.strokeStyle='#242c34';x.fillStyle='#aab4be';x.font='11px Consolas,monospace';for(let k=0;k<=5;k++){const v=lo+(hi-lo)*k/5,yy=Y(v);x.beginPath();x.moveTo(L,yy);x.lineTo(W-R,yy);x.stroke();x.fillText(v.toFixed(1)+'%',3,yy+3)}if(daily){x.fillStyle='#85919b';for(let i=0;i<=20;i+=5)x.fillText(String(i-10),X(i)-5,H-7);const dx=X(10);x.strokeStyle='#888';x.setLineDash([3,3]);x.beginPath();x.moveTo(dx,T);x.lineTo(dx,T+priceH);x.stroke();x.setLineDash([])}else{const preEnd=X(330/5);x.fillStyle='rgba(255,255,255,.055)';x.fillRect(L,T,preEnd-L,priceH);x.fillStyle='#89939c';x.fillText('PREMARKET',L+5,T+13);x.strokeStyle='#888';x.setLineDash([3,3]);x.beginPath();x.moveTo(preEnd,T);x.lineTo(preEnd,T+priceH);x.stroke();x.setLineDash([]);const times=[240,360,480,570,660,750,840,930];for(const m of times){const i=(m-240)/5;x.fillStyle='#929ca5';x.fillText(m===570?'09:30':`${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`,X(i)-15,H-7)}}
+ if(quantiles.length){const band=(low,high,color)=>{x.fillStyle=color;x.beginPath();let started=false;for(const q of quantiles){if(q[low]==null){started=false;continue}const xx=X(q.i),yy=Y(q[low]);started?x.lineTo(xx,yy):x.moveTo(xx,yy);started=true}for(const q of [...quantiles].reverse()){if(q[high]!=null)x.lineTo(X(q.i),Y(q[high]))}x.closePath();x.fill()};band('p10','p90','rgba(255,205,90,.10)');band('p25','p75','rgba(255,205,90,.20)');x.strokeStyle='#ffd36e';x.lineWidth=2;x.beginPath();quantiles.forEach((q,i)=>{if(q.p50==null)return;i?x.lineTo(X(q.i),Y(q.p50)):x.moveTo(X(q.i),Y(q.p50))});x.stroke()}
+ series.forEach((s,j)=>{x.strokeStyle=s.color;x.globalAlpha=s.target?1:.46;x.lineWidth=s.target?2.7:1.1;x.beginPath();let started=false;s.vals.forEach((v,i)=>{if(v==null||(!daily&&s.target&&i>nowIdx)){started=false;return}const xx=X(i),yy=Y(v);started?x.lineTo(xx,yy):x.moveTo(xx,yy);started=true});x.stroke();x.globalAlpha=1});if(!daily){const marker=X(nowIdx);x.strokeStyle='#f3f4f6';x.setLineDash([4,3]);x.beginPath();x.moveTo(marker,T);x.lineTo(marker,T+priceH+volH+18);x.stroke();x.setLineDash([]);x.fillStyle='#fff';x.fillText('NOW',marker+4,T+12);const baseY=volTop+volH; x.strokeStyle='#303842';x.beginPath();x.moveTo(L,volTop);x.lineTo(W-R,volTop);x.stroke();x.fillStyle='#8f9aa4';x.fillText('Cumulative volume fraction',L+3,volTop+12);const drawVol=(arr,color,width)=>{x.strokeStyle=color;x.lineWidth=width;x.beginPath();let started=false;arr.forEach((v,i)=>{if(v==null||(!data.partial_day&&i>nowIdx&&arr===target.volume_curve)){started=false;return}const xx=X(i),yy=baseY-(Number(v)||0)*volH;started?x.lineTo(xx,yy):x.moveTo(xx,yy);started=true});x.stroke()};drawVol(target.volume_curve,'#fff',2);const medVol=[];for(let i=0;i<144;i++){const vals=chosen.map(m=>m.features.intraday?.[i]?.cumvol).filter(Number.isFinite);medVol.push(qtile(vals,.5))}drawVol(medVol,'#ffc857',1.5)}else{ x.fillStyle='#8c98a2';x.fillText('Cumulative daily return · D-10 … D+10',L,T+priceH+14)}
+ cv.onmousemove=e=>{const rect=cv.getBoundingClientRect(),i=Math.max(0,Math.min(daily?20:143,Math.round((e.clientX-rect.left-L)/pw*(daily?20:143))));const lines=[];if(daily){lines.push(`${target.ticker}: ${series[0].vals[i]?.toFixed(2)??'—'}%`);for(let j=1;j<series.length;j++)lines.push(`${series[j].name}: ${series[j].vals[i]?.toFixed(2)??'—'}%`)}else{const stamp=240+i*5;lines.push(`${String(Math.floor(stamp/60)).padStart(2,'0')}:${String(stamp%60).padStart(2,'0')} ET`);lines.push(`${target.ticker}: ${series[0].vals[i]?.toFixed(2)??'—'}%`);for(let j=1;j<series.length;j++)lines.push(`${series[j].name}: ${series[j].vals[i]?.toFixed(2)??'—'}%`);const p=target.intraday[i];if(p?.vol!=null)lines.push(`Target OHLC ${p.low?.toFixed(3)??'—'} / ${p.high?.toFixed(3)??'—'} · vol ${fmtNum(p.vol)}`)}const tip=$('#unifiedTip');tip.textContent=lines.join('\n');tip.style.display='block';tip.style.left=Math.min(W-260,e.offsetX+12)+'px';tip.style.top=Math.max(25,e.offsetY+10)+'px'};cv.onmouseleave=()=>$('#unifiedTip').style.display='none'}
+function drawProjectionPanel(data){if(data.validation?.beats_baseline===false&&!document.querySelector("#matcherWarning"))document.querySelector("#compareResults")?.insertAdjacentHTML("afterbegin",`<div id="matcherWarning" class="lowConfidence">${esc(data.validation.warning||"Validation failed against baselines.")}</div>`);const target=data.target,chosen=selectedUnifiedMatches(data),panel=$('#projectionGrid'),badge=$('#projectionConfidence'),foot=$('#projectionFoot');if(!panel)return;const partial=data.partial_day,now=Number(data.as_of_minute??target.as_of_minute??960),idx=Math.max(0,Math.min(143,Math.floor((now-240)/5))),mode=$('#unifiedMode').value,cur=unifiedValue(target,target.intraday?.[idx],mode);const remainders=[],fades=[],closeOpen=[],nextGaps=[],newHod=[],nextHod=[];if(partial&&cur!=null)for(const m of chosen){const f=m.features,p=f.intraday||[],last=unifiedValue(f,p[143],mode),at=unifiedValue(f,p[idx],mode);if(last!=null&&at!=null)remainders.push(last-at);if(f.hod_min!=null&&f.close&&f.hod){fades.push((f.close/f.hod-1)*100);if(f.hod_min>(now-RG_START)){newHod.push(1);nextHod.push(f.hod_min-(now-RG_START))}else newHod.push(0)}if(f.open_close!=null)closeOpen.push(f.open_close);if(f.post_open_gap?.length&&f.post_open_gap[0]!=null)nextGaps.push(f.post_open_gap[0])}const avg=chosen.length?chosen.reduce((s,m)=>s+m.score,0)/chosen.length:null,disp=remainders.length?Math.sqrt(remainders.reduce((s,v)=>s+(v-qtile(remainders,.5))**2,0)/remainders.length):null,coverage=chosen.length?Math.round(100*chosen.reduce((s,m)=>s+Object.values(m.features.feature_mask||{}).filter(Boolean).length/Math.max(1,Object.keys(m.features.feature_mask||{}).length),0)/chosen.length):0,low=chosen.length<5||avg<40||disp>25||data.validation?.beats_baseline===false;badge.innerHTML=low?'<span class="lowConfidence">LOW CONFIDENCE</span>':'<span class="confidenceGood">Confidence checks passed</span>';const dist=(a,suffix='%')=>{const q10=qtile(a,.1),q25=qtile(a,.25),q50=qtile(a,.5),q75=qtile(a,.75),q90=qtile(a,.9);return q50==null?'Unavailable':`${q50.toFixed(1)}${suffix} · 25–75 ${q25.toFixed(1)} to ${q75.toFixed(1)} · 10–90 ${q10.toFixed(1)} to ${q90.toFixed(1)}`};const probability=newHod.length?`${newHod.reduce((s,v)=>s+v,0)} of ${newHod.length} (${(100*newHod.reduce((s,v)=>s+v,0)/newHod.length).toFixed(0)}%)`: 'Unavailable';panel.innerHTML=`<span>Matches used</span><span>${chosen.length} / ${data.matches.length}</span><span>Average match score</span><span>${avg==null?'Unavailable':avg.toFixed(1)+'/100'}</span><span>Feature coverage</span><span>${coverage}% available</span><span>Remaining move to close</span><span>${partial?dist(remainders):'Historical full day; no remaining session'}</span><span>HOD-to-close fade</span><span>${partial?dist(fades):'Unavailable'}</span><span>New HOD after now</span><span>${partial?probability:'Unavailable'}</span><span>Time to next HOD</span><span>${partial?dist(nextHod,' min'):'Unavailable'}</span><span>Close vs open</span><span>${partial?dist(closeOpen):'Unavailable'}</span><span>D+1 open gap</span><span>${dist(nextGaps)}</span><span>Outcome dispersion</span><span>${disp==null?'Unavailable':disp.toFixed(1)+' percentage points SD'}</span>`;foot.textContent=partial?`Outcomes are rebased to the target's last complete 5-minute value near ${String(Math.floor(now/60)).padStart(2,'0')}:${String(now%60).padStart(2,'0')} ET. Match counts vary by available bars; D+1 uses only candidates with a real next session.`:'The selected target date is a completed historical session, so today’s remaining-session projection is not applicable.'}
+async function runCompare(force=false){if(!rows.length){$('#compareStatus').textContent='Run a keyword search first; there are no keyword-associated candidates yet.';return}if(!await verify())return;const button=$('#compareForm button[type=submit]');button.disabled=true;$('#compareResults').innerHTML='';$('#unifiedProjectionRoot').innerHTML='';try{$('#compareStatus').textContent='Collecting qualifying historical events from keyword-search tickers…';const candidates=await collectCompareCandidates();if(!candidates.length)throw Error('No qualifying historical events were found among the current search tickers.');const payload={user,token,ticker:$('#compareTicker').value.trim().toUpperCase(),date:$('#compareDate').value,window:Number($('#compareWindow').value),top_k:Number($('#compareTopK').value),include_own:$('#compareOwn').checked,manual_weights:$('#manualWeights').checked,force,weights:{A:Number($('#weightA').value),B:Number($('#weightB').value),C:Number($('#weightC').value)},candidates};lastComparePayload=payload;$('#compareStatus').textContent=`Scoring up to ${Math.min(60,candidates.length)} historical events; fetching candle features…`;const r=await fetch('/api/keyword-compare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),d=await r.json();if(!r.ok)throw Error(d.error||'Compare failed');currentCompareData=d;$('#compareStatus').textContent=`Compare complete · ${d.candidate_count} candidates scored from ${Math.min(40,new Set(candidates.map(x=>x.ticker)).size)} search tickers.`;renderCompare(d);drawUnifiedProjection(d)}catch(e){$('#compareStatus').innerHTML=`<span class="error">${esc(e.message)}</span>`}finally{button.disabled=false}}
+async function runMatcherValidation(){if(!rows.length){$('#compareStatus').textContent='Run a keyword search first.';return}if(!await verify())return;const button=$('#validateMatcher');button.disabled=true;try{$('#compareStatus').textContent='Validating against held-out SEC-associated events and three baselines…';const candidates=await collectCompareCandidates(),weights=currentCompareData?.weights||{A:50,B:25,C:25};const response=await fetch('/api/keyword-validate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user,token,window:Number($('#compareWindow').value),mode:$('#validationMode').value,weights,candidates})}),result=await response.json();if(!response.ok)throw Error(result.error||'Validation failed');if(currentCompareData){currentCompareData.validation=result;drawProjectionPanel(currentCompareData)}const names={fade:'HOD-to-close fade (RMSE)',open_close:'Open-to-close sign (hit rate)',d1:'D+1 direction (hit rate)',midday_remaining:'Midday remaining move (RMSE)'},bases=[['matcher','Matcher'],['gap_price_baseline','Gap + price baseline'],['random_keyword_baseline','Random same-keyword'],['scalar_only_baseline','Scalar-only']];let html=`<section class="compareMatch"><h3>Matcher validation · ${esc(result.mode)} · n=${result.sample_size}</h3>${result.warning?`<div class="lowConfidence">${esc(result.warning)}</div>`:'<div class="confidenceGood">Beat each baseline on both continuous measures.</div>'}<div class="compareNote">${esc(result.note)}</div><table class="compareStats"><tr><th>Outcome</th>${bases.map(x=>`<th>${x[1]}</th>`).join('')}</tr>`;for(const [key,label]of Object.entries(names)){html+=`<tr><td>${label}</td>${bases.map(([base])=>{const s=result.metrics[key][base];if(!s.n)return '<td>n=0</td>';return `<td>n=${s.n} · ${s.rmse==null?'':`RMSE ${s.rmse.toFixed(2)} ${s.rmse_ci95?`(95% ${s.rmse_ci95[0].toFixed(2)}–${s.rmse_ci95[1].toFixed(2)}) · `:''}`}hit ${(100*s.hit_rate).toFixed(0)}% (95% ${(100*s.hit_ci95[0]).toFixed(0)}–${(100*s.hit_ci95[1]).toFixed(0)}%)</td>`}).join('')}</tr>`}html+='</table></section>';$('#compareResults').insertAdjacentHTML('beforeend',html);$('#compareStatus').textContent=`Validation finished on ${result.evaluated} held-out events (${result.mode}).`}catch(e){$('#compareStatus').innerHTML=`<span class="error">${esc(e.message)}</span>`}finally{button.disabled=false}}
+$('#compareDate').value=isoDate(now);$('#compareTicker').addEventListener('input',e=>e.target.value=e.target.value.toUpperCase());$('#manualWeights').onchange=e=>['A','B','C'].forEach(k=>$('#weight'+k).disabled=!e.target.checked);for(const k of ['A','B','C'])$('#weight'+k).oninput=e=>$('#weight'+k+'Label').textContent=e.target.value+'%';$('#compareForm').onsubmit=e=>{e.preventDefault();runCompare()};$('#compareRecompute').onclick=()=>{if(lastComparePayload)runCompare(true);else $('#compareStatus').textContent='Run Compare once before recomputing.'};$('#validateMatcher').onclick=runMatcherValidation;
 async function search(reset=true){if(!await verify())return;if(reset){rows=[];offset=0;kwEventCache.clear();lastComparePayload=null;$('#compareResults').innerHTML='';$('#tableRoot').innerHTML='';$('#stocksRoot').innerHTML=''}const gen=++searchGeneration;$('#moreBtn').disabled=true;$('#moreBtn').textContent='Searching…';setStatus('Searching EDGAR full text; inspecting filing excerpts…');try{const body=payload();const res=await fetch('/api/keyword-search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await res.json();if(gen!==searchGeneration)return;if(!res.ok)throw Error(data.error||'SEC search failed');rows=reset?data.rows:rows.concat(data.rows);offset=data.from+data.size;total=data.total;setStatus(`Search complete: ${data.rows.length} filing matches returned on this page.`);buildTable();$('#moreBtn').style.display=offset<total?'inline-block':'none';$('#moreBtn').disabled=false;$('#moreBtn').textContent='Load more';}catch(e){if(gen===searchGeneration){setStatus(e.message,true);$('#moreBtn').disabled=false;$('#moreBtn').textContent='Load more'}}}
 $('#searchForm').onsubmit=e=>{e.preventDefault();search(true)};$('#moreBtn').onclick=()=>search(false);
 $('#clearBtn').onclick=()=>{searchGeneration++;kwEventCache.clear();lastComparePayload=null;$('#compareResults').innerHTML='';rows=[];offset=0;total=0;$('#keyword').value='';$('#tableRoot').innerHTML='';$('#stocksRoot').innerHTML='';$('#resultSummary').innerHTML='';$('#moreBtn').style.display='none';$('#status').textContent='Search SEC filings by keyword and date. Charts only show sessions where the premarket high is >50% above the previous close and session dollar volume is >$10M.';$('#startDate').value=isoDate(twoYears);$('#endDate').value=isoDate(now)};
