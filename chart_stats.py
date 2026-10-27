@@ -335,9 +335,9 @@ def poly_frame(rows):
     return df
 
 
-def minute_df(t, day):
+def minute_df(t, day, force=False):
     key = f"{t}_{day}_1m"
-    rows = cget(key)
+    rows = None if force else cget(key)
     if rows is None:
         j = poly_get(f"/v2/aggs/ticker/{t}/range/1/minute/{day}/{day}",
                      {"adjusted": "false", "sort": "asc", "limit": 50000})
@@ -2851,6 +2851,278 @@ def api_keyword_events():
     except Exception as exc:
         app.logger.exception("Keyword event loading failed for %s", ticker)
         return jsonify({"error": f"Market data load failed: {type(exc).__name__}: {exc}"}), 502
+
+
+def _compare_event_features(ticker, day, window, force=False):
+    """Real Polygon intraday and daily event features, cached by ticker/date/window."""
+    cache_key = f"kwcompare_v1_{ticker}_{day}_{window}"
+    cached = None if force else cget(cache_key, 6 * 3600)
+    if cached is not None:
+        return cached
+    daily = load_daily(ticker, force=force)
+    idx = next((i for i, row in enumerate(daily) if row["date"] == day), None)
+    today_live = day == dt.date.today().isoformat()
+    if idx is None and not today_live:
+        raise ValueError(f"No daily candle for {ticker} on {day}; the date may not be a trading session.")
+    if idx is None:
+        idx = len(daily)
+    if idx < 1:
+        raise ValueError(f"Previous close is unavailable for {ticker} on {day}.")
+    splits = load_splits(ticker)
+    def split_adjust(row, target_day):
+        adjusted = dict(row)
+        price_factor = volume_factor = 1.0
+        source_day = row.get("date", target_day)
+        for split in splits:
+            split_day = split.get("date")
+            if not split_day: continue
+            ratio = float(split.get("to") or 0) / float(split.get("from") or 1)
+            if ratio <= 0: continue
+            if source_day < split_day <= target_day:
+                price_factor /= ratio; volume_factor *= ratio
+            elif target_day < split_day <= source_day:
+                price_factor *= ratio; volume_factor /= ratio
+        for key in ("o", "h", "l", "c", "vw"):
+            if adjusted.get(key) is not None: adjusted[key] = float(adjusted[key]) * price_factor
+        if adjusted.get("v") is not None: adjusted["v"] = float(adjusted["v"]) * volume_factor
+        return adjusted
+    previous_row = split_adjust(daily[idx-1], day)
+    pc = float(previous_row["c"] or 0)
+    if pc <= 0:
+        raise ValueError(f"Previous close is invalid for {ticker} on {day}.")
+    df = minute_df(ticker, day, force=(force or day == dt.date.today().isoformat()))
+    if df is None or df.empty:
+        raise ValueError(f"Intraday candles are unavailable for {ticker} on {day}; no daily substitute was used.")
+    m = metrics(df, pc, True)
+    # Resample one-minute real candles into fixed 5-minute buckets from 04:00 ET.
+    mins = df.index.hour * 60 + df.index.minute
+    session = df[(mins >= 240) & (mins < 960)].copy()
+    session["bucket"] = ((session.index.hour * 60 + session.index.minute - 240) // 5).astype(int)
+    intraday = []
+    for _, group in session.groupby("bucket", sort=True):
+        close = float(group["c"].iloc[-1])
+        intraday.append({"t": int(group["bucket"].iloc[0]) * 5 + 240,
+                         "prev": (close / pc - 1) * 100,
+                         "open": ((close / float(m.get("open")) - 1) * 100 if m.get("open") and int(group["bucket"].iloc[0]) * 5 + 240 >= RG_START else None),
+                         "vol": float(group["v"].sum())})
+    total_intraday_volume = sum(x["vol"] for x in intraday) or 1.0
+    cumulative_volume = 0.0
+    for point in intraday:
+        cumulative_volume += point["vol"]
+        point["cumvol"] = cumulative_volume / total_intraday_volume
+    intraday_by_time = {point["t"]: point for point in intraday}
+    intraday = [intraday_by_time.get(minute, {"t": minute, "prev": None, "open": None, "vol": None, "cumvol": None})
+                for minute in range(240, 960, 5)]
+    regular = session[(session.index.hour * 60 + session.index.minute >= RG_START)]
+    op = float(m.get("open") or 0)
+    hod = float(m.get("hod") or 0)
+    close = float(m.get("close") or 0)
+    day_row = ({"date": day, "o": m.get("open"), "h": m.get("hod"), "l": m.get("lod"), "c": m.get("close"), "v": float(df["v"].sum())}
+               if today_live or idx >= len(daily) else daily[idx])
+    pre_rows = [split_adjust(row, day) for row in daily[max(0, idx-window-1):idx]]
+    prior20 = [split_adjust(row, day) for row in daily[max(0, idx-20):idx]]
+    avg_volume20 = float(np.mean([float(x["v"]) for x in prior20 if x.get("v")])) if prior20 else None
+    post_rows = [split_adjust(row, day) for row in daily[idx+1:idx+1+window]] if idx < len(daily) and not today_live else []
+    base = [float(x["c"]) for x in pre_rows if x.get("c")]
+    baseline = base[0] if base else None
+    # D-N-1 is the reference close; score and display only the N sessions D-N..D-1.
+    pre_path = [((float(x["c"])/baseline-1)*100 if baseline else None) for x in pre_rows[1:]]
+    pre_vol = []
+    for j, row in enumerate(pre_rows[1:], start=1):
+        prior = daily[max(0, max(0, idx-window-1)+j-20):max(0, idx-window-1)+j]
+        avg = float(np.mean([float(x["v"]) for x in prior])) if prior else None
+        pre_vol.append(float(row["v"])/avg if avg else None)
+    post_path = [((float(x["c"])/float(day_row["c"])-1)*100 if day_row.get("c") else None) for x in post_rows]
+    post_open_gap, prior_close = [], float(day_row.get("c") or 0)
+    for row in post_rows:
+        post_open_gap.append((float(row["o"])/prior_close-1)*100 if prior_close and row.get("o") else None)
+        prior_close = float(row.get("c") or prior_close)
+    vols = [float(x["v"])/float(post_rows[0]["v"] or 1) for x in post_rows] if post_rows else []
+    pre_scoring_rows = pre_rows[1:]
+    pre_closes = [float(x["c"]) for x in pre_scoring_rows if x.get("c")]
+    pre_ranges = [((float(x["h"])-float(x["l"]))/float(x["c"])*100 if x.get("c") else None) for x in pre_scoring_rows]
+    pre_slope = (float(np.polyfit(np.arange(len(pre_path)), pre_path, 1)[0]) if len(pre_path) >= 2 else None)
+    last_ten = pre_scoring_rows[-10:]
+    pre_dist_high = ((float(pre_scoring_rows[-1]["c"])/max(float(x["h"]) for x in last_ten)-1)*100
+                     if last_ten and pre_scoring_rows[-1].get("c") else None)
+    pre_dist_low = ((float(pre_scoring_rows[-1]["c"])/min(float(x["l"]) for x in last_ten)-1)*100
+                    if last_ten and pre_scoring_rows[-1].get("c") else None)
+    pre_streak = 0
+    for row in reversed(pre_scoring_rows):
+        direction = 1 if float(row.get("c") or 0) > float(row.get("o") or 0) else -1
+        if pre_streak and direction != (1 if pre_streak > 0 else -1): break
+        pre_streak += direction
+    post_drawdown = None
+    if post_rows and day_row.get("c"):
+        running_peak = float(day_row.get("h") or day_row["c"])
+        post_drawdown = 0.0
+        for row in post_rows:
+            post_drawdown = min(post_drawdown, (float(row["l"])/running_peak-1)*100)
+            running_peak = max(running_peak, float(row.get("h") or running_peak))
+    post_runup = (max((float(x["h"])/float(day_row["c"])-1)*100 for x in post_rows) if post_rows and day_row.get("c") else None)
+    post_low_day = (min(range(len(post_rows)), key=lambda i: float(post_rows[i]["l"]))+1 if post_rows else None)
+    follow_through = (sum(1 for i, row in enumerate(post_rows) if float(row.get("c") or 0) > (float(day_row.get("c") or 0) if i == 0 else float(post_rows[i-1].get("c") or 0))) if post_rows else None)
+    features = {
+        "ticker": ticker, "date": day, "pc": pc,
+        "intraday": intraday,
+        "close": (close or None),
+        "hod": (hod or None), "lod": (m.get("lod") or None),
+        "rth_open": ((op/pc-1)*100 if op else None),
+        "gap": ((op/pc-1)*100 if op else None),
+        "hod_min": (m.get("hod_min") - RG_START if m.get("hod_min") is not None else None),
+        "hod_fade": ((close/hod-1)*100 if hod and close else None),
+        "open_close": ((close/op-1)*100 if op else None),
+        "pm_vs_open": ((float(m["pm_high"])/op-1)*100 if m.get("pm_high") and op else None),
+        "gap_retention": (((close-pc)/(op-pc)*100) if op and op != pc else None),
+        "opening_share": (float(regular.head(5)["v"].sum())/float(df["v"].sum()) if not regular.empty and float(df["v"].sum()) else None),
+        "event_rvol": (float(day_row.get("v") or 0)/avg_volume20 if avg_volume20 else None),
+        "session_dollar_volume": float((((df["h"]+df["l"]+df["c"])/3)*df["v"]).sum()),
+        "pre_path": pre_path, "pre_rvol": pre_vol, "pre_trend_slope": pre_slope,
+        "pre_dist_high": pre_dist_high, "pre_dist_low": pre_dist_low, "pre_streak": pre_streak,
+        "pre_dollar_volume": [math.log10(max(1.0, float(x.get("v") or 0)*float(x.get("vw") or x.get("c") or 0))) for x in pre_rows[1:]],
+        "pre_ranges": pre_ranges,
+        "post_path": post_path, "post_open_gap": post_open_gap, "post_vol": vols,
+        "post_drawdown": post_drawdown, "post_runup": post_runup,
+        "post_low_day": post_low_day, "follow_through": follow_through,
+        "pre_coverage": min(window, max(0, len(pre_rows)-1)), "post_coverage": len(post_rows),
+        "chart": chart_pack(df, m, pc, dt.date.fromisoformat(day)),
+        "source": "Polygon 1-minute and daily aggregate candles"
+    }
+    cput(cache_key, features)
+    return features
+
+
+def _compare_similarity(a, b):
+    """Score available families with z-Euclidean curves and bounded scalar distances."""
+    def curve_score(x, y):
+        pairs = [(float(u), float(v)) for u, v in zip(x or [], y or []) if u is not None and v is not None]
+        if len(pairs) < 3:
+            return None
+        xx, yy = np.array([p[0] for p in pairs]), np.array([p[1] for p in pairs])
+        sx, sy = float(np.std(xx)), float(np.std(yy))
+        if sx <= 1e-9 or sy <= 1e-9:
+            return max(0.0, 100.0 * (1.0 - min(2.0, float(np.mean(np.abs(xx-yy))) / 10.0)))
+        distance = float(np.sqrt(np.mean(((xx-xx.mean())/sx-(yy-yy.mean())/sy)**2)))
+        return max(0.0, 100.0 * (1.0 - distance/2.0))
+    def scalar_score(keys, scale):
+        ds = [abs(float(a[k])-float(b[k]))/scale for k in keys if a.get(k) is not None and b.get(k) is not None]
+        return max(0.0, 100.0*(1.0-float(np.mean(ds)))) if ds else None
+    intraday = [curve_score([x["prev"] for x in a["intraday"]], [x["prev"] for x in b["intraday"]]),
+                curve_score([x.get("open") for x in a["intraday"]], [x.get("open") for x in b["intraday"]]),
+                curve_score([x.get("cumvol") for x in a["intraday"]], [x.get("cumvol") for x in b["intraday"]]),
+                scalar_score(["gap", "gap_retention", "hod_fade", "open_close", "pm_vs_open", "opening_share"], 50.0),
+                scalar_score(["hod_min"], 120.0)]
+    A = float(np.mean([x for x in intraday if x is not None])) if any(x is not None for x in intraday) else None
+    pre = [curve_score(a.get("pre_path"), b.get("pre_path")),
+           curve_score(a.get("pre_rvol"), b.get("pre_rvol")),
+           curve_score(a.get("pre_dollar_volume"), b.get("pre_dollar_volume")),
+           curve_score(a.get("pre_ranges"), b.get("pre_ranges")),
+           scalar_score(["pre_trend_slope", "pre_dist_high", "pre_dist_low"], 50.0),
+           scalar_score(["pre_streak"], 10.0)]
+    B = float(np.mean([x for x in pre if x is not None])) if any(x is not None for x in pre) else None
+    C = None
+    if a.get("post_coverage", 0) and b.get("post_coverage", 0):
+        post = [curve_score(a.get("post_path"), b.get("post_path")),
+                curve_score(a.get("post_open_gap"), b.get("post_open_gap")),
+                curve_score(a.get("post_vol"), b.get("post_vol")),
+                scalar_score(["post_drawdown", "post_runup"], 50.0),
+                scalar_score(["post_low_day", "follow_through"], 10.0)]
+        C = float(np.mean([x for x in post if x is not None])) if any(x is not None for x in post) else None
+    return {"A": A, "B": B, "C": C}
+
+
+def _compare_share_context(ticker, day, price):
+    facts = load_shares_out(ticker)
+    eligible = [row for row in facts if row.get("filed", "") <= day and row.get("end", "") <= day]
+    if not eligible:
+        return {"shares_out": None, "filed": None, "market_cap": None,
+                "market_cap_bucket": "Unavailable", "price_bucket": _compare_price_bucket(price), "exchange": "Unavailable"}
+    row = max(eligible, key=lambda item: (item.get("end", ""), item.get("filed", "")))
+    shares = float(row["val"])
+    for split in load_splits(ticker):
+        if row.get("end", "") < split.get("date", "") <= day:
+            shares *= float(split.get("to") or 1) / float(split.get("from") or 1)
+    market_cap = shares * float(price) if price else None
+    if market_cap is None: cap_bucket = "Unavailable"
+    elif market_cap < 50_000_000: cap_bucket = "< $50M"
+    elif market_cap < 300_000_000: cap_bucket = "$50M–$300M"
+    elif market_cap < 2_000_000_000: cap_bucket = "$300M–$2B"
+    else: cap_bucket = "≥ $2B"
+    return {"shares_out": shares, "filed": row.get("filed"), "market_cap": market_cap,
+            "market_cap_bucket": cap_bucket, "price_bucket": _compare_price_bucket(price), "exchange": "Unavailable"}
+
+
+def _compare_price_bucket(price):
+    if not price: return "Unavailable"
+    if price < 1: return "<$1"
+    if price < 5: return "$1–$5"
+    if price < 20: return "$5–$20"
+    if price < 100: return "$20–$100"
+    return "≥$100"
+
+
+@app.route("/api/keyword-compare", methods=["POST"])
+def api_keyword_compare():
+    data = request.get_json(silent=True) or {}
+    user = str(data.get("user") or "").strip().lower()
+    token = str(data.get("token") or "").strip()
+    if user not in ALLOWED_USERS or not _db_validate_session(user, token):
+        return jsonify({"error": "Session expired. Please sign in again."}), 401
+    ticker = str(data.get("ticker") or "").strip().upper()
+    if not re.fullmatch(r"[A-Z.\-]{1,10}", ticker):
+        return jsonify({"error": "Enter a valid ticker symbol."}), 400
+    try:
+        day = dt.date.fromisoformat(str(data.get("date") or "" )).isoformat()
+        window = max(5, min(20, int(data.get("window") or 10)))
+        top_k = max(1, min(10, int(data.get("top_k") or 5)))
+        weights = data.get("weights") or {"A": 50, "B": 25, "C": 25}
+        if not isinstance(weights, dict): raise ValueError
+        weights = {k: max(0.0, min(100.0, float(weights.get(k, 0)))) for k in ("A", "B", "C")}
+        candidates = data.get("candidates") or []
+        if not isinstance(candidates, list) or len(candidates) > 1000 or any(not isinstance(x, dict) for x in candidates): raise ValueError
+    except (TypeError, ValueError):
+        return jsonify({"error": "Choose a valid date, comparison window, and candidate list."}), 400
+    try:
+        force = bool(data.get("force"))
+        target = _compare_event_features(ticker, day, window, force=force)
+        compare_own = bool(data.get("include_own"))
+        eligible = []
+        candidate_pool = sorted(candidates, key=lambda item: float(item.get("dollar_volume") or 0), reverse=True)[:60]
+        for item in candidate_pool:
+            symbol = str(item.get("ticker") or "").strip().upper()
+            event_day = str(item.get("date") or "")
+            if not re.fullmatch(r"[A-Z.\-]{1,10}", symbol) or (symbol == ticker and not compare_own) or event_day == day and symbol == ticker:
+                continue
+            try:
+                dt.date.fromisoformat(event_day)
+                feat = _compare_event_features(symbol, event_day, window, force=force)
+                scores = _compare_similarity(target, feat)
+                active = {k: v for k, v in scores.items() if v is not None and weights[k] > 0}
+                total_weight = sum(weights[k] for k in active)
+                if not total_weight: continue
+                overall = sum(scores[k]*weights[k] for k in active)/total_weight
+                eligible.append({"ticker": symbol, "date": event_day, "company": item.get("company") or symbol,
+                                 "keyword": item.get("keyword") or "", "role": item.get("role") or "",
+                                 "headline": item.get("headline") or "", "filing_url": item.get("filing_url") or "",
+                                 "filing_date": item.get("filing_date") or "",
+                                 "scores": scores, "score": overall, "features": feat})
+            except Exception as exc:
+                app.logger.info("Keyword compare candidate %s %s skipped: %s", symbol, event_day, exc)
+        eligible.sort(key=lambda x: x["score"], reverse=True)
+        matches = eligible[:top_k]
+        target["context"] = _compare_share_context(ticker, day, target.get("close"))
+        for match in matches:
+            match["features"]["context"] = _compare_share_context(match["ticker"], match["date"], match["features"].get("close"))
+        return jsonify({"target": target, "matches": matches, "candidate_count": len(eligible),
+                        "weights": weights, "window": window, "target_post_coverage": target["post_coverage"],
+                        "consensus": {"faded": sum(1 for x in eligible[:top_k] if (x["features"].get("hod_fade") or 0) < -20),
+                                      "ground_higher": sum(1 for x in eligible[:top_k] if (x["features"].get("post_path") or [0])[-1] > 0),
+                                      "early_hod": sum(1 for x in eligible[:top_k] if x["features"].get("hod_min") is not None and x["features"]["hod_min"] < 90)},
+                        "formula": "A averages 5-minute previous-close, open-relative, and cumulative-volume z-curve scores plus event-stat similarities; B averages pre-gap return, relative-volume, log-dollar-volume, range curves and pre-gap slope/high-low/streak similarities; C averages post-gap return/open-gap/volume curves and drawdown/runup/low-day/follow-through similarities. For each curve: max(0,100*(1-RMS(zA-zB)/2)); scalar similarity=max(0,100*(1-mean(abs(diff)/scale))) with 50 percentage points for percent stats, 120 minutes for HOD time, and 10 sessions for streak/day counts. Overall is the weighted mean of available A/B/C, renormalized when a component is unavailable.",
+                        "source": "Polygon intraday and daily aggregate candles; SEC keyword-search rows supplied by the current page."})
+    except Exception as exc:
+        app.logger.exception("Keyword compare failed for %s %s", ticker, day)
+        return jsonify({"error": f"Compare data unavailable: {type(exc).__name__}: {exc}"}), 502
 
 
 _scanner_cache = {"at": 0.0, "rows": []}
@@ -5889,10 +6161,10 @@ input[type=text]{width:min(420px,70vw)}input[type=date]{width:140px}select{min-w
 .filters{margin-top:8px;display:flex;gap:9px;align-items:end;flex-wrap:wrap}.status{padding:9px 2px;color:var(--muted);min-height:36px}.error{color:var(--red)}
 .tablewrap{max-height:52vh;overflow:auto;border:1px solid var(--line);background:#08090b}.tablewrap table{border-collapse:collapse;width:100%;min-width:850px;font-size:12px}th{position:sticky;top:0;background:#15181d;color:#d6dbe1;text-align:left;padding:7px 8px;border-bottom:1px solid #3a414a;cursor:pointer;white-space:nowrap}td{padding:6px 8px;border-bottom:1px solid #20242a;vertical-align:top}tbody tr:nth-child(even){background:#111317}tbody tr:hover{background:#171d25}.ticker{font-weight:bold;color:var(--blue);text-decoration:none}.deal a{color:#7cc9ff}.sub{display:block;color:#828b95;font-size:10px;margin-top:2px}.excerpt{max-width:420px;color:#adb6c0;font-size:11px}details summary{color:#8fcfff;cursor:pointer}.count{color:var(--green);font-weight:bold}
 .stock{border-top:1px solid #39414b;margin-top:18px;padding-top:10px}.stockhead{position:sticky;top:51px;z-index:2;background:#0a0c0f;border-left:3px solid #3285c4;padding:9px 10px;margin-bottom:8px}.stockhead h2{font-size:16px;margin:0;color:#d8e8f5}.evidence{font-size:11px;color:#adb5be;margin-top:5px}.evidence a{color:#69baff}.divider{border:0;border-top:1px solid #292f36;margin:8px 0}
-.tickerIndex{display:flex;gap:6px;flex-wrap:wrap;padding:6px 0 12px}.tickerIndex a{border:1px solid #303943;background:#0d1116;color:#7dc7ff;padding:5px 9px;text-decoration:none}.tickerIndex a:hover{border-color:#29a8ff}.eventGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.event{border:1px solid #272d34;background:#090b0e;padding:5px;min-width:0}.eventhead{display:flex;align-items:center;gap:4px;padding:1px 0 5px}.eventtitle{font-weight:bold;color:#d7e7f2;margin-right:auto;white-space:nowrap}.event select{height:25px;min-width:58px;font-size:11px;padding:2px 5px}.event button{height:25px;font-size:11px;padding:2px 7px}.event canvas{width:100%;height:300px!important;max-height:300px;display:block;background:#050607;cursor:zoom-in}.chartModal{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.94);display:none;align-items:center;justify-content:center;padding:14px}.chartModal.open{display:flex}.chartModalBox{width:98vw;height:95vh;background:#080a0d;border:1px solid #343a42;display:flex;flex-direction:column}.chartModalHead{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#11151a;border-bottom:1px solid #252a30}.chartModalTitle{color:#60baff;font-weight:bold;margin-right:auto}.chartModalCanvas{width:100%;height:calc(95vh - 54px);background:#050607}@media(max-width:760px){.eventGrid{grid-template-columns:1fr}}
+.tickerIndex{display:flex;gap:6px;flex-wrap:wrap;padding:6px 0 12px}.tickerIndex a{border:1px solid #303943;background:#0d1116;color:#7dc7ff;padding:5px 9px;text-decoration:none}.tickerIndex a:hover{border-color:#29a8ff}.eventGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.event{border:1px solid #272d34;background:#090b0e;padding:5px;min-width:0}.eventhead{display:flex;align-items:center;gap:4px;padding:1px 0 5px}.eventtitle{font-weight:bold;color:#d7e7f2;margin-right:auto;white-space:nowrap}.event select{height:25px;min-width:58px;font-size:11px;padding:2px 5px}.event button{height:25px;font-size:11px;padding:2px 7px}.event canvas{width:100%;height:300px!important;max-height:300px;display:block;background:#050607;cursor:zoom-in}.chartModal{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.94);display:none;align-items:center;justify-content:center;padding:14px}.chartModal.open{display:flex}.chartModalBox{width:98vw;height:95vh;background:#080a0d;border:1px solid #343a42;display:flex;flex-direction:column}.chartModalHead{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#11151a;border-bottom:1px solid #252a30}.chartModalTitle{color:#60baff;font-weight:bold;margin-right:auto}.chartModalCanvas{width:100%;height:calc(95vh - 54px);background:#050607}#comparePanel{margin-top:28px;border-top:1px solid #39414b;padding-top:14px;scroll-margin-top:58px}#comparePanel h2{margin:0 0 8px;color:#8fd0ff}.compareToolbar{display:flex;gap:9px;align-items:end;flex-wrap:wrap;padding:12px;background:#0b0d10;border:1px solid var(--line)}.compareToolbar input[type=text]{width:125px}.compareToolbar input[type=date]{width:145px}.compareToolbar select{min-width:85px}.compareMatch{border:1px solid #303841;background:#0a0c0f;margin:13px 0;padding:10px}.compareSummary{color:#b4c0ca;margin:8px 0}.scoreline{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0;color:#aab4be}.scorebar{width:105px;height:7px;background:#242a31;display:inline-block;vertical-align:middle;margin-left:4px}.scorebar i{display:block;height:100%;background:#53b9ff}.compareCharts{display:grid;grid-template-columns:1fr 1fr;gap:10px}.compareOverlay{width:100%;height:220px;background:#050607;display:block}.compareStats{border-collapse:collapse;width:100%;margin:8px 0}.compareStats td,.compareStats th{border:1px solid #242a31;padding:5px;text-align:left}.compareStats th{color:#9fcfff}.compareNote{color:#909aa4;font-size:11px;margin:7px 0}.compareFiling{color:#75c6ff}@media(max-width:760px){.eventGrid,.compareCharts{grid-template-columns:1fr}}
 @media(max-width:720px){main{padding:10px}.stockhead{top:45px}.toolbar{align-items:stretch}input[type=text]{width:100%}}
 </style></head><body>
-<header><a href="/">← Gap-Up Fade</a><strong>⌕ Search Keyword</strong><span style="margin-left:auto;color:#78838e">SEC EDGAR · financing-player research</span></header>
+<header><a href="/">← Gap-Up Fade</a><strong>⌕ Search Keyword</strong><a href="#comparePanel">Jump to Compare</a><span style="margin-left:auto;color:#78838e">SEC EDGAR · financing-player research</span></header>
 <main>
 <form id="searchForm" class="toolbar">
   <label>Keyword<input id="keyword" type="text" maxlength="120" placeholder="Enter a company, investor, or keyword" required></label>
@@ -5902,6 +6174,7 @@ input[type=text]{width:min(420px,70vw)}input[type=date]{width:140px}select{min-w
 </form>
 <div id="status" class="status">Search SEC filings by keyword and date. Charts only show sessions where the premarket high is >50% above the previous close and session dollar volume is >$10M.</div>
 <div id="resultSummary"></div><div id="tableRoot"></div><div id="stocksRoot"></div>
+<section id="comparePanel"><h2>Compare historical event patterns</h2><div class="compareNote">Run a keyword search first. Candidates come only from qualifying charts in that search.</div><form id="compareForm" class="compareToolbar"><label>Target ticker<input id="compareTicker" type="text" maxlength="10" placeholder="TICKER" required></label><label>Target date<input id="compareDate" type="date" required></label><label>Window (trading days)<select id="compareWindow"><option>5</option><option selected>10</option><option>15</option><option>20</option></select></label><label>Top K<select id="compareTopK"><option>3</option><option selected>5</option><option>10</option></select></label><label>A intraday<input id="weightA" type="range" min="0" max="100" value="50"><span id="weightALabel">50%</span></label><label>B pre-gap<input id="weightB" type="range" min="0" max="100" value="25"><span id="weightBLabel">25%</span></label><label>C post-gap<input id="weightC" type="range" min="0" max="100" value="25"><span id="weightCLabel">25%</span></label><label><input id="compareOwn" type="checkbox"> Include own events</label><button class="primary" type="submit">Compare</button><button id="compareRecompute" type="button">Recompute</button></form><div id="compareStatus" class="status">Search for a keyword to populate historical candidate events.</div><div id="compareResults"></div></section>
 </main>
 <div id="chartModal" class="chartModal" onclick="if(event.target===this)closeKWModal()"><div class="chartModalBox"><div class="chartModalHead"><button id="kwPrev">‹</button><span id="kwModalTitle" class="chartModalTitle"></span><button id="kwNext">›</button><select id="kwModalTf"><option>1m</option><option>2m</option><option>5m</option><option selected>15m</option><option>30m</option><option>1h</option><option>1D</option></select><select id="kwModalDays"><option value="1">1 day</option><option value="3">3 days</option><option value="5" selected>5 days</option><option value="10">10 days</option><option value="20">20 days</option></select><button onclick="closeKWModal()">✕</button></div><canvas id="kwModalCanvas" class="chartModalCanvas" height="720"></canvas></div></div>
 <script>
@@ -5937,7 +6210,7 @@ async function loadStockCharts(section){
  const q=new URLSearchParams({ticker,user,token,start,end});
  try{const res=await fetch('/api/keyword-events?'+q),data=await res.json();if(!res.ok)throw Error(data.error||'Market data request failed');
    if(!data.events.length){const id=section.id;section.remove();$('#tableRoot').querySelector(`a[href="#${id}"]`)?.remove();return}
-   renderEvents(root,data,section._filings||[]);
+   section._kwEvents=data.events;renderEvents(root,data,section._filings||[]);
  }catch(e){root.innerHTML=`<div class="noevents error">${esc(e.message)}</div>`}
 }
 function aggregate(bars,tf){const src=bars;if(tf==='1D'){if(src.d?.length)return src;if(!src.t.length)return src;const i=[...src.t.keys()];return{t:[0],d:[src.date||''],o:[src.o[i[0]]],h:[Math.max(...i.map(k=>src.h[k]))],l:[Math.min(...i.map(k=>src.l[k]))],c:[src.c[i[i.length-1]]],v:[i.reduce((s,k)=>s+(src.v[k]||0),0)],vw:[null]}}
@@ -5956,7 +6229,7 @@ function renderEvents(root,data,filings=[]){
 }
 async function loadKWContext(cv,anchor,days){if(!cv?._chart)return;cv._activeDate=anchor;const requestId=(cv._contextRequestId||0)+1;cv._contextRequestId=requestId;const q=new URLSearchParams({ticker:cv._event.ticker,date:anchor,days:String(days||5),tf:(cv._timeframe||'15m')==='1D'?'1d':(cv._timeframe||'15m'),user,token});try{const r=await fetch('/api/chart-context?'+q),data=await r.json();if(requestId!==cv._contextRequestId)return;if(!r.ok)throw Error(data.error||'Chart data unavailable');cv._contextBars=data.bars;cv._contextDates=data.dates;cv._contextError='';}catch(e){if(requestId!==cv._contextRequestId)return;cv._contextBars=null;cv._contextError=e.message;}const card=cv.closest('.event');if(card){card.querySelector('.eventtitle').textContent=`${cv._event.ticker} · ${fmtDate(anchor)}`;if(cv._contextError){let msg=card.querySelector('.chartError');if(!msg){msg=document.createElement('div');msg.className='noevents chartError';card.appendChild(msg)}msg.textContent=cv._contextError}else card.querySelector('.chartError')?.remove()}drawKWChart(cv);if(kwModalSource===cv)renderKWModal()}
 async function stepKWDay(cv,step){if(!cv?._chart)return;let dates=cv._contextDates||[],anchor=cv._activeDate||cv._event.date,idx=dates.indexOf(anchor);if(idx<0||idx+step<0||idx+step>=dates.length){try{const q=new URLSearchParams({ticker:cv._event.ticker,date:anchor,days:'3',tf:'15m',user,token}),r=await fetch('/api/chart-context?'+q),d=await r.json();if(r.ok)dates=d.dates||[]}catch{}idx=dates.indexOf(anchor)}const next=dates[idx+step];if(next)await loadKWContext(cv,next,cv._chartDays||5)}
-function openKWModal(cv){kwModalSource=cv;kwModalSeries=[...cv.closest('.stock').querySelectorAll('.priceChart')].filter(c=>c._chart);kwModalIndex=Math.max(0,kwModalSeries.indexOf(cv));renderKWModal();$('#chartModal').classList.add('open')}
+function openKWModal(cv){kwModalSource=cv;const group=cv.closest('.stock,.compareMatch')||document;kwModalSeries=[...group.querySelectorAll('.priceChart')].filter(c=>c._chart);kwModalIndex=Math.max(0,kwModalSeries.indexOf(cv));renderKWModal();$('#chartModal').classList.add('open')}
 function renderKWModal(){const src=kwModalSeries[kwModalIndex];if(!src)return;const cv=$('#kwModalCanvas');cv._chart=src._chart;cv._event=src._event;cv._timeframe=src._timeframe||'15m';cv._contextBars=src._contextBars;cv._activeDate=src._activeDate;cv._chartDays=src._chartDays;$('#kwModalTitle').textContent=`${src._event.ticker} · ${fmtDate(src._activeDate||src._event.date)}`;$('#kwModalTf').value=cv._timeframe;$('#kwModalDays').value=String(cv._chartDays||5);cv.setAttribute('height',String(Math.max(350,window.innerHeight-70)));drawKWChart(cv)}
 function closeKWModal(){$('#chartModal').classList.remove('open');kwModalSource=null}
 $('#kwPrev').onclick=()=>{if(kwModalSource)stepKWDay(kwModalSource,-1)};$('#kwNext').onclick=()=>{if(kwModalSource)stepKWDay(kwModalSource,1)};
@@ -5987,9 +6260,19 @@ function hm(m,off){m=((m+(off||0))%1440+1440)%1440;return String(Math.floor(m/60
 function bindKWChart(cv){if(cv._bound)return;cv._bound=true;cv.addEventListener('click',()=>openKWModal(cv))}
 function drawNormalized(root,events){const chosen=[...root.querySelectorAll('.compareCheck:checked')].map(c=>events[Number(c.dataset.index)]).filter(e=>e.chart);const cv=root.querySelector('.normalized');if(!cv)return;const dpr=devicePixelRatio||1,W=Math.max(300,cv.parentElement.clientWidth-18),H=170;cv.width=W*dpr;cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';const x=cv.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle='#050607';x.fillRect(0,0,W,H);if(chosen.length<2){x.fillStyle='#8e98a3';x.fillText('Select at least two historical events below to compare normalized session paths.',12,25);return}const L=42,R=8,T=10,B=20,pw=W-L-R,ph=H-T-B;let vals=[];for(const e of chosen){const b=e.chart.bars;vals.push(b.c.map(v=>(v/e.prev_close-1)*100))}const all=vals.flat(),lo=Math.min(-5,...all),hi=Math.max(5,...all),Y=v=>T+ph*(1-(v-lo)/(hi-lo));x.strokeStyle='#2b3239';x.fillStyle='#9aa4ae';for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,yy=Y(v);x.beginPath();x.moveTo(L,yy);x.lineTo(W-R,yy);x.stroke();x.fillText(v.toFixed(0)+'%',2,yy+3)}const colors=['#55bfff','#ffc857','#57d996','#ee7db4','#b39cff','#ff8e66'];chosen.forEach((e,j)=>{const bars=e.chart.bars,series=vals[j];x.strokeStyle=colors[j%colors.length];x.beginPath();series.forEach((v,i)=>{const xx=L+pw*(bars.t[i]-240)/720,yy=Y(v);i?x.lineTo(xx,yy):x.moveTo(xx,yy)});x.stroke();x.fillStyle=colors[j%colors.length];x.fillText(e.date,L+5+j*100,12)});}
 function drawCrossStockNormalized(){const checks=[...document.querySelectorAll('#stocksRoot .compareCheck:checked')],chosen=checks.map(c=>({...c._kwEvent,compareTicker:c._kwTicker})).filter(e=>e.chart);const cv=$('.crossNormalized');if(!cv)return;const dpr=devicePixelRatio||1,W=Math.max(320,cv.parentElement.clientWidth-18),H=200;cv.width=W*dpr;cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';const x=cv.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle='#050607';x.fillRect(0,0,W,H);$('#crossStockCompareStatus').textContent=chosen.length<2?'Select events from multiple ticker sections to compare their price paths on the same previous-close percentage scale.':`${chosen.length} selected events · normalized from previous regular-session close.`;if(chosen.length<2){x.fillStyle='#8e98a3';x.fillText('Select at least two charts above.',12,25);return}const L=42,R=8,T=25,B=22,pw=W-L-R,ph=H-T-B,series=chosen.map(e=>e.chart.bars.c.map(v=>(v/e.prev_close-1)*100)),all=series.flat(),lo=Math.min(-5,...all),hi=Math.max(5,...all),Y=v=>T+ph*(1-(v-lo)/(hi-lo));x.strokeStyle='#2b3239';x.fillStyle='#9aa4ae';for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,yy=Y(v);x.beginPath();x.moveTo(L,yy);x.lineTo(W-R,yy);x.stroke();x.fillText(v.toFixed(0)+'%',2,yy+3)}const colors=['#55bfff','#ffc857','#57d996','#ee7db4','#b39cff','#ff8e66','#ff7373','#9ae66e'];chosen.forEach((e,j)=>{const bars=e.chart.bars;x.strokeStyle=colors[j%colors.length];x.beginPath();series[j].forEach((v,i)=>{const xx=L+pw*(bars.t[i]-240)/720,yy=Y(v);i?x.lineTo(xx,yy):x.moveTo(xx,yy)});x.stroke();x.fillStyle=colors[j%colors.length];x.fillText(`${e.compareTicker} ${e.date}`,L+(j%4)*(pw/4),12+Math.floor(j/4)*11)});}
-async function search(reset=true){if(!await verify())return;if(reset){rows=[];offset=0;$('#tableRoot').innerHTML='';$('#stocksRoot').innerHTML=''}const gen=++searchGeneration;$('#moreBtn').disabled=true;$('#moreBtn').textContent='Searching…';setStatus('Searching EDGAR full text; inspecting filing excerpts…');try{const body=payload();const res=await fetch('/api/keyword-search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await res.json();if(gen!==searchGeneration)return;if(!res.ok)throw Error(data.error||'SEC search failed');rows=reset?data.rows:rows.concat(data.rows);offset=data.from+data.size;total=data.total;setStatus(`Search complete: ${data.rows.length} filing matches returned on this page.`);buildTable();$('#moreBtn').style.display=offset<total?'inline-block':'none';$('#moreBtn').disabled=false;$('#moreBtn').textContent='Load more';}catch(e){if(gen===searchGeneration){setStatus(e.message,true);$('#moreBtn').disabled=false;$('#moreBtn').textContent='Load more'}}}
+const kwEventCache=new Map();let lastComparePayload=null,compareChartObserver=null;
+async function fetchKeywordEvents(ticker){if(kwEventCache.has(ticker))return kwEventCache.get(ticker);const q=new URLSearchParams({ticker,user,token,start:$('#startDate').value,end:$('#endDate').value});const r=await fetch('/api/keyword-events?'+q),d=await r.json();if(!r.ok)throw Error(d.error||'Could not load qualifying chart events for '+ticker);kwEventCache.set(ticker,d.events||[]);return d.events||[]}
+function nearestFiling(ticker,date){const filings=rows.filter(x=>x.ticker===ticker&&x.filing_date&&x.filing_date<=date);if(!filings.length)return null;return filings.reduce((best,row)=>{const distance=Math.abs(Date.parse(row.filing_date)-Date.parse(date));return !best||distance<best.distance?{row,distance}:best},null)?.row||null}
+async function collectCompareCandidates(){const symbols=[...new Set(groupCompanies().map(x=>x.ticker).filter(Boolean))].slice(0,40),out=[];let done=0;for(let i=0;i<symbols.length;i+=3){const batch=symbols.slice(i,i+3);const result=await Promise.allSettled(batch.map(fetchKeywordEvents));for(let j=0;j<result.length;j++){done++;$('#compareStatus').textContent=`Loading qualifying keyword-search events… ${done}/${symbols.length} tickers`;if(result[j].status!=='fulfilled')continue;for(const e of result[j].value){const f=nearestFiling(batch[j],e.date);out.push({ticker:batch[j],date:e.date,dollar_volume:e.dollar_volume||0,company:f?.company||batch[j],keyword:$('#keyword').value.trim(),role:f?.role||'',headline:f?.headline||'',filing_url:f?.filing_url||'',filing_date:f?.filing_date||''})}}}return out}
+function comparePane(parent,label,feature){const pane=document.createElement('article');pane.className='event';pane.innerHTML=`<div class="eventhead"><span class="eventtitle">${esc(label)}</span><button class="eventPrev small" title="Previous trading day">‹</button><button class="eventNext small" title="Next trading day">›</button><select class="eventTf"><option>1m</option><option>2m</option><option>5m</option><option selected>15m</option><option>30m</option><option>1h</option><option>1D</option></select><select class="eventDays"><option value="1">1 day</option><option value="3">3 days</option><option value="5" selected>5 days</option><option value="10">10 days</option><option value="20">20 days</option></select></div><canvas class="priceChart" height="390"></canvas>`;parent.appendChild(pane);const cv=pane.querySelector('canvas');cv._chart=feature.chart;cv._event={ticker:feature.ticker,date:feature.date,high:feature.hod,low:feature.lod};cv._timeframe='15m';cv._chartDays=5;cv._activeDate=feature.date;bindKWChart(cv);drawKWChart(cv);if(!compareChartObserver)compareChartObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){compareChartObserver.unobserve(entry.target);loadKWContext(entry.target,entry.target._activeDate,entry.target._chartDays)}}),{rootMargin:'250px'});compareChartObserver.observe(cv);pane.querySelector('.eventTf').onchange=e=>{cv._timeframe=e.target.value;loadKWContext(cv,cv._activeDate,cv._chartDays)};pane.querySelector('.eventDays').onchange=e=>{cv._chartDays=Number(e.target.value);loadKWContext(cv,cv._activeDate,cv._chartDays)};pane.querySelector('.eventPrev').onclick=()=>stepKWDay(cv,-1);pane.querySelector('.eventNext').onclick=()=>stepKWDay(cv,1);return cv}
+function drawCompareOverlay(canvas,target,match,type,windowDays){const dpr=devicePixelRatio||1,W=Math.max(360,canvas.parentElement.clientWidth-12),H=220;canvas.width=W*dpr;canvas.height=H*dpr;canvas.style.width=W+'px';canvas.style.height=H+'px';const x=canvas.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle='#050607';x.fillRect(0,0,W,H);const L=45,R=12,T=18,B=25,pw=W-L-R,ph=H-T-B,colors=['#53bfff','#ffc857'];let series=[];if(type==='intraday'){series=[target.intraday.map(p=>p.prev),match.intraday.map(p=>p.prev)];}else{const toPath=f=>{const pre=f.pre_path||[],post=f.post_path||[];return [...Array(Math.max(0,windowDays-pre.length)).fill(null),...pre,0,...post,...Array(Math.max(0,windowDays-post.length)).fill(null)]};series=[toPath(target),toPath(match)]}const vals=series.flat().filter(v=>v!=null&&Number.isFinite(v));if(!vals.length){x.fillStyle='#9ba5af';x.fillText('Not enough real bars for this overlay.',12,30);return}const lo=Math.min(0,...vals),hi=Math.max(0,...vals),Y=v=>T+ph*(1-(v-lo)/(hi-lo||1)),count=Math.max(...series.map(a=>a.length)),X=i=>L+pw*(count<2?0:i/(count-1));x.strokeStyle='#28303a';x.fillStyle='#9ba5af';for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4,yy=Y(v);x.beginPath();x.moveTo(L,yy);x.lineTo(W-R,yy);x.stroke();x.fillText(v.toFixed(0)+'%',3,yy+3)}if(type==='intraday'){const openX=L+pw*330/720;x.fillStyle='rgba(255,255,255,.06)';x.fillRect(L,T,openX-L,ph);x.strokeStyle='#8b929a';x.setLineDash([3,3]);x.beginPath();x.moveTo(openX,T);x.lineTo(openX,T+ph);x.stroke();x.setLineDash([]);x.fillStyle='#8e98a3';x.fillText('PREMARKET',L+4,T+12);x.fillText('09:30 ET',openX+4,H-7)}else{x.fillStyle='#8e98a3';x.fillText(`-${windowDays} sessions`,L,H-7);x.fillText('D',L+pw*windowDays/(2*windowDays),H-7);x.fillText(`+${windowDays}`,W-50,H-7)}series.forEach((arr,j)=>{x.strokeStyle=colors[j];x.lineWidth=1.8;x.beginPath();let started=false;arr.forEach((v,i)=>{if(v==null){started=false;return}const xx=X(i),yy=Y(v);started?x.lineTo(xx,yy):x.moveTo(xx,yy);started=true});x.stroke()});x.fillStyle=colors[0];x.fillText(`${target.ticker} target`,L,12);x.fillStyle=colors[1];x.fillText(`${match.ticker} ${fmtDate(match.date)}`,L+130,12)}
+function renderCompare(data){const root=$('#compareResults'),t=data.target;root.innerHTML=`<div class="compareSummary"><b>${esc(t.ticker)} · ${esc(fmtDate(t.date))}</b> · pre-window ${t.pre_coverage}/${data.window} sessions · post-window ${t.post_coverage}/${data.window} sessions available${t.post_coverage<data.window?' (remaining days pending)':''} · weights A/B/C ${data.weights.A}/${data.weights.B}/${data.weights.C}. ${data.formula}</div><div class="compareNote">Intraday candlesticks: Polygon 1-minute candles aggregated to the selected timeframe. Missing data is left blank. Scores describe observed similarity, not a prediction.</div>`;if(!data.matches.length){root.insertAdjacentHTML('beforeend','<div class="status">No qualifying historical candidates were available in the current keyword search.</div>');return}data.matches.forEach((m,index)=>{const box=document.createElement('section');box.className='compareMatch';const bars=['A','B','C'].map(k=>`<span>${k}: ${m.scores[k]==null?'N/A':m.scores[k].toFixed(0)+'%'}<span class="scorebar"><i style="width:${m.scores[k]||0}%"></i></span></span>`).join('');box.innerHTML=`<h3>${index+1}. ${esc(m.ticker)} · ${esc(m.company)} · ${esc(fmtDate(m.date))} · <span class="count">${m.score.toFixed(1)} match</span></h3><div class="evidence">${esc(m.keyword)} ${m.role?'· '+esc(m.role):''} ${m.headline?'· '+esc(m.headline):''} ${m.filing_url?`· <a class="compareFiling" href="${esc(m.filing_url)}" target="_blank" rel="noopener">SEC filing</a>`:''}</div><div class="scoreline">${bars}</div><div class="compareCharts"><div><div class="evidence">Intraday % from previous close · premarket shaded</div><canvas class="compareOverlay intradayOverlay"></canvas></div><div><div class="evidence">Daily path from event · unavailable future sessions blank</div><canvas class="compareOverlay dailyOverlay"></canvas></div></div><div class="evidence">Target and match candlesticks · independent timeframe/day controls · click to enlarge</div><div class="eventGrid compareCandles"></div><table class="compareStats"><tr><th>Observed stat</th><th>${esc(t.ticker)} target</th><th>${esc(m.ticker)} ${esc(fmtDate(m.date))}</th></tr><tr><td>Gap</td><td>${t.gap==null?'Unavailable':fmtPct(t.gap/100)}</td><td>${m.features.gap==null?'Unavailable':fmtPct(m.features.gap/100)}</td></tr><tr><td>Time to HOD</td><td>${t.hod_min==null?'Unavailable':esc(String(t.hod_min))+' min'}</td><td>${m.features.hod_min==null?'Unavailable':esc(String(m.features.hod_min))+' min'}</td></tr><tr><td>HOD to close</td><td>${t.hod_fade==null?'Unavailable':t.hod_fade.toFixed(1)+'%'}</td><td>${m.features.hod_fade==null?'Unavailable':m.features.hod_fade.toFixed(1)+'%'}</td></tr><tr><td>Open to close</td><td>${t.open_close==null?'Unavailable':t.open_close.toFixed(1)+'%'}</td><td>${m.features.open_close==null?'Unavailable':m.features.open_close.toFixed(1)+'%'}</td></tr><tr><td>Next-day return</td><td>${t.post_path?.length?t.post_path[0].toFixed(1)+'%':'Pending / unavailable'}</td><td>${m.features.post_path?.length?m.features.post_path[0].toFixed(1)+'%':'Unavailable'}</td></tr><tr><td>20-day relative volume</td><td>${t.event_rvol==null?'Unavailable':t.event_rvol.toFixed(1)+'×'}</td><td>${m.features.event_rvol==null?'Unavailable':m.features.event_rvol.toFixed(1)+'×'}</td></tr><tr><td>SEC shares outstanding (not float)</td><td>${t.context?.shares_out?fmtNum(t.context.shares_out)+' · filed '+fmtDate(t.context.filed):'Unavailable'}</td><td>${m.features.context?.shares_out?fmtNum(m.features.context.shares_out)+' · filed '+fmtDate(m.features.context.filed):'Unavailable'}</td></tr><tr><td>Market-cap bucket · price bucket · exchange</td><td>${esc(t.context?.market_cap_bucket||'Unavailable')} · ${esc(t.context?.price_bucket||'Unavailable')} · ${esc(t.context?.exchange||'Unavailable')}</td><td>${esc(m.features.context?.market_cap_bucket||'Unavailable')} · ${esc(m.features.context?.price_bucket||'Unavailable')} · ${esc(m.features.context?.exchange||'Unavailable')}</td></tr></table><div class="compareNote">${compareDifference(t,m)}</div>`;root.appendChild(box);drawCompareOverlay(box.querySelector('.intradayOverlay'),t,m.features,'intraday',data.window);drawCompareOverlay(box.querySelector('.dailyOverlay'),t,m.features,'daily',data.window);comparePane(box.querySelector('.compareCandles'),`${t.ticker} target · ${fmtDate(t.date)}`,t);comparePane(box.querySelector('.compareCandles'),`${m.ticker} match · ${fmtDate(m.date)}`,m.features)});root.insertAdjacentHTML('beforeend',`<div class="compareSummary"><b>Observed pattern consensus</b> · ${data.consensus.faded} faded · ${data.consensus.ground_higher} closed above event close after observed post-window · ${data.consensus.early_hod} made HOD within 90 minutes. ${data.candidate_count} candidates scored.</div>`)}
+function compareDifference(t,m){const tf=nearestFiling(t.ticker,t.date);const link=f=>f?.filing_url?`<a class="compareFiling" href="${esc(f.filing_url)}" target="_blank" rel="noopener">${esc(f.headline)} (${fmtDate(f.filing_date)})</a>`:'no prior keyword filing in the loaded results';const ts=t.context?.shares_out?fmtNum(t.context.shares_out)+' shares (SEC, filed '+fmtDate(t.context.filed)+')':'SEC shares unavailable';const ms=m.features.context?.shares_out?fmtNum(m.features.context.shares_out)+' shares (SEC, filed '+fmtDate(m.features.context.filed)+')':'SEC shares unavailable';return `Differences: Target catalyst ${link(tf)} vs candidate ${link({filing_url:m.filing_url,headline:m.headline,filing_date:m.filing_date})}; point-in-time shares outstanding ${esc(ts)} vs ${esc(ms)} (not float; verify dilution details in the filing).`}
+async function runCompare(force=false){if(!rows.length){$('#compareStatus').textContent='Run a keyword search first; there are no keyword-associated candidates yet.';return}if(!await verify())return;const button=$('#compareForm button[type=submit]');button.disabled=true;$('#compareResults').innerHTML='';try{$('#compareStatus').textContent='Collecting qualifying historical events from keyword-search tickers…';const candidates=await collectCompareCandidates();if(!candidates.length)throw Error('No qualifying historical events were found among the current search tickers.');const payload={user,token,ticker:$('#compareTicker').value.trim().toUpperCase(),date:$('#compareDate').value,window:Number($('#compareWindow').value),top_k:Number($('#compareTopK').value),include_own:$('#compareOwn').checked,force,weights:{A:Number($('#weightA').value),B:Number($('#weightB').value),C:Number($('#weightC').value)},candidates};lastComparePayload=payload;$('#compareStatus').textContent=`Scoring up to ${Math.min(60,candidates.length)} historical events; fetching candle features…`;const r=await fetch('/api/keyword-compare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),d=await r.json();if(!r.ok)throw Error(d.error||'Compare failed');$('#compareStatus').textContent=`Compare complete · ${d.candidate_count} candidates scored from ${Math.min(40,new Set(candidates.map(x=>x.ticker)).size)} search tickers.`;renderCompare(d)}catch(e){$('#compareStatus').innerHTML=`<span class="error">${esc(e.message)}</span>`}finally{button.disabled=false}}
+$('#compareDate').value=isoDate(now);$('#compareTicker').addEventListener('input',e=>e.target.value=e.target.value.toUpperCase());for(const k of ['A','B','C'])$('#weight'+k).oninput=e=>$('#weight'+k+'Label').textContent=e.target.value+'%';$('#compareForm').onsubmit=e=>{e.preventDefault();runCompare()};$('#compareRecompute').onclick=()=>{if(lastComparePayload)runCompare(true);else $('#compareStatus').textContent='Run Compare once before recomputing.'};
+async function search(reset=true){if(!await verify())return;if(reset){rows=[];offset=0;kwEventCache.clear();lastComparePayload=null;$('#compareResults').innerHTML='';$('#tableRoot').innerHTML='';$('#stocksRoot').innerHTML=''}const gen=++searchGeneration;$('#moreBtn').disabled=true;$('#moreBtn').textContent='Searching…';setStatus('Searching EDGAR full text; inspecting filing excerpts…');try{const body=payload();const res=await fetch('/api/keyword-search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await res.json();if(gen!==searchGeneration)return;if(!res.ok)throw Error(data.error||'SEC search failed');rows=reset?data.rows:rows.concat(data.rows);offset=data.from+data.size;total=data.total;setStatus(`Search complete: ${data.rows.length} filing matches returned on this page.`);buildTable();$('#moreBtn').style.display=offset<total?'inline-block':'none';$('#moreBtn').disabled=false;$('#moreBtn').textContent='Load more';}catch(e){if(gen===searchGeneration){setStatus(e.message,true);$('#moreBtn').disabled=false;$('#moreBtn').textContent='Load more'}}}
 $('#searchForm').onsubmit=e=>{e.preventDefault();search(true)};$('#moreBtn').onclick=()=>search(false);
-$('#clearBtn').onclick=()=>{searchGeneration++;rows=[];offset=0;total=0;$('#keyword').value='';$('#tableRoot').innerHTML='';$('#stocksRoot').innerHTML='';$('#resultSummary').innerHTML='';$('#moreBtn').style.display='none';$('#status').textContent='Search SEC filings by keyword and date. Charts only show sessions where the premarket high is >50% above the previous close and session dollar volume is >$10M.';$('#startDate').value=isoDate(twoYears);$('#endDate').value=isoDate(now)};
+$('#clearBtn').onclick=()=>{searchGeneration++;kwEventCache.clear();lastComparePayload=null;$('#compareResults').innerHTML='';rows=[];offset=0;total=0;$('#keyword').value='';$('#tableRoot').innerHTML='';$('#stocksRoot').innerHTML='';$('#resultSummary').innerHTML='';$('#moreBtn').style.display='none';$('#status').textContent='Search SEC filings by keyword and date. Charts only show sessions where the premarket high is >50% above the previous close and session dollar volume is >$10M.';$('#startDate').value=isoDate(twoYears);$('#endDate').value=isoDate(now)};
 $('#keyword').addEventListener('keydown',e=>{if(e.key==='Escape')$('#clearBtn').click()});
 </script></body></html>"""
 
