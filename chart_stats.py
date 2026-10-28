@@ -2721,7 +2721,13 @@ def _sec_keyword_search(keyword, start_date, end_date, forms, offset=0, size=100
     if cached is not None:
         return cached
     ticker_map = _keyword_ticker_map()
-    if len(keyword.split()) > 1:
+    # Commas let users require multiple names/terms in the same filing, e.g.
+    # "MAXIM, BOUTIQUE". SEC EFTS accepts Lucene-style AND queries.
+    terms = [part.strip() for part in keyword.split(",") if part.strip()]
+    if len(terms) > 1:
+        query = " AND ".join(f'"{term}"' for term in terms)
+        queries = [query]
+    elif len(keyword.split()) > 1:
         cleaned = " ".join(re.findall(r"[\w]+", keyword, re.UNICODE))
         queries = list(dict.fromkeys([f'"{keyword}"', f'"{cleaned}"', keyword]))
     else:
@@ -6644,13 +6650,13 @@ input[type=text]{width:min(420px,70vw)}input[type=date]{width:140px}select{min-w
 <header><a href="/">← Gap-Up Fade</a><strong>⌕ Search Keyword</strong><a href="#comparePanel">Jump to Compare</a><span style="margin-left:auto;color:#78838e">SEC EDGAR · financing-player research</span></header>
 <main>
 <form id="searchForm" class="toolbar">
-  <label>Keyword<input id="keyword" type="text" maxlength="120" placeholder="Enter a company, investor, or keyword" required></label>
+  <label>Keyword<input id="keyword" type="text" maxlength="120" placeholder="Company, investor, or terms (comma = all required)" required></label>
   <label>Start date<input id="startDate" type="date"></label><label>End date<input id="endDate" type="date"></label>
   <label class="gapFilter"><span><input id="gapFilterEnabled" type="checkbox"> Require open gap-up</span><span>&gt; <input id="gapMinPct" type="number" min="0" max="500" step="1" value="10" disabled>%</span></label>
   <button class="primary" type="submit">Search SEC</button><button id="clearBtn" type="button">Clear</button>
   <button id="moreBtn" type="button" style="display:none">Load more</button>
 </form>
- <div id="status" class="status">Search SEC filings from the last year. Events require session dollar volume above $50M and an event-day open of $10 or less; the gap-up filter is optional.</div>
+ <div id="status" class="status">Search SEC filings from the last year. Use commas to require every term in the same filing, such as MAXIM, BOUTIQUE. Events require session dollar volume above $50M and an event-day open of $10 or less; the gap-up filter is optional.</div>
 <div id="resultSummary"></div><div id="tableRoot"></div><div id="stocksRoot"></div>
  <section id="comparePanel"><h2>Compare historical event patterns</h2><div id="compareCriteria" class="compareNote">Compare your ticker with matching-keyword events whose event-day open was $10 or less and session dollar volume was above $50M.</div><form id="compareForm" class="compareToolbar"><label>Target ticker<input id="compareTicker" type="text" maxlength="10" placeholder="TICKER" required></label><label>Target date<input id="compareDate" type="date" required></label><button class="primary" type="submit">Compare</button></form><div id="compareStatus" class="status">Search for a keyword to populate historical candidate events.</div><div id="unifiedProjectionRoot"></div><div id="compareResults"></div></section>
 </main>
