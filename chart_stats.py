@@ -7088,7 +7088,7 @@ function drawForecast2mCanvas(data){
  const dpr=devicePixelRatio||1,W=Math.max(500,cv.parentElement.clientWidth-10),H=400;cv.width=W*dpr;cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';
  const x=cv.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle='#050607';x.fillRect(0,0,W,H);
  const L=52,R=12,T=14,B=24,VH=58,pw=W-L-R,ph=H-T-B-VH-10,now=fc.as_of_minute,X=m=>L+pw*(m-240)/720;
- const scn=(fc.scenarios||[])[Number($('#fc2mScn').value)],all=aggregateEvBars(tg.chart.bars,2),ids=[];for(let i=0;i<all.t.length;i++)if(all.t[i]<=now)ids.push(i);
+ const scn=(fc.scenarios||[])[Number($('#fc2mScn').value)],all=window.aggregateKeywordBars(tg.chart.bars,2),ids=[];for(let i=0;i<all.t.length;i++)if(all.t[i]<=now)ids.push(i);
  const vals=[];ids.forEach(i=>{vals.push(all.h[i],all.l[i])});['p10','p90'].forEach(k=>fc[k].forEach(v=>vals.push(v)));if(fc.actual)fc.actual.forEach(v=>vals.push(v));if(scn)scn.bars.forEach(b=>vals.push(b[2],b[3]));
  let lo=Math.min(...vals),hi=Math.max(...vals);const pad=(hi-lo)*.05||hi*.02;lo-=pad;hi+=pad;const Y=v=>T+ph*(1-(v-lo)/(hi-lo||1));
  x.font='11px Consolas,monospace';x.strokeStyle='#242c34';x.fillStyle='#aab4be';
@@ -7130,7 +7130,8 @@ def keyword_search_page():
     renderer_end = HTML.index("\nlet currentModalIndex", renderer_start)
     shared_renderer = ("<script>(function(){\n" + HTML[helper_start:helper_end] +
                        HTML[renderer_start:renderer_end] +
-                       "\nwindow.drawKeywordGapEv=drawEv;\n})();</script>")
+                       "\nwindow.drawKeywordGapEv=drawEv;\n"
+                       "window.aggregateKeywordBars=aggregateEvBars;\n})();</script>")
     page = KEYWORD_HTML.replace("<script>", shared_renderer + "<script>", 1)
     return Response(page, mimetype="text/html")
 
