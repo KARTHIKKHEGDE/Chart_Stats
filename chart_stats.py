@@ -3475,6 +3475,250 @@ def api_keyword_validate():
                     "note": "Leave-one-out uses only other real SEC-associated qualifying events. Confidence intervals are deterministic bootstrap 95% intervals; random same-keyword baseline uses a seeded one-event draw. Candidate pool is capped at 60 events."})
 
 
+# ════════════════════════════════════════════════════════════════════════════
+#  2-MIN INTRADAY FORECAST  (analog-conditioned, vol-scaled, conformal-calibrated)
+#  Not a point prediction: a conditional distribution of the rest of the session
+#  built from the SAME clock-time slice of similar historical event days.
+# ════════════════════════════════════════════════════════════════════════════
+FC_STEP = 2
+FC_N = (RG_END - PM_START) // FC_STEP            # 360 two-minute buckets, 04:00 -> 16:00 ET
+
+
+def _fc_grid(feature):
+    """Forward-filled 2-min close grid as ln(price / prev close), plus the 2-min highs."""
+    ch = (feature or {}).get("chart") or {}
+    b, pc = ch.get("bars"), ch.get("pc") or (feature or {}).get("pc")
+    if not b or not b.get("t") or not pc:
+        return None
+    t = np.asarray(b["t"], float)
+    c = np.asarray(b["c"], float)
+    h = np.asarray(b["h"], float)
+    k = ((t - PM_START) // FC_STEP).astype(int)
+    close = np.full(FC_N, np.nan)
+    high = np.full(FC_N, np.nan)
+    for i in range(len(t)):
+        if 0 <= k[i] < FC_N and np.isfinite(c[i]) and c[i] > 0:
+            close[k[i]] = c[i]                                    # last close in the bucket wins
+            high[k[i]] = h[i] if np.isnan(high[k[i]]) else max(high[k[i]], h[i])
+    close = pd.Series(close).ffill().to_numpy()
+    if not np.isfinite(close).any():
+        return None
+    return {"x": np.log(close / pc), "hx": np.log(np.where(np.isfinite(high), high, np.nan) / pc),
+            "pc": float(pc), "close": close}
+
+
+def _fc_ohlc(feature):
+    """2-min OHLCV grid (360 buckets). Empty buckets become flat doji with zero volume."""
+    ch = (feature or {}).get("chart") or {}
+    b = ch.get("bars")
+    if not b or not b.get("t"):
+        return None
+    t = np.asarray(b["t"], float)
+    o, h, l, c, v = (np.asarray(b[k], float) for k in ("o", "h", "l", "c", "v"))
+    k = ((t - PM_START) // FC_STEP).astype(int)
+    O = np.full(FC_N, np.nan); Hh = O.copy(); Ll = O.copy(); Cc = O.copy(); V = np.zeros(FC_N)
+    for i in range(len(t)):
+        j = k[i]
+        if not (0 <= j < FC_N) or not np.isfinite(c[i]) or c[i] <= 0:
+            continue
+        if np.isnan(O[j]):
+            O[j], Hh[j], Ll[j] = o[i], h[i], l[i]
+        else:
+            Hh[j], Ll[j] = max(Hh[j], h[i]), min(Ll[j], l[i])
+        Cc[j] = c[i]
+        V[j] += v[i]
+    Cc = pd.Series(Cc).ffill().to_numpy()
+    gap = np.isnan(O)
+    O = np.where(gap, Cc, O); Hh = np.where(gap, Cc, Hh); Ll = np.where(gap, Cc, Ll)
+    return {"o": O, "h": Hh, "l": Ll, "c": Cc, "v": V}
+
+
+def _wq(vals, w, q):
+    """Weighted quantile of 1-D vals."""
+    vals, w = np.asarray(vals, float), np.asarray(w, float)
+    m = np.isfinite(vals) & (w > 0)
+    if not m.any():
+        return np.nan
+    vals, w = vals[m], w[m]
+    o = np.argsort(vals)
+    vals, w = vals[o], w[o]
+    cw = (np.cumsum(w) - 0.5 * w) / w.sum()
+    return float(np.interp(q, cw, vals))
+
+
+def _fc_sigma(x, k, win=30):
+    d = np.diff(x[max(0, k - win):k + 1])
+    d = d[np.isfinite(d)]
+    return float(max(np.std(d) if len(d) >= 8 else 0.0, 1e-4))
+
+
+def _forecast_2m(target, pool, now_min, tau=10.0, k_shrink=2.0, max_paths=8):
+    """
+    target  : features dict (target day, bars up to now_min)
+    pool    : list of {"ticker","date","score","features"} ranked analogs (use ~15, not 3)
+    returns : dict with 2-min price quantile fan from now to 16:00, or None
+    """
+    T = _fc_grid(target)
+    if T is None or now_min is None:
+        return None
+    kn = int(min(FC_N - 2, max(0, (now_min - PM_START) // FC_STEP)))
+    if not np.isfinite(T["x"][kn]):
+        return None
+    H = FC_N - 1 - kn                                    # horizons 1..H
+    sig_t = _fc_sigma(T["x"], kn)
+    rows = []
+    for ev in pool:
+        G = _fc_grid(ev["features"])
+        if G is None or not np.isfinite(G["x"][kn]) or not np.isfinite(G["x"][-1]):
+            continue
+        sig_j = _fc_sigma(G["x"], kn)
+        r = G["x"][kn + 1:] - G["x"][kn]
+        if len(r) != H or not np.isfinite(r).all():
+            continue
+        scale = float(np.clip(sig_t / sig_j, 0.5, 2.0)) ** 0.5       # half-strength vol scaling
+        rows.append({"G": G, "ev": ev, "scale": scale, "r": r * scale, "raw": r, "sig": sig_j, "score": float(ev.get("score") or 0.0)})
+    n = len(rows)
+    if n < 3:
+        return None
+    sc = np.array([x["score"] for x in rows])
+    w = np.exp((sc - sc.max()) / tau)
+    w /= w.sum()
+    ess = float(1.0 / np.sum(w ** 2))
+    R = np.vstack([x["r"] for x in rows])                               # n x H
+    shrink = ess / (ess + k_shrink)                                      # pull drift toward 0 when evidence is thin
+    center = np.array([_wq(R[:, h], w, 0.5) for h in range(H)])
+    med = center * shrink
+
+    # ── split-conformal bands: leave-one-analog-out, errors in units of own vol * sqrt(h) ──
+    hs = np.sqrt(np.arange(1, H + 1))
+    Z = np.full((n, H), np.nan)
+    if n >= 6:
+        for j in range(n):
+            wj = np.delete(w, j)
+            wj = wj / wj.sum()
+            Rj = np.delete(R, j, axis=0)
+            e_shr = ess / (ess + k_shrink)
+            mj = np.array([_wq(Rj[:, h], wj, 0.5) for h in range(H)]) * e_shr
+            Z[j] = (rows[j]["raw"] - mj) / (rows[j]["sig"] * hs)
+    calibrated = n >= 6
+    qs = {"p10": 0.10, "p25": 0.25, "p75": 0.75, "p90": 0.90}
+    bands = {}
+    z_nrm = {0.10: -1.2816, 0.25: -0.6745, 0.75: 0.6745, 0.90: 1.2816}
+    for name, q in qs.items():
+        arr = np.empty(H)
+        for h in range(H):
+            if calibrated:
+                lo, hi = max(0, h - 10), min(H, h + 11)
+                zz = Z[:, lo:hi].ravel()
+                ww = np.repeat(w, hi - lo)
+                zq = _wq(zz, ww, q)
+                zq = z_nrm[q] if not np.isfinite(zq) else zq
+                zq = zq if q < 0.5 else max(zq, 0.0)
+                zq = zq if q > 0.5 else min(zq, 0.0)
+            else:
+                zq = z_nrm[q] * 1.15                                      # honest fallback: widened Gaussian
+            arr[h] = med[h] + zq * sig_t * hs[h]
+        bands[name] = arr
+    ordered = np.vstack([bands["p10"], bands["p25"], med, bands["p75"], bands["p90"]])
+    ordered = np.sort(ordered, axis=0)
+    p10, p25, p50, p75, p90 = ordered
+
+    x0, pc = float(T["x"][kn]), T["pc"]
+    price = lambda arr: [round(float(pc * np.exp(x0 + v)), 4) for v in np.concatenate([[0.0], arr])]
+    tmin = [PM_START + FC_STEP * (kn + h) for h in range(H + 1)]
+
+    # outcome probabilities from the weighted scaled analog paths
+    hod_x = float(np.nanmax(T["hx"][:kn + 1])) if np.isfinite(T["hx"][:kn + 1]).any() else x0
+    p_hod = float(np.sum(w * (x0 + R.max(axis=1) > hod_x)))
+    p_down = float(np.sum(w * (R[:, -1] < 0)))
+    closeq = [round(float(pc * np.exp(x0 + arr[-1])), 4) for arr in (p10, p25, p50, p75, p90)]   # same numbers as the fan end
+
+    order = np.argsort(-w)[:max_paths]
+    paths = [{"name": f'{rows[i]["ev"]["ticker"]} {rows[i]["ev"]["date"]}', "w": round(float(w[i]), 3),
+              "vals": price(rows[i]["r"])} for i in order]
+
+    # Build synthetic 2-minute OHLCV paths from weighted candle quantiles. Each analog
+    # contributes its volatility-scaled intrabar shape, centered on the shrunk forecast
+    # median. The 25th/50th/75th paths are quantile scenarios, not one chosen ticker.
+    scenarios = []
+    try:
+        target_ohlc = _fc_ohlc(target)
+        target_bar_vol = (float(np.mean(target_ohlc["v"][max(0, kn - 29):kn + 1]))
+                          if target_ohlc is not None else 0.0)
+        target_price = float(T["close"][kn])
+        samples = [[] for _ in range(H)]
+        for j, row in enumerate(rows):
+            analog = _fc_ohlc(row["ev"].get("features"))
+            if analog is None or not np.isfinite(analog["c"][kn]) or analog["c"][kn] <= 0:
+                continue
+            analog_bar_vol = float(np.mean(analog["v"][max(0, kn - 29):kn + 1]))
+            volume_scale = (float(np.clip(target_bar_vol / analog_bar_vol, 0.05, 20.0))
+                            if target_bar_vol > 0 and analog_bar_vol > 0 else 1.0)
+            previous_predicted_close = target_price
+            for h, k in enumerate(range(kn + 1, FC_N)):
+                analog_close = float(analog["c"][k])
+                if not np.isfinite(analog_close) or analog_close <= 0:
+                    continue
+                # Keep each analog's residual around the weighted center, while using
+                # the forecast's drift-shrunk median as the center of the candle path.
+                predicted_close = target_price * math.exp(med[h] + (row["r"][h] - center[h]))
+                scale = row["scale"]
+                op = predicted_close * math.exp(scale * math.log(max(float(analog["o"][k]), 1e-9) / analog_close))
+                hi = predicted_close * math.exp(scale * math.log(max(float(analog["h"][k]), 1e-9) / analog_close))
+                low = predicted_close * math.exp(scale * math.log(max(float(analog["l"][k]), 1e-9) / analog_close))
+                lo_ = min(low, op, predicted_close)
+                hi_ = max(hi, op, predicted_close)
+                vol = max(0.0, float(analog["v"][k])) * volume_scale
+                samples[h].append({"weight": float(w[j]), "o": op, "h": hi_, "l": lo_,
+                                   "c": predicted_close, "v": vol, "real": float(analog["v"][k]) > 0,
+                                   "up": predicted_close > previous_predicted_close})
+                previous_predicted_close = predicted_close
+
+        for q, name in ((0.50, "Weighted median candle"), (0.25, "Per-candle 25th percentile"),
+                        (0.75, "Per-candle 75th percentile")):
+            bars = []
+            for h, k in enumerate(range(kn + 1, FC_N)):
+                bucket = samples[h]
+                if not bucket:
+                    continue
+                weights = [sample["weight"] for sample in bucket]
+                values = {field: _wq([sample[field] for sample in bucket], weights, q)
+                          for field in ("o", "h", "l", "c")}
+                op, close = values["o"], values["c"]
+                hi = max(values["h"], op, close)
+                low = min(values["l"], op, close)
+                volume = _wq([sample["v"] for sample in bucket], weights, 0.50)
+                traded = [sample for sample in bucket if sample["real"]]
+                traded_weight = sum(sample["weight"] for sample in traded)
+                probability_up = (sum(sample["weight"] for sample in traded if sample["up"]) / traded_weight
+                                  if traded_weight > 0 else None)
+                bars.append([PM_START + FC_STEP * k, round(float(op), 4), round(float(hi), 4),
+                             round(float(low), 4), round(float(close), 4),
+                             int(max(0.0, volume)), round(float(probability_up), 3)
+                             if probability_up is not None else None])
+            scenarios.append({"name": name, "analog": f"weighted across {n} analogs", "bars": bars})
+    except Exception:
+        app.logger.exception("2-min candle scenarios failed")
+        scenarios = []
+
+    out = {"step": FC_STEP, "scenarios": scenarios, "as_of_minute": int(now_min), "t": tmin, "now_price": round(float(T["close"][kn]), 4),
+           "p10": price(p10), "p25": price(p25), "p50": price(p50), "p75": price(p75), "p90": price(p90),
+           "n": n, "ess": round(ess, 1), "calibrated": bool(calibrated), "shrink": round(shrink, 2),
+           "sigma_2m_pct": round(sig_t * 100, 2), "p_new_hod": round(p_hod, 3), "p_close_below_now": round(p_down, 3),
+           "close_q": closeq, "paths": paths}
+    return out
+
+
+def _fc_actual(target, now_min):
+    """Only for backtests on historical days: the real 2-min closes after `now_min`."""
+    T = _fc_grid(target)
+    if T is None:
+        return None
+    kn = int(min(FC_N - 2, max(0, (now_min - PM_START) // FC_STEP)))
+    return [round(float(v), 4) for v in T["close"][kn:]]
+
+
+
 @app.route("/api/keyword-compare", methods=["POST"])
 def api_keyword_compare():
     data = request.get_json(silent=True) or {}
@@ -3501,7 +3745,9 @@ def api_keyword_compare():
         force = bool(data.get("force"))
         target = _compare_event_features(ticker, day, window, force=force)
         partial_day = day == dt.date.today().isoformat()
-        cutoff_minute = target.get("as_of_minute") if partial_day else None
+        asof_arg = data.get("asof_minute")                      # optional: backtest a historical day as-of this ET minute
+        cutoff_minute = (target.get("as_of_minute") if partial_day
+                         else (int(asof_arg) if asof_arg else None))
         target_for_score = _compare_feature_asof(target, cutoff_minute) if cutoff_minute is not None else target
         compare_own = bool(data.get("include_own"))
         eligible = []
@@ -3512,6 +3758,8 @@ def api_keyword_compare():
             symbol = str(item.get("ticker") or "").strip().upper()
             event_day = str(item.get("date") or "")
             if not re.fullmatch(r"[A-Z.\-]{1,10}", symbol) or (symbol == ticker and not compare_own) or event_day == day and symbol == ticker:
+                continue
+            if asof_arg and event_day >= day:                  # backtest: never use analogs from the future
                 continue
             try:
                 dt.date.fromisoformat(event_day)
@@ -3547,7 +3795,16 @@ def api_keyword_compare():
             match["features"]["dollar_volume_market_cap_fraction"] = (match["features"].get("session_dollar_volume")/match["features"]["context"]["market_cap"]
                                                                        if match["features"]["context"].get("market_cap") else None)
             match["features"]["feature_mask"]["dollar_volume_market_cap_fraction"] = match["features"]["dollar_volume_market_cap_fraction"] is not None
-        return jsonify({"target": target, "matches": matches, "candidate_count": len(eligible),
+        forecast = None
+        try:
+            fc_now = cutoff_minute
+            if fc_now is not None:
+                forecast = _forecast_2m(target, eligible[:15], fc_now)      # forecast uses the top-15 pool; display stays top-3
+                if forecast is not None and not partial_day:
+                    forecast["actual"] = _fc_actual(target, fc_now)
+        except Exception:
+            app.logger.exception("2-min forecast failed for %s %s", ticker, day)
+        return jsonify({"target": target, "matches": matches, "forecast": forecast, "candidate_count": len(eligible),
                         "partial_day": partial_day, "as_of_minute": cutoff_minute,
         "target_source": ("Gap-Up Fade live_snapshot (Yahoo intraday; Alpaca when configured)"
                                          if partial_day else "Polygon historical daily and 1-minute candles"),
@@ -6668,7 +6925,7 @@ input[type=text]{width:min(420px,70vw)}input[type=date]{width:140px}select{min-w
 </form>
  <div id="status" class="status">Search SEC filings from the last year. Use commas to require every term in the same filing, such as MAXIM, BOUTIQUE. Events require session dollar volume above $50M and an event-day open of $10 or less; the gap-up filter is optional.</div>
 <div id="resultSummary"></div><div id="tableRoot"></div><div id="stocksRoot"></div>
- <section id="comparePanel"><h2>Compare historical event patterns</h2><div id="compareCriteria" class="compareNote">Compare your ticker with matching-keyword events whose event-day open was $10 or less and session dollar volume was above $50M.</div><form id="compareForm" class="compareToolbar"><label>Target ticker<input id="compareTicker" type="text" maxlength="10" placeholder="TICKER" required></label><label>Target date<input id="compareDate" type="date" required></label><button class="primary" type="submit">Compare</button></form><div id="compareStatus" class="status">Search for a keyword to populate historical candidate events.</div><div id="unifiedProjectionRoot"></div><div id="compareResults"></div></section>
+ <section id="comparePanel"><h2>Compare historical event patterns</h2><div id="compareCriteria" class="compareNote">Compare your ticker with matching-keyword events whose event-day open was $10 or less and session dollar volume was above $50M.</div><form id="compareForm" class="compareToolbar"><label>Target ticker<input id="compareTicker" type="text" maxlength="10" placeholder="TICKER" required></label><label>Target date<input id="compareDate" type="date" required></label><button class="primary" type="submit">Compare</button></form><div id="compareStatus" class="status">Search for a keyword to populate historical candidate events.</div><div id="unifiedProjectionRoot"></div><div id="forecast2mRoot"></div><div id="compareResults"></div></section>
 </main>
 <div id="chartModal" class="chartModal" onclick="if(event.target===this)closeKWModal()"><div class="chartModalBox"><div class="chartModalHead"><div class="kwModalTitle" id="kwModalTitle"></div><div class="kwModalTags" id="kwModalTags"></div><div class="kwModalControls"><select id="kwModalTf" class="evtf"><option>1m</option><option selected>2m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select><select id="kwModalDays" class="evtf"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="60">60 days</option></select><button id="kwZoomOut" class="evnav" title="Zoom out">−</button><button id="kwZoomIn" class="evnav" title="Zoom in">+</button><select id="kwModalSig" class="evtf"><option value="none">No signals</option><option value="all">All entry models</option></select><label class="kwBoneLabel"><input id="kwModalBone" type="checkbox"> Bone zone</label><button onclick="closeKWModal()" class="kwClose" title="Close">✕</button></div></div><div class="kwModalBody"><canvas id="kwModalCanvas" height="720"></canvas></div><div class="kwModalLegend kwLegend"><span class="c">━ VWAP</span> &nbsp; <span class="y">┅ PM high</span> &nbsp; <span class="d">┅ prev close</span> &nbsp; <span style="color:#d7ff6e">━ EMA9</span> &nbsp; <span style="color:#ffa500">━ EMA20</span> &nbsp; <span class="g">▒</span><span class="r">▒</span> cloud &nbsp; <span class="d">━ BB(20,2)</span> &nbsp; Shaded = premarket · Drag to pan · drag or scroll price axis to scale · Esc to close</div></div></div>
 <script>
@@ -6810,7 +7067,44 @@ function drawUnifiedCanvas(data){const cv=$('#unifiedCanvas');if(!cv)return;cons
  series.forEach((s,j)=>{x.strokeStyle=s.color;x.globalAlpha=s.target?1:.46;x.lineWidth=s.target?2.7:1.1;x.beginPath();let started=false;s.vals.forEach((v,i)=>{if(v==null||(!daily&&s.target&&i>nowIdx)){started=false;return}const xx=X(i),yy=Y(v);started?x.lineTo(xx,yy):x.moveTo(xx,yy);started=true});x.stroke();x.globalAlpha=1});if(!daily){const marker=X(nowIdx);x.strokeStyle='#f3f4f6';x.setLineDash([4,3]);x.beginPath();x.moveTo(marker,T);x.lineTo(marker,T+priceH+volH+18);x.stroke();x.setLineDash([]);x.fillStyle='#fff';x.fillText('NOW',marker+4,T+12);const baseY=volTop+volH; x.strokeStyle='#303842';x.beginPath();x.moveTo(L,volTop);x.lineTo(W-R,volTop);x.stroke();x.fillStyle='#8f9aa4';x.fillText('Cumulative volume fraction',L+3,volTop+12);const drawVol=(arr,color,width)=>{x.strokeStyle=color;x.lineWidth=width;x.beginPath();let started=false;arr.forEach((v,i)=>{if(v==null||(!data.partial_day&&i>nowIdx&&arr===target.volume_curve)){started=false;return}const xx=X(i),yy=baseY-(Number(v)||0)*volH;started?x.lineTo(xx,yy):x.moveTo(xx,yy);started=true});x.stroke()};drawVol(target.volume_curve,'#fff',2);const medVol=[];for(let i=0;i<144;i++){const vals=chosen.map(m=>m.features.intraday?.[i]?.cumvol).filter(Number.isFinite);medVol.push(window.qtile(vals,.5))}drawVol(medVol,'#ffc857',1.5)}else{ x.fillStyle='#8c98a2';x.fillText('Cumulative daily return · D-10 … D+10',L,T+priceH+14)}
  cv.onmousemove=e=>{const rect=cv.getBoundingClientRect(),i=Math.max(0,Math.min(daily?20:143,Math.round((e.clientX-rect.left-L)/pw*(daily?20:143))));const lines=[];if(daily){lines.push(`${target.ticker}: ${series[0].vals[i]?.toFixed(2)??'—'}%`);for(let j=1;j<series.length;j++)lines.push(`${series[j].name}: ${series[j].vals[i]?.toFixed(2)??'—'}%`)}else{const stamp=240+i*5;lines.push(`${String(Math.floor(stamp/60)).padStart(2,'0')}:${String(stamp%60).padStart(2,'0')} ET`);lines.push(`${target.ticker}: ${series[0].vals[i]?.toFixed(2)??'—'}%`);for(let j=1;j<series.length;j++)lines.push(`${series[j].name}: ${series[j].vals[i]?.toFixed(2)??'—'}%`);const p=target.intraday[i];if(p?.vol!=null)lines.push(`Target OHLC ${p.low?.toFixed(3)??'—'} / ${p.high?.toFixed(3)??'—'} · vol ${fmtNum(p.vol)}`)}const tip=$('#unifiedTip');tip.textContent=lines.join('\n');tip.style.display='block';tip.style.left=Math.min(W-260,e.offsetX+12)+'px';tip.style.top=Math.max(25,e.offsetY+10)+'px'};cv.onmouseleave=()=>$('#unifiedTip').style.display='none'}
 function drawProjectionPanel(data){if(data.validation?.beats_baseline===false&&!document.querySelector("#matcherWarning"))document.querySelector("#compareResults")?.insertAdjacentHTML("afterbegin",`<div id="matcherWarning" class="lowConfidence">${esc(data.validation.warning||"Validation failed against baselines.")}</div>`);const target=data.target,chosen=selectedUnifiedMatches(data),panel=$('#projectionGrid'),badge=$('#projectionConfidence'),foot=$('#projectionFoot');if(!panel)return;const partial=data.partial_day,now=Number(data.as_of_minute??target.as_of_minute??960),idx=Math.max(0,Math.min(143,Math.floor((now-240)/5))),mode=$('#unifiedMode').value,cur=unifiedValue(target,target.intraday?.[idx],mode);const remainders=[],fades=[],closeOpen=[],nextGaps=[],newHod=[],nextHod=[];if(partial&&cur!=null)for(const m of chosen){const f=m.features,p=f.intraday||[],last=unifiedValue(f,p[143],mode),at=unifiedValue(f,p[idx],mode);if(last!=null&&at!=null)remainders.push(last-at);if(f.hod_min!=null&&f.close&&f.hod){fades.push((f.close/f.hod-1)*100);if(f.hod_min>(now-RG_START)){newHod.push(1);nextHod.push(f.hod_min-(now-RG_START))}else newHod.push(0)}if(f.open_close!=null)closeOpen.push(f.open_close);if(f.post_open_gap?.length&&f.post_open_gap[0]!=null)nextGaps.push(f.post_open_gap[0])}const avg=chosen.length?chosen.reduce((s,m)=>s+m.score,0)/chosen.length:null,disp=remainders.length?Math.sqrt(remainders.reduce((s,v)=>s+(v-window.qtile(remainders,.5))**2,0)/remainders.length):null,coverage=chosen.length?Math.round(100*chosen.reduce((s,m)=>s+Object.values(m.features.feature_mask||{}).filter(Boolean).length/Math.max(1,Object.keys(m.features.feature_mask||{}).length),0)/chosen.length):0,low=chosen.length<5||avg<40||disp>25||data.validation?.beats_baseline===false;badge.innerHTML=low?'<span class="lowConfidence">LOW CONFIDENCE</span>':'<span class="confidenceGood">Confidence checks passed</span>';const dist=(a,suffix='%')=>{const q10=window.qtile(a,.1),q25=window.qtile(a,.25),q50=window.qtile(a,.5),q75=window.qtile(a,.75),q90=window.qtile(a,.9);return q50==null?'Unavailable':`${q50.toFixed(1)}${suffix} · 25–75 ${q25.toFixed(1)} to ${q75.toFixed(1)} · 10–90 ${q10.toFixed(1)} to ${q90.toFixed(1)}`};const probability=newHod.length?`${newHod.reduce((s,v)=>s+v,0)} of ${newHod.length} (${(100*newHod.reduce((s,v)=>s+v,0)/newHod.length).toFixed(0)}%)`: 'Unavailable';panel.innerHTML=`<span>Matches used</span><span>${chosen.length} / ${data.matches.length}</span><span>Average match score</span><span>${avg==null?'Unavailable':avg.toFixed(1)+'/100'}</span><span>Feature coverage</span><span>${coverage}% available</span><span>Remaining move to close</span><span>${partial?dist(remainders):'Historical full day; no remaining session'}</span><span>HOD-to-close fade</span><span>${partial?dist(fades):'Unavailable'}</span><span>New HOD after now</span><span>${partial?probability:'Unavailable'}</span><span>Time to next HOD</span><span>${partial?dist(nextHod,' min'):'Unavailable'}</span><span>Close vs open</span><span>${partial?dist(closeOpen):'Unavailable'}</span><span>D+1 open gap</span><span>${dist(nextGaps)}</span><span>Outcome dispersion</span><span>${disp==null?'Unavailable':disp.toFixed(1)+' percentage points SD'}</span>`;foot.textContent=partial?`Outcomes are rebased to the target's last complete 5-minute value near ${String(Math.floor(now/60)).padStart(2,'0')}:${String(now%60).padStart(2,'0')} ET. Match counts vary by available bars; D+1 uses only candidates with a real next session.`:'The selected target date is a completed historical session, so today’s remaining-session projection is not applicable.'}
-async function runCompare(force=false){if(!qualifiedTickers.size){$('#compareStatus').textContent='Search a keyword and wait for qualifying tickers to finish screening.';return}if(!await verify())return;const button=$('#compareForm button[type=submit]');button.disabled=true;$('#compareResults').innerHTML='';$('#unifiedProjectionRoot').innerHTML='';try{$('#compareStatus').textContent='Finding similar qualified event days…';const candidates=await collectCompareCandidates();if(!candidates.length)throw Error('No qualifying keyword-linked events are available.');const payload={user,token,ticker:$('#compareTicker').value.trim().toUpperCase(),date:$('#compareDate').value,window:10,top_k:3,include_own:false,manual_weights:false,force,weights:{A:50,B:25,C:25},candidates};lastComparePayload=payload;const r=await fetch('/api/keyword-compare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),d=await r.json();if(!r.ok)throw Error(d.error||'Compare failed');currentCompareData=d;$('#compareStatus').textContent=`Comparison complete · ${d.matches.length} closest qualifying days from ${qualifiedTickers.size} matching-keyword tickers.`;renderCompare(d);renderTopCompareCharts(d);drawUnifiedProjection(d)}catch(e){$('#compareStatus').innerHTML=`<span class="error">${esc(e.message)}</span>`}finally{button.disabled=false}}async function runMatcherValidation(){if(!rows.length){$('#compareStatus').textContent='Run a keyword search first.';return}if(!await verify())return;const button=$('#validateMatcher');button.disabled=true;try{$('#compareStatus').textContent='Validating against held-out SEC-associated events and three baselines…';const candidates=await collectCompareCandidates(),weights=currentCompareData?.weights||{A:50,B:25,C:25};const response=await fetch('/api/keyword-validate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user,token,window:Number($('#compareWindow').value),mode:$('#validationMode').value,weights,candidates})}),result=await response.json();if(!response.ok)throw Error(result.error||'Validation failed');if(currentCompareData){currentCompareData.validation=result;drawProjectionPanel(currentCompareData)}const names={fade:'HOD-to-close fade (RMSE)',open_close:'Open-to-close sign (hit rate)',d1:'D+1 direction (hit rate)',midday_remaining:'Midday remaining move (RMSE)'},bases=[['matcher','Matcher'],['gap_price_baseline','Gap + price baseline'],['random_keyword_baseline','Random same-keyword'],['scalar_only_baseline','Scalar-only']];let html=`<section class="compareMatch"><h3>Matcher validation · ${esc(result.mode)} · n=${result.sample_size}</h3>${result.warning?`<div class="lowConfidence">${esc(result.warning)}</div>`:'<div class="confidenceGood">Beat each baseline on both continuous measures.</div>'}<div class="compareNote">${esc(result.note)}</div><table class="compareStats"><tr><th>Outcome</th>${bases.map(x=>`<th>${x[1]}</th>`).join('')}</tr>`;for(const [key,label]of Object.entries(names)){html+=`<tr><td>${label}</td>${bases.map(([base])=>{const s=result.metrics[key][base];if(!s.n)return '<td>n=0</td>';return `<td>n=${s.n} · ${s.rmse==null?'':`RMSE ${s.rmse.toFixed(2)} ${s.rmse_ci95?`(95% ${s.rmse_ci95[0].toFixed(2)}–${s.rmse_ci95[1].toFixed(2)}) · `:''}`}hit ${(100*s.hit_rate).toFixed(0)}% (95% ${(100*s.hit_ci95[0]).toFixed(0)}–${(100*s.hit_ci95[1]).toFixed(0)}%)</td>`}).join('')}</tr>`}html+='</table></section>';$('#compareResults').insertAdjacentHTML('beforeend',html);$('#compareStatus').textContent=`Validation finished on ${result.evaluated} held-out events (${result.mode}).`}catch(e){$('#compareStatus').innerHTML=`<span class="error">${esc(e.message)}</span>`}finally{button.disabled=false}}
+function drawForecast2m(data){
+ const root=$('#forecast2mRoot');if(!root)return;const fc=data.forecast;
+ if(!fc){root.innerHTML='';return}
+ const low=!fc.calibrated||fc.ess<4||data.validation?.beats_baseline===false;
+ const pc=data.target.pc,fmtP=v=>v==null?'—':v.toFixed(v<1?4:3),pctOf=v=>((v/pc-1)*100).toFixed(1)+'%',nowP=fc.now_price,cq=fc.close_q;
+ root.innerHTML=`<section class="unifiedProjection"><div class="unifiedChartWrap"><b>Intraday candle forecast - 2-minute bars</b><div class="compareNote">This chart appears below the normalized comparison graph. Each 2-minute candle shows a weighted OHLC percentile from the same clock-time slices of ${fc.n} similar days, volatility-scaled and centered on the drift-shrunk forecast. Percentiles are calculated candle by candle, so the plotted sequence summarizes the distribution and is not one exact historical path. Shaded bands show the wider projected price range. Hover each candle for its historical-analog probability of closing up.</div><div class="unifiedControls"><label>Y axis<select id="fc2mMode"><option value="price">Price</option><option value="pct">% from previous close</option></select></label><label>Predicted candles<select id="fc2mScn">${(fc.scenarios||[]).map((s,i)=>`<option value="${i}">${esc(s.name)}</option>`).join("")}<option value="-1">Off (fan only)</option></select></label><label style="flex-direction:row;align-items:center;gap:4px"><input type="checkbox" id="fc2mAnalogs"> show analog paths</label></div><canvas class="unifiedCanvas" id="fc2mCanvas" style="height:400px"></canvas><div class="chartTip" id="fc2mTip"></div></div><aside class="projectionPanel"><h3>Projection from now · ${esc(String(Math.floor(fc.as_of_minute/60)).padStart(2,'0')+':'+String(fc.as_of_minute%60).padStart(2,'0'))} ET</h3>${low?'<span class="lowConfidence">LOW CONFIDENCE</span>':'<span class="confidenceGood">Calibrated band</span>'}<div class="projectionGrid"><span>Price now</span><span>${fmtP(nowP)} (${pctOf(nowP)})</span><span>Median close</span><span>${fmtP(cq[2])} (${pctOf(cq[2])})</span><span>Close 25–75</span><span>${fmtP(cq[1])} – ${fmtP(cq[3])}</span><span>Close 10–90</span><span>${fmtP(cq[0])} – ${fmtP(cq[4])}</span><span>P(new HOD)</span><span>${(fc.p_new_hod*100).toFixed(0)}%</span><span>P(close below now)</span><span>${(fc.p_close_below_now*100).toFixed(0)}%</span><span>Analogs / effective n</span><span>${fc.n} / ${fc.ess}</span><span>2-min vol (last hour)</span><span>${fc.sigma_2m_pct}%</span><span>Drift kept</span><span>${Math.round(fc.shrink*100)}%</span></div></aside></section>`;
+ $('#fc2mMode').onchange=()=>drawForecast2mCanvas(data);$('#fc2mAnalogs').onchange=()=>drawForecast2mCanvas(data);$('#fc2mScn').onchange=()=>drawForecast2mCanvas(data);drawForecast2mCanvas(data)}
+function drawForecast2mCanvas(data){
+ const cv=$('#fc2mCanvas');if(!cv)return;const fc=data.forecast,tg=data.target,pc=tg.pc,mode=$('#fc2mMode').value,showA=$('#fc2mAnalogs').checked;
+ const cvt=v=>v==null?null:(mode==='pct'?(v/pc-1)*100:v);
+ const dpr=devicePixelRatio||1,W=Math.max(500,cv.parentElement.clientWidth-10),H=400;cv.width=W*dpr;cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';
+ const x=cv.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle='#050607';x.fillRect(0,0,W,H);
+ const L=52,R=12,T=14,B=24,VH=58,pw=W-L-R,ph=H-T-B-VH-10,now=fc.as_of_minute,X=m=>L+pw*(m-240)/720;
+ const scn=(fc.scenarios||[])[Number($('#fc2mScn').value)],all=aggregateEvBars(tg.chart.bars,2),ids=[];for(let i=0;i<all.t.length;i++)if(all.t[i]<=now)ids.push(i);
+ const vals=[];ids.forEach(i=>{vals.push(all.h[i],all.l[i])});['p10','p90'].forEach(k=>fc[k].forEach(v=>vals.push(v)));if(fc.actual)fc.actual.forEach(v=>vals.push(v));if(scn)scn.bars.forEach(b=>vals.push(b[2],b[3]));
+ let lo=Math.min(...vals),hi=Math.max(...vals);const pad=(hi-lo)*.05||hi*.02;lo-=pad;hi+=pad;const Y=v=>T+ph*(1-(v-lo)/(hi-lo||1));
+ x.font='11px Consolas,monospace';x.strokeStyle='#242c34';x.fillStyle='#aab4be';
+ for(let k=0;k<=5;k++){const v=lo+(hi-lo)*k/5,yy=Y(v);x.beginPath();x.moveTo(L,yy);x.lineTo(W-R,yy);x.stroke();const t=cvt(v);x.fillText(mode==='pct'?t.toFixed(1)+'%':t.toFixed(v<1?3:2),3,yy+3)}
+ const preEnd=X(570);x.fillStyle='rgba(255,255,255,.055)';x.fillRect(L,T,preEnd-L,ph);x.fillStyle='#89939c';x.fillText('PREMARKET',L+5,T+13);
+ for(const m of [240,360,480,570,660,750,840,930]){x.fillStyle='#929ca5';x.fillText(m===570?'09:30':String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0'),X(m)-15,H-7)}
+ x.strokeStyle='#888';x.setLineDash([3,3]);x.beginPath();x.moveTo(preEnd,T);x.lineTo(preEnd,T+ph);x.stroke();x.setLineDash([]);
+ const cw=Math.max(1,pw/360*.7);
+ const maxV=Math.max(1,...ids.map(i=>all.v[i]||0),...(scn?scn.bars.map(b=>b[5]):[])),vy1=H-B;
+ ids.forEach(i=>{const up=all.c[i]>=all.o[i],col=up?'#3fb97f':'#e5575e',xx=X(all.t[i]+1);x.strokeStyle=col;x.fillStyle=col;x.beginPath();x.moveTo(xx,Y(all.h[i]));x.lineTo(xx,Y(all.l[i]));x.stroke();const y1=Y(all.o[i]),y2=Y(all.c[i]);x.fillRect(xx-cw/2,Math.min(y1,y2),cw,Math.max(1,Math.abs(y2-y1)));x.globalAlpha=.55;x.fillRect(xx-cw/2,vy1-VH*(all.v[i]||0)/maxV,cw,VH*(all.v[i]||0)/maxV);x.globalAlpha=1});
+ x.strokeStyle='rgba(200,210,255,.6)';x.lineWidth=1;x.beginPath();let st=false;ids.forEach(i=>{const v=all.vw[i];if(v==null){st=false;return}const xx=X(all.t[i]+1),yy=Y(v);st?x.lineTo(xx,yy):x.moveTo(xx,yy);st=true});x.stroke();
+ const nx0=X(now),tt=fc.t.map(m=>X(m+1)),band=(a,b,c)=>{x.fillStyle=c;x.beginPath();fc[a].forEach((v,i)=>i?x.lineTo(tt[i],Y(v)):x.moveTo(tt[i],Y(v)));for(let i=fc[b].length-1;i>=0;i--)x.lineTo(tt[i],Y(fc[b][i]));x.closePath();x.fill()};
+ band('p10','p90','rgba(255,205,90,.10)');band('p25','p75','rgba(255,205,90,.22)');
+ if(showA)fc.paths.forEach(p=>{x.strokeStyle='rgba(150,190,255,.35)';x.lineWidth=1;x.beginPath();p.vals.forEach((v,i)=>i?x.lineTo(tt[i],Y(v)):x.moveTo(tt[i],Y(v)));x.stroke()});
+ if(scn){scn.bars.forEach(b=>{const up=b[4]>=b[1],col=up?'#3fb97f':'#e5575e',xx=X(b[0]+1);x.strokeStyle=col;x.fillStyle=col;x.globalAlpha=.8;x.beginPath();x.moveTo(xx,Y(b[2]));x.lineTo(xx,Y(b[3]));x.stroke();const y1=Y(b[1]),y2=Y(b[4]);x.globalAlpha=up?.35:.8;x.fillRect(xx-cw/2,Math.min(y1,y2),cw,Math.max(1,Math.abs(y2-y1)));if(up){x.globalAlpha=.9;x.strokeRect(xx-cw/2,Math.min(y1,y2),cw,Math.max(1,Math.abs(y2-y1)))}x.globalAlpha=.3;x.fillRect(xx-cw/2,vy1-VH*b[5]/maxV,cw,VH*b[5]/maxV);x.globalAlpha=1});x.fillStyle='#ffd36e';x.fillText('PREDICTED '+scn.name+' weighted OHLC quantiles',nx0+8,T+26)}
+ if(fc.actual){x.strokeStyle='rgba(255,255,255,.8)';x.setLineDash([2,2]);x.lineWidth=1.5;x.beginPath();fc.actual.forEach((v,i)=>i?x.lineTo(tt[i],Y(v)):x.moveTo(tt[i],Y(v)));x.stroke();x.setLineDash([])}
+ x.strokeStyle='#ffd36e';x.lineWidth=1.6;x.setLineDash([5,3]);x.beginPath();fc.p50.forEach((v,i)=>i?x.lineTo(tt[i],Y(v)):x.moveTo(tt[i],Y(v)));x.stroke();x.setLineDash([]);x.lineWidth=1;
+ const nx=X(now);x.strokeStyle='#f3f4f6';x.setLineDash([4,3]);x.beginPath();x.moveTo(nx,T);x.lineTo(nx,H-B);x.stroke();x.setLineDash([]);x.fillStyle='#fff';x.fillText('NOW',nx+4,T+12);
+ cv.onmousemove=e=>{const rect=cv.getBoundingClientRect(),m=240+(e.clientX-rect.left-L)/pw*720,tip=$('#fc2mTip');if(m<240||m>960){tip.style.display='none';return}const lines=[String(Math.floor(m/60)).padStart(2,'0')+':'+String(Math.floor(m)%60).padStart(2,'0')+' ET'];
+  if(m<=now+1){let bi=-1,bd=1e9;ids.forEach(i=>{const d=Math.abs(all.t[i]+1-m);if(d<bd){bd=d;bi=i}});if(bi>=0){const f=v=>cvt(v).toFixed(mode==='pct'?1:3);lines.push('O '+f(all.o[bi])+'  H '+f(all.h[bi]));lines.push('L '+f(all.l[bi])+'  C '+f(all.c[bi]));lines.push('vol '+fmtNum(all.v[bi]))}}
+  else{let k=Math.max(0,Math.min(fc.t.length-1,Math.round((m-fc.t[0])/fc.step)));const f=v=>cvt(v).toFixed(mode==='pct'?1:3);if(scn){const pb=scn.bars.find(b=>b[0]===Math.floor((m-240)/2)*2+240);if(pb){lines.push('PRED O '+f(pb[1])+'  H '+f(pb[2]));lines.push('PRED L '+f(pb[3])+'  C '+f(pb[4]));if(pb[6]!=null)lines.push('P(up close) '+(pb[6]*100).toFixed(0)+'%')}}lines.push('median '+f(fc.p50[k]));lines.push('25–75 '+f(fc.p25[k])+' … '+f(fc.p75[k]));lines.push('10–90 '+f(fc.p10[k])+' … '+f(fc.p90[k]));if(fc.actual&&fc.actual[k]!=null)lines.push('actual '+f(fc.actual[k]))}
+  tip.textContent=lines.join(String.fromCharCode(10));tip.style.display='block';tip.style.left=Math.min(W-200,e.offsetX+12)+'px';tip.style.top=Math.max(25,e.offsetY+10)+'px'};
+ cv.onmouseleave=()=>$('#fc2mTip').style.display='none'}
+async function runCompare(force=false){if(!qualifiedTickers.size){$('#compareStatus').textContent='Search a keyword and wait for qualifying tickers to finish screening.';return}if(!await verify())return;const button=$('#compareForm button[type=submit]');button.disabled=true;$('#compareResults').innerHTML='';$('#unifiedProjectionRoot').innerHTML='';$('#forecast2mRoot').innerHTML='';try{$('#compareStatus').textContent='Finding similar qualified event days…';const candidates=await collectCompareCandidates();if(!candidates.length)throw Error('No qualifying keyword-linked events are available.');const payload={user,token,ticker:$('#compareTicker').value.trim().toUpperCase(),date:$('#compareDate').value,window:10,top_k:3,include_own:false,manual_weights:false,force,weights:{A:50,B:25,C:25},candidates};lastComparePayload=payload;const r=await fetch('/api/keyword-compare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),d=await r.json();if(!r.ok)throw Error(d.error||'Compare failed');currentCompareData=d;$('#compareStatus').textContent=`Comparison complete · ${d.matches.length} closest qualifying days from ${qualifiedTickers.size} matching-keyword tickers.`;renderCompare(d);renderTopCompareCharts(d);drawUnifiedProjection(d);drawForecast2m(d)}catch(e){$('#compareStatus').innerHTML=`<span class="error">${esc(e.message)}</span>`}finally{button.disabled=false}}async function runMatcherValidation(){if(!rows.length){$('#compareStatus').textContent='Run a keyword search first.';return}if(!await verify())return;const button=$('#validateMatcher');button.disabled=true;try{$('#compareStatus').textContent='Validating against held-out SEC-associated events and three baselines…';const candidates=await collectCompareCandidates(),weights=currentCompareData?.weights||{A:50,B:25,C:25};const response=await fetch('/api/keyword-validate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user,token,window:Number($('#compareWindow').value),mode:$('#validationMode').value,weights,candidates})}),result=await response.json();if(!response.ok)throw Error(result.error||'Validation failed');if(currentCompareData){currentCompareData.validation=result;drawProjectionPanel(currentCompareData)}const names={fade:'HOD-to-close fade (RMSE)',open_close:'Open-to-close sign (hit rate)',d1:'D+1 direction (hit rate)',midday_remaining:'Midday remaining move (RMSE)'},bases=[['matcher','Matcher'],['gap_price_baseline','Gap + price baseline'],['random_keyword_baseline','Random same-keyword'],['scalar_only_baseline','Scalar-only']];let html=`<section class="compareMatch"><h3>Matcher validation · ${esc(result.mode)} · n=${result.sample_size}</h3>${result.warning?`<div class="lowConfidence">${esc(result.warning)}</div>`:'<div class="confidenceGood">Beat each baseline on both continuous measures.</div>'}<div class="compareNote">${esc(result.note)}</div><table class="compareStats"><tr><th>Outcome</th>${bases.map(x=>`<th>${x[1]}</th>`).join('')}</tr>`;for(const [key,label]of Object.entries(names)){html+=`<tr><td>${label}</td>${bases.map(([base])=>{const s=result.metrics[key][base];if(!s.n)return '<td>n=0</td>';return `<td>n=${s.n} · ${s.rmse==null?'':`RMSE ${s.rmse.toFixed(2)} ${s.rmse_ci95?`(95% ${s.rmse_ci95[0].toFixed(2)}–${s.rmse_ci95[1].toFixed(2)}) · `:''}`}hit ${(100*s.hit_rate).toFixed(0)}% (95% ${(100*s.hit_ci95[0]).toFixed(0)}–${(100*s.hit_ci95[1]).toFixed(0)}%)</td>`}).join('')}</tr>`}html+='</table></section>';$('#compareResults').insertAdjacentHTML('beforeend',html);$('#compareStatus').textContent=`Validation finished on ${result.evaluated} held-out events (${result.mode}).`}catch(e){$('#compareStatus').innerHTML=`<span class="error">${esc(e.message)}</span>`}finally{button.disabled=false}}
 $('#compareDate').value=isoDate(now);$('#compareTicker').addEventListener('input',e=>e.target.value=e.target.value.toUpperCase());$('#compareForm').onsubmit=e=>{e.preventDefault();runCompare()};async function search(reset=true){if($('#gapFilterEnabled').checked){const gapValue=$('#gapMinPct').value;if(gapValue===''||!Number.isFinite(Number(gapValue))||Number(gapValue)<0||Number(gapValue)>500){setStatus('Enter a gap-up threshold from 0 to 500%.',true);return}}if(!await verify())return;if(reset){eventScreenGeneration++;qualifiedTickers.clear();rows=[];offset=0;kwEventCache.clear();lastComparePayload=null;$('#compareResults').innerHTML='';$('#tableRoot').innerHTML='';$('#stocksRoot').innerHTML=''}const gen=++searchGeneration;$('#moreBtn').disabled=true;$('#moreBtn').textContent='Searching…';setStatus('Searching EDGAR full text; inspecting filing excerpts…');try{const body=payload();const res=await fetch('/api/keyword-search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await res.json();if(gen!==searchGeneration)return;if(!res.ok)throw Error(data.error||'SEC search failed');rows=reset?data.rows:rows.concat(data.rows);offset=data.from+data.size;total=data.total;setStatus(`Search complete: ${data.rows.length} filing matches returned on this page.`);buildTable();$('#moreBtn').style.display=offset<total?'inline-block':'none';$('#moreBtn').disabled=false;$('#moreBtn').textContent='Load more';}catch(e){if(gen===searchGeneration){setStatus(e.message,true);$('#moreBtn').disabled=false;$('#moreBtn').textContent='Load more'}}}
 $('#searchForm').onsubmit=e=>{e.preventDefault();search(true)};$('#moreBtn').onclick=()=>search(false);
 $('#clearBtn').onclick=()=>{searchGeneration++;eventScreenGeneration++;qualifiedTickers.clear();kwEventCache.clear();lastComparePayload=null;$('#compareResults').innerHTML='';rows=[];offset=0;total=0;$('#keyword').value='';$('#tableRoot').innerHTML='';$('#stocksRoot').innerHTML='';$('#resultSummary').innerHTML='';$('#moreBtn').style.display='none';$('#status').textContent='Search SEC filings from the last year. Events require session dollar volume above $50M and an event-day open of $10 or less; the gap-up filter is optional.';$('#startDate').value=isoDate(oneYear);$('#endDate').value=isoDate(now);$('#gapFilterEnabled').checked=false;$('#gapMinPct').value='10';$('#gapMinPct').disabled=true;updateCriteriaLabels()};
