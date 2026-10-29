@@ -1859,6 +1859,29 @@ def log_search(user, ticker):
         pass
 
 
+def log_keyword_search(user, keyword, start_date, end_date, forms):
+    """Record a successful SEC keyword search for the admin activity audit."""
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if not (user and keyword and sub_url and sub_key):
+        return
+    now_dt = dt.datetime.now(IST)
+    payload = {
+        "user_name": user.upper(),
+        "keyword": keyword[:120],
+        "start_date": start_date,
+        "end_date": end_date,
+        "forms": forms or None,
+        "time_ist": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
+        "date_ist": now_dt.strftime("%Y-%m-%d"),
+    }
+    try:
+        requests.post(f"{sub_url}/rest/v1/keyword_searches", json=payload,
+                      headers=_supabase_headers(), timeout=5)
+    except Exception:
+        app.logger.exception("Could not record keyword search activity")
+
+
 @app.route("/api/auth/status")
 def auth_status():
     u = (request.args.get("user") or "").strip().lower()
@@ -1977,11 +2000,31 @@ def admin_searches():
                 rows = r.json()
                 if isinstance(rows, list):
                     data = [{"user": (x.get("user_name") or x.get("user") or "").upper(),
-                             "ticker": x.get("ticker"),
+                             "ticker": x.get("ticker"), "type": "ticker",
                              "time": x.get("time_ist") or x.get("time"),
                              "date": x.get("date_ist")} for x in rows]
             else:
                 err_info = f"Supabase HTTP {r.status_code}: {r.text[:200]}"
+            try:
+                keyword_endpoint = f"{sub_url}/rest/v1/keyword_searches?select=user_name,keyword,start_date,end_date,forms,time_ist,date_ist&order=id.desc&limit=1000"
+                keyword_response = requests.get(keyword_endpoint, headers=_supabase_headers(), timeout=10)
+                if keyword_response.status_code == 200:
+                    keyword_rows = keyword_response.json()
+                    if isinstance(keyword_rows, list):
+                        data.extend({"user": (x.get("user_name") or "").upper(),
+                                     "ticker": x.get("keyword"), "keyword": x.get("keyword"),
+                                     "type": "keyword", "start_date": x.get("start_date"),
+                                     "end_date": x.get("end_date"), "forms": x.get("forms"),
+                                     "time": x.get("time_ist"), "date": x.get("date_ist")}
+                                    for x in keyword_rows)
+                        data.sort(key=lambda x: x.get("time") or "", reverse=True)
+                elif not err_info:
+                    err_info = ("Keyword search audit table unavailable. Apply the migration in "
+                                "supabase_keyword_searches.sql. "
+                                f"Supabase HTTP {keyword_response.status_code}.")
+            except Exception as ex:
+                if not err_info:
+                    err_info = f"Could not load keyword search history: {ex}"
         except Exception as ex:
             err_info = str(ex)
     else:
@@ -2025,6 +2068,11 @@ def clear_old_searches():
         if r2.status_code in (200, 204):
             data2 = r2.json() if r2.text else []
             deleted_count += len(data2) if isinstance(data2, list) else 0
+
+        r3 = requests.delete(f"{sub_url}/rest/v1/keyword_searches?date_ist=lt.{cutoff_date}", headers=h, timeout=15)
+        if r3.status_code in (200, 204):
+            data3 = r3.json() if r3.text else []
+            deleted_count += len(data3) if isinstance(data3, list) else 0
 
         return jsonify({
             "ok": True,
@@ -2816,6 +2864,8 @@ def api_keyword_search():
     try:
         result = _sec_keyword_search(keyword, start_date.isoformat(), end_date.isoformat(), forms,
                                      offset=int(data.get("offset") or 0), size=100)
+        if int(data.get("offset") or 0) == 0:
+            log_keyword_search(user, keyword, start_date.isoformat(), end_date.isoformat(), forms)
         return jsonify(result)
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else 502
@@ -6157,9 +6207,9 @@ window.openUserPopup = function(u){
       '</div>' +
       '<div style="font-size:12px;color:#8a8a8a;margin-bottom:8px">Query History (Recent first):</div>' +
       '<div class="scroll" style="max-height:260px;background:#050505;border:1px solid #222;border-radius:3px;padding:0 6px">' +
-      '<table style="margin:0"><thead><tr><th style="width:50px;padding-left:10px">#</th><th style="width:180px;padding-left:8px">Time (IST)</th><th style="padding-left:8px">Ticker</th></tr></thead><tbody>' +
+      '<table style="margin:0"><thead><tr><th style="width:50px;padding-left:10px">#</th><th style="width:180px;padding-left:8px">Time (IST)</th><th style="padding-left:8px">Search</th></tr></thead><tbody>' +
       obj.history.map((h, i) =>
-        `<tr><td class="d" style="padding-left:10px">${i+1}</td><td class="w" style="padding-left:8px">${esc(h.time)}</td><td class="big c" style="font-weight:bold;padding-left:8px">${esc(h.ticker)}</td></tr>`
+        `<tr><td class="d" style="padding-left:10px">${i+1}</td><td class="w" style="padding-left:8px">${esc(h.time)}</td><td class="big ${h.type==='keyword'?'':'c'}" style="font-weight:bold;padding-left:8px">${h.type==='keyword'?'⌕ ':''}${esc(h.keyword||h.ticker)}</td></tr>`
       ).join('') +
       '</tbody></table></div>';
   }
@@ -6212,7 +6262,7 @@ function renderAdminView(){
     for(const u of allUsers){
       const c = counts[u] || 0;
       const uniq = uniqueSymbols[u] ? uniqueSymbols[u].size : 0;
-      const countLabel = c ? `${c} search${c===1?'':'es'} &nbsp;·&nbsp; ${uniq} unique ticker${uniq===1?'':'s'}` : '0 searches';
+      const countLabel = c ? `${c} search${c===1?'':'es'} &nbsp;·&nbsp; ${uniq} unique search term${uniq===1?'':'s'}` : '0 searches';
       const lastLabel = lastSeen[u] ? `<span style="font-size:11px;color:#555;margin-left:10px">last: ${esc(lastSeen[u])}</span>` : '';
       html += `<div class="user_card_row" data-uname="${esc(u)}" onclick="openUserPopup('${esc(u)}')" style="background:#0e0e0e;border:1px solid #222;padding:14px 18px;border-radius:4px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;transition:background 0.12s,border-color 0.12s;user-select:none" onmouseover="this.style.background='#161616';this.style.borderColor='#29a8ff'" onmouseout="this.style.background='#0e0e0e';this.style.borderColor='#222'">` +
         `<div style="display:flex;align-items:center;gap:14px">` +
@@ -6228,9 +6278,11 @@ function renderAdminView(){
 
     // Full chronological log below
     html += `<div class="panel"><div class="ttl" style="margin-bottom:10px">All Searches Chronological Log</div>`+
-      `<div class="scroll"><table><thead><tr><th style="width:50px">#</th><th style="width:190px">Time (IST)</th><th style="width:140px">User</th><th>Ticker</th></tr></thead><tbody>`+
+      `<div class="scroll"><table><thead><tr><th style="width:50px">#</th><th style="width:190px">Time (IST)</th><th style="width:140px">User</th><th>Search</th><th>Details</th></tr></thead><tbody>`+
       adminRows.map((s, idx)=>{
-        return `<tr><td class="d">${idx+1}</td><td class="w">${esc(s.time)}</td><td style="color:#ddd;font-weight:bold">${esc(s.user)}</td><td class="big c">${esc(s.ticker)}</td></tr>`;
+        const isKeyword=s.type==='keyword';
+        const details=isKeyword?`${esc(s.start_date||'')} → ${esc(s.end_date||'')}${s.forms?` · ${esc(s.forms)}`:''}`:'';
+        return `<tr><td class="d">${idx+1}</td><td class="w">${esc(s.time)}</td><td style="color:#ddd;font-weight:bold">${esc(s.user)}</td><td class="big ${isKeyword?'':'c'}">${isKeyword?'⌕ ':''}${esc(s.keyword||s.ticker)}</td><td class="d">${details}</td></tr>`;
       }).join('')+
       `</tbody></table></div></div>`;
 
@@ -6254,6 +6306,7 @@ function renderAdminView(){
     // Ticker-wise view: tickers sorted by recent-wise searched
     const byTicker = {};
     adminRows.forEach(s => {
+      if(s.type==='keyword') return;
       const t = (s.ticker || '').toUpperCase();
       if(!t) return;
       if(!byTicker[t]){
@@ -6345,6 +6398,7 @@ async function loadAdminSearches(){
       return;
     }
     renderAdminView();
+    if(data._warn) $('#admin_list').insertAdjacentHTML('afterbegin', `<div class="panel" style="padding:12px 16px;color:#ffd23f;font-size:13px">⚠ ${esc(data._warn)}</div>`);
   } catch(e) {
     $('#admin_list').innerHTML = `<span class="r">Failed to load search logs: ${esc(e)}</span>`;
   }
