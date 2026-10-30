@@ -25,10 +25,21 @@ from chart_app.application import (
 from chart_app import auth as _auth
 import threading
 import uuid
+import json
+from pathlib import Path
 
 GAP_DEEPDIVE_TICKERS = list(dict.fromkeys("VIOT PPBT FAMI BIAF GELS RDAC GYGY WETO CLGN RDHL WHLR QNRX LGPS VNRX PPCB CELU BRNX SXTC VRAX SKK BIVI TNON CDTG ZSTK YJ EJH SGLY ONFO CIGL YMT DKI HKIT HUIZ GAUZ CELZ CLRO YXT ZYBT HYFM FCUV FFAI EDBL CJMB AKAN INLF GVH DXST EHGO ZBAO YMAT GMM YRD DXF CDT APWC IHT ICCM CIIT BEEM CRE CAST AIDX BYAH DSY BQ CHNR CCTG CGTL AZI CHAI BATL DAIC ANYBAOS BOXL BYSI CHOW DOGZ FRGT FXHO HCTI INM ITOC IVF JZXN KUST KXIN LGHL LICN LNAI LRHC LXEH MBRX MIMI MLEC MTEN NAII NCRA NEXR NIXX NUWE NVVE NXTS ODYS OFAL OMH OPTX ORIS PAVS PCLA PCSA PN PWCM RGNT RLYB RMAX RMSG RUBI RYOJ SAFX SBFM SDOT SFHG SILO SKYQ SLGB SLND SOAR SOBR SSM STG TDIC TRNR TURB TWG UK UPC VEEE VIVK VIVS".split()))
 GAP_DEEPDIVE_JOBS = {}
 GAP_DEEPDIVE_LOCK = threading.Lock()
+
+
+def _saved_gap_deepdive_manifest(year):
+    path = Path(__file__).resolve().parent.parent / 'data' / f'gap_deepdive_{year}.json'
+    try:
+        manifest = json.loads(path.read_text(encoding='utf-8'))
+        return manifest if manifest.get('status') == 'complete' and manifest.get('results') is not None else None
+    except (OSError, ValueError, TypeError):
+        return None
 
 
 def _run_gap_deepdive(job_id):
@@ -97,7 +108,12 @@ def gap_deepdive_start():
         from chart_app.application import cget, cput
         year=dt.date.today().year
         latest=cget(f"gap_deepdive_latest_{year}")
-        if latest and latest.get('status')=='complete' and latest.get('scanned_on')==dt.date.today().isoformat():
+        if latest and latest.get('status')=='complete':
+            return jsonify({'job':latest['job'],'cached':True})
+        latest=_saved_gap_deepdive_manifest(year)
+        if latest:
+            cput(f"gap_deepdive_job_{latest['job']}", latest)
+            cput(f"gap_deepdive_latest_{year}", latest)
             return jsonify({'job':latest['job'],'cached':True})
         job_id=uuid.uuid4().hex
         GAP_DEEPDIVE_JOBS[job_id]={'status':'queued','message':'Queued historical scan…','done':0,'total':len(GAP_DEEPDIVE_TICKERS),'results':[]}
@@ -116,6 +132,12 @@ def gap_deepdive_status(job_id):
         if user not in _auth.ALLOWED_USERS or not _db_validate_session(user, token): return jsonify({'error':'Unauthorized'}),401
         from chart_app.application import cget
         job=cget(f"gap_deepdive_job_{job_id}") or GAP_DEEPDIVE_JOBS.get(job_id)
+        if not job:
+            for year in (dt.date.today().year,):
+                manifest=_saved_gap_deepdive_manifest(year)
+                if manifest and manifest.get('job')==job_id:
+                    job=manifest
+                    break
         if not job: return jsonify({'error':'Scan not found; please start a new scan.'}),404
         return jsonify(clean(job))
     except Exception as exc:
@@ -133,6 +155,10 @@ def gap_deepdive_chart(job_id):
     except ValueError: return jsonify({'error':'Invalid session date'}),400
     from chart_app.application import cget
     job=cget(f"gap_deepdive_job_{job_id}") or GAP_DEEPDIVE_JOBS.get(job_id)
+    if not job:
+        manifest=_saved_gap_deepdive_manifest(dt.date.today().year)
+        if manifest and manifest.get('job')==job_id:
+            job=manifest
     if not job or job.get('status')!='complete': return jsonify({'error':'Scan is not complete or has expired.'}),404
     if not any(item.get('ticker')==ticker and item.get('date')==day for item in job.get('results',[])):
         return jsonify({'error':'Session is not part of this scan.'}),404
