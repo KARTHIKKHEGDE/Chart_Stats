@@ -5,6 +5,9 @@
 .scanner_user_settings.json
 .scanner_user_settings.tmp
 .app_ui_visibility.json
+.app_ui_user_visibility.json
+
+.cache/
 
 # Local data cache (Polygon / SEC / Yahoo caches)
 .gapcache/
