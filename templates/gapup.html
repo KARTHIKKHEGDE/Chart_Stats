@@ -46,6 +46,7 @@ canvas{display:block;width:100%}
 .evtf{height:21px;margin:0 0 0 2px;padding:0 3px;font-size:11px;border-color:#333;color:#aaa;background:#101010}
 .tag{border:1px solid var(--y);color:var(--y);padding:0 6px;font-size:11px;margin-left:8px}
 @media(max-width:1100px){.three{grid-template-columns:1fr}.two{grid-template-columns:1fr}.two>div+div{border-left:0;padding-left:14px}.evgrid{grid-template-columns:1fr}}
+@media(max-width:900px){#gap_deepdive_grid{grid-template-columns:1fr!important}#gap_deepdive_view{padding:16px!important}#gap_deepdive_grid canvas{height:390px!important}}
 #ag_tip{position:fixed;z-index:2147483647;background:#111;border:1px solid #444;color:#e0e0e0;font-size:12px;padding:7px 11px;border-radius:4px;max-width:300px;line-height:1.5;pointer-events:none;opacity:0;transition:opacity 0.15s;box-shadow:0 4px 16px rgba(0,0,0,0.7);white-space:pre-wrap;display:block}
 #ag_tip.visible{opacity:1}
 [data-tip]{cursor:help}
@@ -107,6 +108,7 @@ canvas{display:block;width:100%}
       <button id="scanner_open_btn" style="display:none;height:36px;padding:0 14px;border:2px solid #29a8ff;background:#071a28;color:#6cc4ff;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Live gap-up scanner">🔎 Scanner</button>
       <button id="nav_multiday_btn" style="height:36px;padding:0 14px;border:2px solid #00c9a7;background:#002b24;color:#00c9a7;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Multi-day Rally & First Red Day (FRD) Structure Tool">📊 Runner Stats</button>
       <button id="nav_keyword_btn" style="height:36px;padding:0 14px;border:2px solid #8b74ff;background:#120f24;color:#b7a8ff;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Search SEC filings by financing player">⌕ Search Keyword</button>
+      <button id="nav_gap_deepdive_btn" style="height:36px;padding:0 14px;border:2px solid #ffd23f;background:#211b05;color:#ffe17d;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Historical premarket gap deep dive">↗ Gap Up Deepdive</button>
       <span>User: <span id="u_name" style="color:#29a8ff;font-weight:bold"></span><span id="u_badge"></span></span>
       <button id="logout_btn" style="height:34px;font-size:12px;padding:0 12px;border-color:#444">Exit</button>
     </div>
@@ -116,6 +118,15 @@ canvas{display:block;width:100%}
   <div id="tabs_view">
     <div id="out" style="padding:24px 34px"><span class="d">Enter a ticker that is gapping up 30%+ and press Get notes.</span></div>
   </div>
+  <section id="gap_deepdive_view" style="display:none;padding:22px 30px;background:#050607;min-height:80vh">
+    <header style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:16px">
+      <strong style="font-size:20px;color:#ffe17d">Gap Up Deepdive</strong>
+      <span style="color:#9ba3ad;font-size:13px">This year · Premarket high ≥ +50% vs prior close · Premarket dollar volume ≥ $10M · 1-minute charts</span>
+      <button id="gap_deepdive_scan" style="margin-left:auto;border-color:#ffd23f;color:#ffe17d">Scan tickers</button>
+    </header>
+    <div id="gap_deepdive_status" style="color:#aeb6c0;padding:12px 0">Press Scan tickers to search the supplied ticker list.</div>
+    <div id="gap_deepdive_grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px"></div>
+  </section>
   <!-- Multiday Runner Stats Embedded View on Main Screen -->
   <div id="multiday_view" style="display:none;width:100%;background:#000;position:relative">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 34px;background:#08080a;border-bottom:1px solid #222">
@@ -728,6 +739,7 @@ function closeTab(t){
 }
 
 async function run(refresh){
+  $('#gap_deepdive_view').style.display='none';
   if(!checkAuth()) return;
   let t = ($('#t').value || '').trim().toUpperCase();
   if(!t && activeTab) t = activeTab;
@@ -878,7 +890,7 @@ function renderTab(tab, r, isRefresh){
      (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/20 EMA cloud + BB)</label></div>`+
      `<span style="font-size:12px;color:#29a8ff;font-weight:normal">🔍 Click any chart to enlarge</span></div>`+
   `<div class="evgrid">`+tab.EV.map((c,i)=>`<div class="evc" data-ev-slot="${i}" onclick="openChartModal(${i})"><div class="evhead"><div class="evt" id="evtitle${i}"></div><span class="eventDateTag" data-event-date></span><div class="evcontrols"><select class="evtf" title="Timeframe"><option>1m</option><option selected>2m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select><select class="evdays" title="Sessions shown"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="60">60 days</option></select><button class="evzoom" data-zoom="out" title="Zoom out">−</button><button class="evzoom" data-zoom="in" title="Zoom in">+</button><button class="evmeasure" type="button" title="Drag across bars to measure volume, dollar volume, and float rotation">Measure</button><button class="evtoday" type="button" title="Return to today's live chart">Today</button></div></div><canvas id="ev${i}"></canvas></div>`).join('')+
-     `<\/div><div class="foot"><span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance.">━ VWAP<\/span> &nbsp; <span style="color:#c084fc">━ TWAP</span> &nbsp; <span style="color:#e879f9">┅ active-minute TWAP</span> &nbsp; <span style="color:#ffd23f">┅ running-HOD AVWAP</span>  <span class="y" data-tip="Pre-market High — highest price before the US market open. Common fade target.">┅ PM high<\/span>  <span class="d" data-tip="Previous Close — yesterday’s close. Gap % is measured from here.">┅ prev close<\/span> &nbsp; <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period EMA on 2-min closes. Fast trend line.">━ EMA9<\/span> <span style="color:#ffa500" data-tip="EMA 20 — 20-period EMA on 2-min closes. Slower trend line. Bearish when EMA9 drops below it.">━ EMA20<\/span> <span class="g" data-tip="Bone Zone cloud — shaded between EMA9 &amp; EMA20. Green = bullish. Red = bearish.">▒<\/span><span class="r">▒<\/span> cloud <span class="d" data-tip="Bollinger Bands (20-period, 2 std dev). Shows expected volatility range on the 2-min chart.">━ BB(20,2)<\/span> &nbsp; <span data-tip="SELL signal — short entry triggered by an entry model.">▼ SELL<\/span> &nbsp; <span data-tip="BUY / Cover signal — close the short here. P&amp;L % shown next to it.">▲ BUY<\/span>. <span data-tip="Lighter shaded background = pre-market session (before 9:30 ET / 19:00 IST).">Shaded = premarket<\/span>. X axis = IST. Measure: activate Measure, then drag across bars for volume, estimated dollar volume, and float rotation.<\/div><\/div>`;
+     `<\/div><div class="foot"><span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance.">━ VWAP<\/span> &nbsp; <span style="color:#c084fc">━ TWAP</span> &nbsp; <span style="color:#e879f9">┅ active-minute TWAP</span> &nbsp; <span style="color:#ffd23f">┅ HOD-anchored AVWAP</span>  <span class="y" data-tip="Pre-market High — highest price before the US market open. Common fade target.">┅ PM high<\/span>  <span class="d" data-tip="Previous Close — yesterday’s close. Gap % is measured from here.">┅ prev close<\/span> &nbsp; <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period EMA on 2-min closes. Fast trend line.">━ EMA9<\/span> <span style="color:#ffa500" data-tip="EMA 20 — 20-period EMA on 2-min closes. Slower trend line. Bearish when EMA9 drops below it.">━ EMA20<\/span> <span class="g" data-tip="Bone Zone cloud — shaded between EMA9 &amp; EMA20. Green = bullish. Red = bearish.">▒<\/span><span class="r">▒<\/span> cloud <span class="d" data-tip="Bollinger Bands (20-period, 2 std dev). Shows expected volatility range on the 2-min chart.">━ BB(20,2)<\/span> &nbsp; <span data-tip="SELL signal — short entry triggered by an entry model.">▼ SELL<\/span> &nbsp; <span data-tip="BUY / Cover signal — close the short here. P&amp;L % shown next to it.">▲ BUY<\/span>. <span data-tip="Lighter shaded background = pre-market session (before 9:30 ET / 19:00 IST).">Shaded = premarket<\/span>. X axis = IST. Measure: activate Measure, then drag across bars for volume, estimated dollar volume, and float rotation.<\/div><\/div>`;
 
   const pmGapText = Number.isFinite(r.chart.premarket_gap_pct)
     ? `${(r.chart.premarket_gap_pct*100).toFixed(1)}% (PM high vs prev close)` : 'Not available';
@@ -1229,17 +1241,17 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   x.stroke();
   if(!daily){
     const twap=[], activeTwap=[], avh=[]; let dayKey=null, count=0, timeSum=0, activeCount=0, activeSum=0;
-    let prevT=null, prevTp=null, runningHigh=-Infinity, anchorDollar=0, anchorVol=0;
+    let prevT=null, prevTp=null, anchorDollar=0, anchorVol=0;
+    const hodByDay=new Map();for(let i=0;i<b.t.length;i++){const day=b.d?.[i]||c.date||'';if(!hodByDay.has(day)||b.h[i]>b.h[hodByDay.get(day)])hodByDay.set(day,i);}
     for(let i=0;i<b.t.length;i++){
       const day=b.d?.[i]||c.date||'', tp=(b.h[i]+b.l[i]+b.c[i])/3;
-      if(day!==dayKey){dayKey=day;count=0;timeSum=0;activeCount=0;activeSum=0;prevT=null;prevTp=null;runningHigh=-Infinity;anchorDollar=0;anchorVol=0;}
+      if(day!==dayKey){dayKey=day;count=0;timeSum=0;activeCount=0;activeSum=0;prevT=null;prevTp=null;anchorDollar=0;anchorVol=0;}
       const steps=prevT==null?1:Math.max(1,Math.round((b.t[i]-prevT)/tf));
       const fillTp=prevTp==null?tp:prevTp;
       if(count){timeSum+=fillTp*(steps-1);count+=steps-1;}
       timeSum+=tp;count++;twap.push(timeSum/count);
       if((b.v[i]||0)>0){activeSum+=tp;activeCount++;}activeTwap.push(activeCount?activeSum/activeCount:null);
-      if(b.h[i]>runningHigh){runningHigh=b.h[i];anchorDollar=0;anchorVol=0;}
-      anchorDollar+=tp*(b.v[i]||0);anchorVol+=b.v[i]||0;avh.push(anchorVol?anchorDollar/anchorVol:null);
+      if(i>=hodByDay.get(day)){anchorDollar+=tp*(b.v[i]||0);anchorVol+=b.v[i]||0;avh.push(anchorVol?anchorDollar/anchorVol:null);}else avh.push(null);
       prevT=b.t[i];prevTp=tp;
     }
     clipP();
@@ -1672,6 +1684,21 @@ async function copyAll(){
 }
 $('#go').onclick=()=>run(false); $('#rf').onclick=()=>run(true); $('#cp').onclick=copyAll;
 $('#t').addEventListener('keydown',e=>{if(e.key==='Enter')run(false)});
+let gapDeepDiveRequest=0;
+function openGapDeepDive(){$('#tabs_view').style.display='none';$('#tab_bar').style.display='none';$('#multiday_view').style.display='none';$('#gap_deepdive_view').style.display='block';}
+$('#nav_gap_deepdive_btn').onclick=openGapDeepDive;
+$('#gap_deepdive_scan').onclick=async()=>{
+  openGapDeepDive();const status=$('#gap_deepdive_status'),grid=$('#gap_deepdive_grid'),button=$('#gap_deepdive_scan');button.disabled=true;grid.innerHTML='';status.textContent='Starting scan…';const runId=++gapDeepDiveRequest;
+  try{
+    const start=await fetch('/api/gap-deepdive/start?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken),{method:'POST'}),started=await start.json();if(!start.ok)throw new Error(started.error||'Could not start scan');let result;
+    while(runId===gapDeepDiveRequest){await new Promise(resolve=>setTimeout(resolve,2000));const response=await fetch('/api/gap-deepdive/'+encodeURIComponent(started.job)+'?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken));result=await response.json();if(!response.ok)throw new Error(result.error||'Scan failed');status.textContent=result.message||'Scanning…';if(result.status==='complete'||result.status==='error')break;}
+    if(runId!==gapDeepDiveRequest)return;if(result.status==='error')throw new Error(result.message);const items=result.results||[];if(!items.length){status.textContent=(result.message||'Complete')+' · No qualifying sessions found.';return;}
+    grid.innerHTML=items.map((item,i)=>`<article style="min-width:0;background:#090c10;border:1px solid #29313a;border-radius:5px;padding:10px"><header style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:8px"><strong style="color:#e8edf3;font-size:14px">${esc(item.ticker)}</strong><span style="padding:3px 7px;border-radius:3px;background:#211b05;border:1px solid #655516;color:#ffe17d;font-size:12px">${esc(item.date)}</span><span style="color:#64d99b;font-size:12px">PM high +${(item.move*100).toFixed(1)}%</span><span style="color:#9ba3ad;font-size:12px">PM $vol $${(item.pm_dollar_volume/1e6).toFixed(1)}M</span><button class="gap-copy-png" data-index="${i}" style="margin-left:auto;height:30px;font-size:12px;border-color:#555">Copy PNG</button></header><canvas id="gap_deepdive_chart_${i}" style="width:100%;height:470px;display:block"></canvas><div style="font-size:11px;color:#9ba3ad;padding:4px 2px">1m candles · full premarket and regular session · 04:00–16:00 ET · continuous VWAP · anchored VWAP from session HOD</div></article>`).join('');
+    items.forEach((item,i)=>{const canvas=$('#gap_deepdive_chart_'+i);drawEv(canvas,item.chart,'none',false,470,'1m',1);});
+    grid.querySelectorAll('.gap-copy-png').forEach(btn=>btn.onclick=async()=>{const canvas=$('#gap_deepdive_chart_'+btn.dataset.index);try{const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw new Error('Could not render PNG');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);btn.textContent='Copied ✓';setTimeout(()=>btn.textContent='Copy PNG',1300);}catch(error){status.textContent='PNG copy unavailable: '+error.message;}});
+  }catch(error){if(runId===gapDeepDiveRequest)status.textContent='Scan error: '+error.message;}
+  finally{if(runId===gapDeepDiveRequest)button.disabled=false;}
+};
 $('#gate_btn').onclick=submitGate;
 $('#gate_name').addEventListener('keydown',e=>{if(e.key==='Enter')submitGate();});
 if($('#gate_create_btn')) $('#gate_create_btn').onclick=submitCreate;
@@ -2151,9 +2178,11 @@ function switchMainView(mode){
   const tabsView = $('#tabs_view');
   const tabBar = $('#tab_bar');
   const multiView = $('#multiday_view');
+  const deepView = $('#gap_deepdive_view');
   const iframe = $('#runner_iframe');
   
   if(mode === 'multiday'){
+    if(deepView) deepView.style.display='none';
     if(intraBtn){ intraBtn.style.background = 'transparent'; intraBtn.style.color = '#29a8ff'; }
     if(multiBtn){ multiBtn.style.background = '#00c9a7'; multiBtn.style.color = '#000'; }
     if(tabsView) tabsView.style.display = 'none';
@@ -2169,6 +2198,7 @@ function switchMainView(mode){
       } catch(e){}
     }
   } else {
+    if(deepView) deepView.style.display='none';
     if(intraBtn){ intraBtn.style.background = '#29a8ff'; intraBtn.style.color = '#000'; }
     if(multiBtn){ multiBtn.style.background = 'transparent'; multiBtn.style.color = '#00c9a7'; }
     if(tabsView) tabsView.style.display = 'block';

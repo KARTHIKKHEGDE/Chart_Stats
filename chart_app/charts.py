@@ -22,6 +22,84 @@ from chart_app.application import (
     request,
 )
 from chart_app import auth as _auth
+import threading
+import uuid
+
+GAP_DEEPDIVE_TICKERS = list(dict.fromkeys("VIOT PPBT FAMI BIAF GELS RDAC GYGY WETO CLGN RDHL WHLR QNRX LGPS VNRX PPCB CELU BRNX SXTC VRAX SKK BIVI TNON CDTG ZSTK YJ EJH SGLY ONFO CIGL YMT DKI HKIT HUIZ GAUZ CELZ CLRO YXT ZYBT HYFM FCUV FFAI EDBL CJMB AKAN INLF GVH DXST EHGO ZBAO YMAT GMM YRD DXF CDT APWC IHT ICCM CIIT BEEM CRE CAST AIDX BYAH DSY BQ CHNR CCTG CGTL AZI CHAI BATL DAIC ANYBAOS BOXL BYSI CHOW DOGZ FRGT FXHO HCTI INM ITOC IVF JZXN KUST KXIN LGHL LICN LNAI LRHC LXEH MBRX MIMI MLEC MTEN NAII NCRA NEXR NIXX NUWE NVVE NXTS ODYS OFAL OMH OPTX ORIS PAVS PCLA PCSA PN PWCM RGNT RLYB RMAX RMSG RUBI RYOJ SAFX SBFM SDOT SFHG SILO SKYQ SLGB SLND SOAR SOBR SSM STG TDIC TRNR TURB TWG UK UPC VEEE VIVK VIVS".split()))
+GAP_DEEPDIVE_JOBS = {}
+GAP_DEEPDIVE_LOCK = threading.Lock()
+
+
+def _run_gap_deepdive(job_id):
+    from chart_app.market_data import PM_START
+    from chart_app.application import clean
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import numpy as np
+    job = GAP_DEEPDIVE_JOBS[job_id]
+    year = dt.date.today().year
+    year_start, year_end = f"{year}-01-01", dt.date.today().isoformat()
+    found, errors = [], []
+    def scan_ticker(ticker):
+        daily = load_daily(ticker)
+        candidates = [(i, row) for i, row in enumerate(daily) if i and year_start <= row['date'] <= year_end
+                      and row.get('h', 0) >= daily[i-1].get('c', 1) * 1.5]
+        days = []
+        for ix, row in candidates:
+            day = row['date']
+            try:
+                frame = minute_df(ticker, day)
+                if frame is None or frame.empty: continue
+                mm = frame.index.hour * 60 + frame.index.minute
+                pm = frame[(mm >= PM_START) & (mm < 570)]
+                if pm.empty: continue
+                # Daily range is only a prefilter; validate the PM high and $ volume on minute bars.
+                prev = float(daily[ix-1]['c'])
+                pm_high = float(pm.h.max())
+                move = pm_high / prev - 1 if prev > 0 else 0
+                tp = (pm.h + pm.l + pm.c) / 3
+                dollar_volume = float((tp * pm.v).sum())
+                if move >= .50 and dollar_volume >= 10_000_000:
+                    m = metrics(frame, prev, True)
+                    packed = chart_pack(frame, m, prev, dt.date.fromisoformat(day))
+                    days.append({'ticker': ticker, 'date': day, 'move': move, 'pm_dollar_volume': dollar_volume,
+                                 'title': f"{ticker} · {day} · PM high +{move:.0%} · ${dollar_volume/1e6:.1f}M",
+                                 'chart': packed})
+            except Exception:
+                continue
+        return days
+    try:
+        job.update(status='running', message=f'Scanning {len(GAP_DEEPDIVE_TICKERS)} tickers for {year}…', done=0, total=len(GAP_DEEPDIVE_TICKERS))
+        with ThreadPoolExecutor(max_workers=min(12, max(1, len(GAP_DEEPDIVE_TICKERS)))) as pool:
+            futures = {pool.submit(scan_ticker, ticker): ticker for ticker in GAP_DEEPDIVE_TICKERS}
+            for future in as_completed(futures):
+                ticker = futures[future]
+                try: found.extend(future.result())
+                except Exception as exc: errors.append(f"{ticker}: {exc}")
+                job['done'] += 1
+                job['message'] = f"Scanned {job['done']} / {job['total']} tickers · {len(found)} qualifying sessions"
+        found.sort(key=lambda x: (x['date'], x['ticker']), reverse=True)
+        job.update(status='complete', message=f"Complete · {len(found)} qualifying sessions", results=clean(found), errors=errors[:20])
+    except Exception as exc:
+        job.update(status='error', message=f"{type(exc).__name__}: {exc}")
+
+
+@app.route('/api/gap-deepdive/start', methods=['POST'])
+def gap_deepdive_start():
+    user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()
+    if user not in _auth.ALLOWED_USERS or not _db_validate_session(user, token): return jsonify({'error':'Unauthorized'}),401
+    job_id=uuid.uuid4().hex
+    GAP_DEEPDIVE_JOBS[job_id]={'status':'queued','message':'Starting…','done':0,'total':len(GAP_DEEPDIVE_TICKERS),'results':[]}
+    threading.Thread(target=_run_gap_deepdive,args=(job_id,),daemon=True).start()
+    return jsonify({'job':job_id})
+
+
+@app.route('/api/gap-deepdive/<job_id>')
+def gap_deepdive_status(job_id):
+    user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()
+    if user not in _auth.ALLOWED_USERS or not _db_validate_session(user, token): return jsonify({'error':'Unauthorized'}),401
+    job=GAP_DEEPDIVE_JOBS.get(job_id)
+    if not job: return jsonify({'error':'Scan not found; please start a new scan.'}),404
+    return jsonify(clean(job))
 
 @app.route("/api/session-chart")
 def session_chart():
