@@ -77,6 +77,8 @@ def analyze_event(t, i, daily, ctx):
         "vwap_never": m["vwap_never"], "vwap_reject": m["vwap_reject"],
         "hod_vwap_twap_spread": m.get("hod_vwap_twap_spread"),
         "hod_vwap": m.get("hod_vwap"), "hod_twap": m.get("hod_twap"),
+        "hod_price_vs_vwap_pct": m.get("hod_price_vs_vwap_pct"),
+        "hod_price_vs_twap_pct": m.get("hod_price_vs_twap_pct"),
         "twap_touch_after_hod": m.get("twap_touch_after_hod"),
         "twap_touch_min": m.get("twap_touch_min"),
         "failed_bo": m["failed_bo"], "consol_bd": m["consol_bd"],
@@ -212,6 +214,12 @@ def stats(S):
     st["med_vwap_dev_1000"] = med(vals(S, "vwap_dev_1000"))
     st["med_vwap_below_frac"] = med(vals(S, "vwap_below_frac"))
     st["vwap_failed_reclaim"] = frac(S, "vwap_failed_reclaim")
+    st["med_hod_price_vs_vwap_pct"] = med(vals(S, "hod_price_vs_vwap_pct"))
+    st["p25_hod_price_vs_vwap_pct"] = pctl(vals(S, "hod_price_vs_vwap_pct"), 25)
+    st["p75_hod_price_vs_vwap_pct"] = pctl(vals(S, "hod_price_vs_vwap_pct"), 75)
+    st["med_hod_price_vs_twap_pct"] = med(vals(S, "hod_price_vs_twap_pct"))
+    st["p25_hod_price_vs_twap_pct"] = pctl(vals(S, "hod_price_vs_twap_pct"), 25)
+    st["p75_hod_price_vs_twap_pct"] = pctl(vals(S, "hod_price_vs_twap_pct"), 75)
     st["med_hod_vwap_twap_spread"] = med(vals(S, "hod_vwap_twap_spread"))
     st["p25_hod_vwap_twap_spread"] = pctl(vals(S, "hod_vwap_twap_spread"), 25)
     st["p75_hod_vwap_twap_spread"] = pctl(vals(S, "hod_vwap_twap_spread"), 75)
@@ -531,6 +539,10 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
         frow("Failed VWAP reclaim after loss", st["vwap_failed_reclaim"]),
         ["VWAP−TWAP spread at HOD (median, p25–p75)",
          f"{pct(st['med_hod_vwap_twap_spread'], 1)} · {pct(st['p25_hod_vwap_twap_spread'], 1)} to {pct(st['p75_hod_vwap_twap_spread'], 1)}", "b"],
+        ["HOD price vs VWAP at HOD time (median, p25–p75)",
+         f"{pct(st['med_hod_price_vs_vwap_pct'], 1)} · {pct(st['p25_hod_price_vs_vwap_pct'], 1)} to {pct(st['p75_hod_price_vs_vwap_pct'], 1)}", "b"],
+        ["HOD price vs TWAP at HOD time (median, p25–p75)",
+         f"{pct(st['med_hod_price_vs_twap_pct'], 1)} · {pct(st['p25_hod_price_vs_twap_pct'], 1)} to {pct(st['p75_hod_price_vs_twap_pct'], 1)}", "b"],
         frow("TWAP touched after HOD", st["twap_touch_after_hod"]),
         ["Median HOD time (IST)", hhmm(st["med_hod_min"], live["date"]), "b"],
         ["Median HOD → close", pct(st["med_hod_close"], 0), sc(st["med_hod_close"])],

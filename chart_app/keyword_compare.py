@@ -614,6 +614,11 @@ def _compare_event_features(ticker, day, window, force=False):
         "rth_open": ((op/pc-1)*100 if op else None),
         "gap": ((op/pc-1)*100 if op else None),
         "hod_min": (m.get("hod_min") - RG_START if m.get("hod_min") is not None else None),
+        "hod_price_vs_vwap_pct": (m.get("hod_price_vs_vwap_pct") * 100
+                                   if m.get("hod_price_vs_vwap_pct") is not None else None),
+        "hod_price_vs_twap_pct": (m.get("hod_price_vs_twap_pct") * 100
+                                   if m.get("hod_price_vs_twap_pct") is not None else None),
+        "hod_vwap_twap_spread": m.get("hod_vwap_twap_spread"),
         "hod_fade": ((close/hod-1)*100 if hod and close else None),
         "open_close": ((close/op-1)*100 if op else None),
         "pm_vs_open": ((float(m["pm_high"])/op-1)*100 if m.get("pm_high") and op else None),
@@ -692,6 +697,10 @@ def _compare_feature_asof(feature, cutoff_minute):
         cumulative_d += p["dollar"] or 0
         p["cumvol"] = cumulative_v / total_volume if total_volume else None
         p["cumdollar"] = cumulative_d / total_dollars if total_dollars else None
+    if cutoff_minute is not None and (feature.get("hod_min") is None or feature["hod_min"] + RG_START > cutoff_minute):
+        out["hod_min"] = None
+        for key in ("hod_price_vs_vwap_pct", "hod_price_vs_twap_pct", "hod_vwap_twap_spread"):
+            out[key] = None
     out["intraday"] = bars
     out["volume_curve"] = [p.get("cumvol") for p in bars]
     out["dollar_volume_curve"] = [p.get("cumdollar") for p in bars]
@@ -770,6 +779,8 @@ def _compare_similarity(a, b):
     d_score = float(np.mean(d_scores)) if d_scores else None
     state_scores = [scalar_score(["close_vs_vwap", "close_vs_twap"], 15.0),
                     scalar_score(["vwap_twap_spread_close"], 4.0),
+                    scalar_score(["hod_price_vs_vwap_pct", "hod_price_vs_twap_pct"], 15.0),
+                    scalar_score(["hod_vwap_twap_spread"], 4.0),
                     scalar_score(["gap", "gap_retention", "hod_fade", "open_close"], 50.0)]
     state_scores = [x for x in state_scores if x is not None]
     state_score = float(np.mean(state_scores)) if state_scores else None
@@ -1335,7 +1346,7 @@ def api_keyword_compare():
                         "consensus": {"faded": sum(1 for x in sample_matches if (x["features"].get("hod_fade") or 0) < -20),
                                       "ground_higher": sum(1 for x in sample_matches if (x["features"].get("post_path") or [0])[-1] > 0),
                                       "early_hod": sum(1 for x in sample_matches if x["features"].get("hod_min") is not None and x["features"]["hod_min"] < 90)},
-                        "formula": "A allocates 40% to raw-amplitude recency-weighted Dv=price/VWAP−1, Dt=price/TWAP−1, and S=ln(VWAP/TWAP) curves; 25% to same-side VWAP/TWAP and S-bucket state plus gap state; 20% to volume curves; and 15% to price paths. B compares pre-gap return, relative-volume, log-dollar-volume, ranges and context; C compares post-event behavior. Available A/B/C components are combined with the reported learned/default weights.",
+                        "formula": "A allocates 40% to recency-weighted price/VWAP, price/TWAP and VWAP/TWAP spread curves; 25% to close and HOD VWAP/TWAP relationships plus gap state; 20% to volume curves; and 15% to price paths. HOD relationships are measured at each event's own HOD time. B compares pre-gap return, relative-volume, log-dollar-volume, ranges and context; C compares post-event behavior. Available A/B/C components are combined with the reported learned/default weights.",
                         "source": "Polygon intraday and daily aggregate candles; SEC keyword-search rows supplied by the current page."})
     except Exception as exc:
         app.logger.exception("Keyword compare failed for %s %s", ticker, day)

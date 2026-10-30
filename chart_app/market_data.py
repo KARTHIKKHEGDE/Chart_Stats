@@ -659,7 +659,11 @@ def metrics(df, pc, full=True):
         vwap_twap_spread_close=(float(math.log(ref_close["vwap"]/ref_close["twap"]))
                                 if ref_close is not None and ref_close["vwap"] and ref_close["twap"] else None),
         hod_vwap=(float(ref_hod["vwap"]) if ref_hod is not None and pd.notna(ref_hod["vwap"]) else None),
-        hod_twap=(float(ref_hod["twap"]) if ref_hod is not None else None),
+        hod_twap=(float(ref_hod["twap"]) if ref_hod is not None and pd.notna(ref_hod["twap"]) else None),
+        hod_price_vs_vwap_pct=((hod / float(ref_hod["vwap"]) - 1)
+                               if ref_hod is not None and pd.notna(ref_hod["vwap"]) and ref_hod["vwap"] else None),
+        hod_price_vs_twap_pct=((hod / float(ref_hod["twap"]) - 1)
+                               if ref_hod is not None and pd.notna(ref_hod["twap"]) and ref_hod["twap"] else None),
         hod_active_twap=(float(ref_hod["active_twap"]) if ref_hod is not None and pd.notna(ref_hod["active_twap"]) else None),
         hod_vwap_twap_spread=(float(ref_hod["spread"]) if ref_hod is not None and pd.notna(ref_hod["spread"]) else None),
         twap_touch_after_hod=bool(len(touch_rows)),
