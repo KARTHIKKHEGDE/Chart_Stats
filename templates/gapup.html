@@ -122,9 +122,8 @@ canvas{display:block;width:100%}
     <header style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:16px">
       <strong style="font-size:20px;color:#ffe17d">Gap Up Deepdive</strong>
       <span style="color:#9ba3ad;font-size:13px">This year · Premarket high ≥ +50% vs prior close · Premarket dollar volume ≥ $10M · 1-minute charts</span>
-      <button id="gap_deepdive_scan" style="margin-left:auto;border-color:#ffd23f;color:#ffe17d">Scan tickers</button>
+      <span id="gap_deepdive_status" style="margin-left:auto;color:#aeb6c0;font-size:13px">Opening the saved scan…</span>
     </header>
-    <div id="gap_deepdive_status" style="color:#aeb6c0;padding:12px 0">Press Scan tickers to search the supplied ticker list.</div>
     <div id="gap_deepdive_grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px"></div>
   </section>
   <!-- Multiday Runner Stats Embedded View on Main Screen -->
@@ -1684,28 +1683,36 @@ async function copyAll(){
 }
 $('#go').onclick=()=>run(false); $('#rf').onclick=()=>run(true); $('#cp').onclick=copyAll;
 $('#t').addEventListener('keydown',e=>{if(e.key==='Enter')run(false)});
-let gapDeepDiveRequest=0;
-function openGapDeepDive(){$('#tabs_view').style.display='none';$('#tab_bar').style.display='none';$('#multiday_view').style.display='none';$('#gap_deepdive_view').style.display='block';}
+let gapDeepDiveRequest=0,gapDeepDiveLoaded=false,gapDeepDivePromise=null;
+function openGapDeepDive(){
+  $('#tabs_view').style.display='none';$('#tab_bar').style.display='none';$('#multiday_view').style.display='none';$('#gap_deepdive_view').style.display='block';
+  if(!gapDeepDiveLoaded)loadGapDeepDive();
+}
 async function gapDeepDiveJson(response){
   const type=response.headers.get('content-type')||'';
   if(!type.includes('application/json')){const body=(await response.text()).slice(0,100);throw new Error(`Scan API returned HTML instead of JSON (HTTP ${response.status}). Refresh the app after its server has updated. ${body}`);}
   const data=await response.json();if(!response.ok)throw new Error(data.error||`Request failed (HTTP ${response.status})`);return data;
 }
 $('#nav_gap_deepdive_btn').onclick=openGapDeepDive;
-$('#gap_deepdive_scan').onclick=async()=>{
-  openGapDeepDive();const status=$('#gap_deepdive_status'),grid=$('#gap_deepdive_grid'),button=$('#gap_deepdive_scan');button.disabled=true;grid.innerHTML='';status.textContent='Starting scan…';const runId=++gapDeepDiveRequest;
+async function loadGapDeepDive(){
+  if(gapDeepDivePromise)return gapDeepDivePromise;
+  const status=$('#gap_deepdive_status'),grid=$('#gap_deepdive_grid');grid.innerHTML='';status.textContent='Loading saved scan results…';const runId=++gapDeepDiveRequest;
+  const task=(async()=>{
   try{
     const start=await fetch('/api/gap-deepdive/start?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken),{method:'POST'}),started=await gapDeepDiveJson(start);let result;
     while(runId===gapDeepDiveRequest){await new Promise(resolve=>setTimeout(resolve,2000));const response=await fetch('/api/gap-deepdive/'+encodeURIComponent(started.job)+'?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken));result=await gapDeepDiveJson(response);status.textContent=result.message||'Scanning…';if(result.status==='complete'||result.status==='error')break;}
-    if(runId!==gapDeepDiveRequest)return;if(result.status==='error')throw new Error(result.message);const items=result.results||[];if(!items.length){status.textContent=(result.message||'Complete')+' · No qualifying sessions found.';return;}
+    if(runId!==gapDeepDiveRequest)return;if(result.status==='error')throw new Error(result.message);const items=result.results||[];if(!items.length){status.textContent=(result.message||'Complete')+' · No qualifying sessions found.';gapDeepDiveLoaded=true;return;}
     status.textContent=`${items.length} qualifying sessions · scroll through the grid to load 1-minute candles on demand.`+(result.errors?.length?` · Could not load full daily history for ${result.errors.length} ticker(s).`:'');
     grid.innerHTML=items.map((item,i)=>`<article style="min-width:0;background:#090c10;border:1px solid #29313a;border-radius:5px;padding:10px"><header style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:8px"><strong style="color:#e8edf3;font-size:16px">${esc(item.ticker)}</strong><span style="padding:3px 8px;border-radius:3px;background:#211b05;border:1px solid #655516;color:#ffe17d;font-size:13px">${esc(item.date)}</span><span style="color:#64d99b;font-size:13px">PM high +${(item.move*100).toFixed(1)}%</span><span style="color:#b6c0ca;font-size:13px">PM $vol $${(item.pm_dollar_volume/1e6).toFixed(1)}M</span><button class="gap-copy-png" data-index="${i}" disabled style="margin-left:auto;height:32px;font-size:12px;border-color:#555">Copy PNG</button></header><div style="position:relative"><canvas id="gap_deepdive_chart_${i}" data-index="${i}" style="width:100%;height:540px;display:block"></canvas><span class="gap-chart-loading" style="position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);color:#89939e;font-size:14px">Scroll here to load this chart</span></div><div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#aab4bf;padding:7px 2px"><span style="color:#29a8ff">━ VWAP (04:00 ET)</span><span style="color:#ffd23f">┅ AVWAP (session HOD)</span><span style="color:#b0b0b0">░ Premarket</span><span>1-minute OHLCV · 04:00–16:00 ET · X-axis IST · wheel zoom · drag to pan</span></div></article>`).join('');
     const lazyCharts=new IntersectionObserver(entries=>entries.forEach(async entry=>{if(!entry.isIntersecting)return;const canvas=entry.target;lazyCharts.unobserve(canvas);const i=Number(canvas.dataset.index),item=items[i],url='/api/gap-deepdive/'+encodeURIComponent(started.job)+'/chart?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken)+'&ticker='+encodeURIComponent(item.ticker)+'&date='+encodeURIComponent(item.date);try{const response=await fetch(url),data=await gapDeepDiveJson(response);drawEv(canvas,data.chart,'none',false,540,'1m',1);canvas.dataset.chartLoaded='1';grid.querySelector(`.gap-copy-png[data-index="${i}"]`).disabled=false;canvas.parentElement.querySelector('.gap-chart-loading').remove();}catch(error){canvas.parentElement.querySelector('.gap-chart-loading').textContent=error.message;}}),{rootMargin:'500px 0px'});
     grid.querySelectorAll('canvas[data-index]').forEach(canvas=>lazyCharts.observe(canvas));
     grid.querySelectorAll('.gap-copy-png').forEach(btn=>btn.onclick=async()=>{const canvas=$('#gap_deepdive_chart_'+btn.dataset.index);try{const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw new Error('Could not render PNG');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);btn.textContent='Copied ✓';setTimeout(()=>btn.textContent='Copy PNG',1300);}catch(error){status.textContent='PNG copy unavailable: '+error.message;}});
-  }catch(error){if(runId===gapDeepDiveRequest)status.textContent='Scan error: '+error.message;}
-  finally{if(runId===gapDeepDiveRequest)button.disabled=false;}
-};
+    gapDeepDiveLoaded=true;
+  }catch(error){if(runId===gapDeepDiveRequest)status.textContent='Deepdive error: '+error.message;}
+  })();
+  gapDeepDivePromise=task;
+  try{await task;}finally{if(gapDeepDivePromise===task)gapDeepDivePromise=null;}
+}
 $('#gate_btn').onclick=submitGate;
 $('#gate_name').addEventListener('keydown',e=>{if(e.key==='Enter')submitGate();});
 if($('#gate_create_btn')) $('#gate_create_btn').onclick=submitCreate;

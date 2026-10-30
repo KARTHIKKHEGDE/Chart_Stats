@@ -90,29 +90,36 @@ def _run_gap_deepdive(job_id):
 
 @app.route('/api/gap-deepdive/start', methods=['POST'])
 def gap_deepdive_start():
-    user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()
-    if user not in _auth.ALLOWED_USERS or not _db_validate_session(user, token): return jsonify({'error':'Unauthorized'}),401
-    from chart_app.application import cget
-    year=dt.date.today().year
-    latest=cget(f"gap_deepdive_latest_{year}")
-    if latest and latest.get('status')=='complete' and latest.get('scanned_on')==dt.date.today().isoformat():
-        return jsonify({'job':latest['job'],'cached':True})
-    job_id=uuid.uuid4().hex
-    GAP_DEEPDIVE_JOBS[job_id]={'status':'queued','message':'Starting…','done':0,'total':len(GAP_DEEPDIVE_TICKERS),'results':[]}
-    from chart_app.application import cput
-    cput(f"gap_deepdive_job_{job_id}", GAP_DEEPDIVE_JOBS[job_id])
-    threading.Thread(target=_run_gap_deepdive,args=(job_id,),daemon=True).start()
-    return jsonify({'job':job_id})
+    try:
+        user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()
+        if user not in _auth.ALLOWED_USERS or not _db_validate_session(user, token): return jsonify({'error':'Unauthorized'}),401
+        from chart_app.application import cget, cput
+        year=dt.date.today().year
+        latest=cget(f"gap_deepdive_latest_{year}")
+        if latest and latest.get('status')=='complete' and latest.get('scanned_on')==dt.date.today().isoformat():
+            return jsonify({'job':latest['job'],'cached':True})
+        job_id=uuid.uuid4().hex
+        GAP_DEEPDIVE_JOBS[job_id]={'status':'queued','message':'Queued historical scan…','done':0,'total':len(GAP_DEEPDIVE_TICKERS),'results':[]}
+        cput(f"gap_deepdive_job_{job_id}", GAP_DEEPDIVE_JOBS[job_id])
+        threading.Thread(target=_run_gap_deepdive,args=(job_id,),daemon=True).start()
+        return jsonify({'job':job_id})
+    except Exception as exc:
+        app.logger.exception('Could not start Gap Up Deepdive scan')
+        return jsonify({'error':f'Could not start scan: {type(exc).__name__}: {exc}'}),500
 
 
 @app.route('/api/gap-deepdive/<job_id>')
 def gap_deepdive_status(job_id):
-    user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()
-    if user not in _auth.ALLOWED_USERS or not _db_validate_session(user, token): return jsonify({'error':'Unauthorized'}),401
-    from chart_app.application import cget
-    job=cget(f"gap_deepdive_job_{job_id}") or GAP_DEEPDIVE_JOBS.get(job_id)
-    if not job: return jsonify({'error':'Scan not found; please start a new scan.'}),404
-    return jsonify(clean(job))
+    try:
+        user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()
+        if user not in _auth.ALLOWED_USERS or not _db_validate_session(user, token): return jsonify({'error':'Unauthorized'}),401
+        from chart_app.application import cget
+        job=cget(f"gap_deepdive_job_{job_id}") or GAP_DEEPDIVE_JOBS.get(job_id)
+        if not job: return jsonify({'error':'Scan not found; please start a new scan.'}),404
+        return jsonify(clean(job))
+    except Exception as exc:
+        app.logger.exception('Could not read Gap Up Deepdive scan status')
+        return jsonify({'error':f'Could not read scan status: {type(exc).__name__}: {exc}'}),500
 
 
 @app.route('/api/gap-deepdive/<job_id>/chart')
