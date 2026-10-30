@@ -516,6 +516,12 @@ def index():
     return Response(HTML, mimetype="text/html")
 
 
+@app.route("/gap-deepdive")
+def gap_deepdive_page():
+    """Open the historical gap-up deep dive as a standalone app page."""
+    return Response(HTML, mimetype="text/html")
+
+
 @app.route("/favicon.svg")
 def favicon():
     icons = {

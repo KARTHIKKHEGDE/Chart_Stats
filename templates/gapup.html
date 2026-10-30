@@ -47,6 +47,8 @@ canvas{display:block;width:100%}
 .tag{border:1px solid var(--y);color:var(--y);padding:0 6px;font-size:11px;margin-left:8px}
 @media(max-width:1100px){.three{grid-template-columns:1fr}.two{grid-template-columns:1fr}.two>div+div{border-left:0;padding-left:14px}.evgrid{grid-template-columns:1fr}}
 @media(max-width:900px){#gap_deepdive_grid{grid-template-columns:1fr!important}#gap_deepdive_view{padding:16px!important}#gap_deepdive_grid canvas{height:500px!important}}
+body.deepdive-page .bar{padding:12px 24px}
+body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#rf,body.deepdive-page .bar>#cp,body.deepdive-page #scanner_open_btn,body.deepdive-page #nav_multiday_btn,body.deepdive-page #nav_keyword_btn{display:none!important}
 #ag_tip{position:fixed;z-index:2147483647;background:#111;border:1px solid #444;color:#e0e0e0;font-size:12px;padding:7px 11px;border-radius:4px;max-width:300px;line-height:1.5;pointer-events:none;opacity:0;transition:opacity 0.15s;box-shadow:0 4px 16px rgba(0,0,0,0.7);white-space:pre-wrap;display:block}
 #ag_tip.visible{opacity:1}
 [data-tip]{cursor:help}
@@ -484,6 +486,11 @@ function _showApp(){
   $('#admin_view').style.display='none';
   $('#app_main').style.display='block';
   $('#u_name').textContent=currentUser.toUpperCase();
+  if(location.pathname==='/gap-deepdive'){
+    document.body.classList.add('deepdive-page');
+    $('#nav_gap_deepdive_btn').textContent='← Main terminal';
+    setTimeout(openGapDeepDive,0);
+  }
   // Show admin affordance
   if(_canRename || PWD_USERS.includes(cur)){
     $('#u_name').style.cursor='pointer';
@@ -1693,7 +1700,10 @@ async function gapDeepDiveJson(response){
   if(!type.includes('application/json')){const body=(await response.text()).slice(0,100);throw new Error(`Scan API returned HTML instead of JSON (HTTP ${response.status}). Refresh the app after its server has updated. ${body}`);}
   const data=await response.json();if(!response.ok)throw new Error(data.error||`Request failed (HTTP ${response.status})`);return data;
 }
-$('#nav_gap_deepdive_btn').onclick=openGapDeepDive;
+$('#nav_gap_deepdive_btn').onclick=()=>{
+  if(location.pathname==='/gap-deepdive')location.assign('/');
+  else window.open('/gap-deepdive','_blank','noopener');
+};
 async function loadGapDeepDive(){
   if(gapDeepDivePromise)return gapDeepDivePromise;
   const status=$('#gap_deepdive_status'),grid=$('#gap_deepdive_grid');grid.innerHTML='';status.textContent='Loading saved scan results…';const runId=++gapDeepDiveRequest;
