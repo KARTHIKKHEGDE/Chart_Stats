@@ -621,19 +621,50 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
             out.append(round(float(np.percentile(col, q)), 4) if col else None)
         return out
     labels = [hhmm(PM_START + 5 * k, live["date"]) for k in range(NPTS + 1)]
-    # Forecast V and D independently from their as-of values, then recompose P=V*(1+D).
+    # Project V and price/VWAP deviation separately, weighting histories by today's as-of VWAP state.
+    # Recompose expected price as P=V*(1+D), anchored to today's observed values.
     now_k = max((k for k, v in enumerate(lpath) if v is not None), default=None)
     _live_p, live_v, live_d = vwap_frame_paths(live["df"], pc, False) if live.get("df") is not None else ([None]*(NPTS+1),)*3
     live_tw, live_dt, live_spread, live_active_tw = twap_frame_paths(live["df"], pc, False) if live.get("df") is not None else ([None]*(NPTS+1),)*4
+    def vwap_state_weight(event):
+        """Prefer analogs whose price/VWAP relationship matches today at the cutoff."""
+        history = event.get("path_vwap_dev") or []
+        today_state = live_d[now_k] if now_k is not None and now_k < len(live_d) else None
+        if today_state is None:
+            return 1.0
+        if now_k is None or len(history) <= now_k or history[now_k] is None:
+            return 0.0
+        # Differences are fractional returns: 0.025 means 2.5 percentage points.
+        distance = abs(float(history[now_k]) - float(today_state))
+        return math.exp(-0.5 * (distance / 0.025) ** 2)
+
+    def weighted_median(values, weights):
+        if not values:
+            return None
+        ordered = sorted(zip(values, weights), key=lambda pair: pair[0])
+        total_weight = sum(weight for _, weight in ordered)
+        if total_weight <= 0:
+            return float(np.median(values))
+        halfway = total_weight / 2
+        running = 0.0
+        for value, weight in ordered:
+            running += weight
+            if running >= halfway:
+                return float(value)
+        return float(ordered[-1][0])
+
     def project_frame(history_key, live_frame):
         out = [None] * (NPTS + 1)
         if now_k is None or live_frame[now_k] is None: return out
         out[now_k] = live_frame[now_k]
         for k in range(now_k + 1, NPTS + 1):
-            changes = [e[history_key][k] - e[history_key][now_k] for e in S
-                       if len(e.get(history_key) or []) > k and e[history_key][k] is not None
-                       and e[history_key][now_k] is not None]
-            if changes: out[k] = round(live_frame[now_k] + float(np.median(changes)), 4)
+            pairs = [(e[history_key][k] - e[history_key][now_k], vwap_state_weight(e)) for e in S
+                     if len(e.get(history_key) or []) > k and e[history_key][k] is not None
+                     and e[history_key][now_k] is not None]
+            if pairs:
+                changes, weights = zip(*pairs)
+                projected_change = weighted_median(list(changes), list(weights))
+                out[k] = round(live_frame[now_k] + projected_change, 4)
         return out
     vwap_proj = project_frame("path_vwap", live_v)
     dev_proj = project_frame("path_vwap_dev", live_d)
@@ -703,7 +734,8 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
              "gap_med": gap_band(50), "gap_p25": gap_band(25), "gap_p75": gap_band(75),
              "gap_today": gap_today, "gap_proj": gap_proj, "premarket_gap_pct": live_gap_size,
              "gap_now_k": gap_now_k, "gap_open_k": gap_open_k,
-             "normalization": "prev_close", "now_k": now_k, "open_k": (RG_START - PM_START) // 5}
+             "normalization": "prev_close", "forecast_reference": "vwap_relative_weighted_analogs",
+             "now_k": now_k, "open_k": (RG_START - PM_START) // 5}
     keyk = [(0, 240), (66, 570), (72, 600), (84, 660), (96, 720), (120, 840), (144, 960)]
     ptext = []
     for k, mn in keyk:
@@ -716,7 +748,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     T = {
         "p1": f"[1] CURRENT DAY SETUP ({day_display} — latest data)",
         "p6": "[6] 2-MIN CHARTS — premarket → close, volume + VWAP + TWAP + running-HOD AVWAP, SELL = short entry, BUY = cover",
-        "p7": "[7] VWAP-FRAMED EXPECTED PATH",
+        "p7": "[7] VWAP-CONDITIONED EXPECTED PATH",
         "pa": "[A] HISTORICAL STATISTICS (similar)", "pb": "[B] KEY PATTERNS (similar)", "pc": "[C] FINAL RATING",
         "pd": "[D] ENTRY MODELS (similar setups)",
     }
@@ -761,4 +793,3 @@ def clean(o):
     if isinstance(o, float) and (math.isnan(o) or math.isinf(o)):
         return None
     return o
-
