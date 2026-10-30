@@ -32,12 +32,13 @@ GAP_DEEPDIVE_LOCK = threading.Lock()
 
 def _run_gap_deepdive(job_id):
     from chart_app.market_data import PM_START
-    from chart_app.application import clean
+    from chart_app.application import clean, cput
     from concurrent.futures import ThreadPoolExecutor, as_completed
     import numpy as np
     job = GAP_DEEPDIVE_JOBS[job_id]
     year = dt.date.today().year
-    year_start, year_end = f"{year}-01-01", dt.date.today().isoformat()
+    # Only include completed sessions so each saved chart is a full trading day.
+    year_start, year_end = f"{year}-01-01", (dt.date.today()-dt.timedelta(days=1)).isoformat()
     found, errors = [], []
     def scan_ticker(ticker):
         daily = load_daily(ticker)
@@ -59,16 +60,16 @@ def _run_gap_deepdive(job_id):
                 tp = (pm.h + pm.l + pm.c) / 3
                 dollar_volume = float((tp * pm.v).sum())
                 if move >= .50 and dollar_volume >= 10_000_000:
-                    m = metrics(frame, prev, True)
-                    packed = chart_pack(frame, m, prev, dt.date.fromisoformat(day))
+                    # minute_df has persisted the raw 1-minute candles to disk. Keep only
+                    # metadata in the scan response; cards request their chart on visibility.
                     days.append({'ticker': ticker, 'date': day, 'move': move, 'pm_dollar_volume': dollar_volume,
-                                 'title': f"{ticker} · {day} · PM high +{move:.0%} · ${dollar_volume/1e6:.1f}M",
-                                 'chart': packed})
+                                 'title': f"{ticker} · {day} · PM high +{move:.0%} · ${dollar_volume/1e6:.1f}M"})
             except Exception:
                 continue
         return days
     try:
         job.update(status='running', message=f'Scanning {len(GAP_DEEPDIVE_TICKERS)} tickers for {year}…', done=0, total=len(GAP_DEEPDIVE_TICKERS))
+        cput(f"gap_deepdive_job_{job_id}", job)
         with ThreadPoolExecutor(max_workers=min(12, max(1, len(GAP_DEEPDIVE_TICKERS)))) as pool:
             futures = {pool.submit(scan_ticker, ticker): ticker for ticker in GAP_DEEPDIVE_TICKERS}
             for future in as_completed(futures):
@@ -77,18 +78,29 @@ def _run_gap_deepdive(job_id):
                 except Exception as exc: errors.append(f"{ticker}: {exc}")
                 job['done'] += 1
                 job['message'] = f"Scanned {job['done']} / {job['total']} tickers · {len(found)} qualifying sessions"
+                cput(f"gap_deepdive_job_{job_id}", {**job, 'results': []})
         found.sort(key=lambda x: (x['date'], x['ticker']), reverse=True)
         job.update(status='complete', message=f"Complete · {len(found)} qualifying sessions", results=clean(found), errors=errors[:20])
+        cput(f"gap_deepdive_job_{job_id}", job)
+        cput(f"gap_deepdive_latest_{year}", {'job':job_id,'scanned_on':dt.date.today().isoformat(),**job})
     except Exception as exc:
         job.update(status='error', message=f"{type(exc).__name__}: {exc}")
+        cput(f"gap_deepdive_job_{job_id}", job)
 
 
 @app.route('/api/gap-deepdive/start', methods=['POST'])
 def gap_deepdive_start():
     user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()
     if user not in _auth.ALLOWED_USERS or not _db_validate_session(user, token): return jsonify({'error':'Unauthorized'}),401
+    from chart_app.application import cget
+    year=dt.date.today().year
+    latest=cget(f"gap_deepdive_latest_{year}")
+    if latest and latest.get('status')=='complete' and latest.get('scanned_on')==dt.date.today().isoformat():
+        return jsonify({'job':latest['job'],'cached':True})
     job_id=uuid.uuid4().hex
     GAP_DEEPDIVE_JOBS[job_id]={'status':'queued','message':'Starting…','done':0,'total':len(GAP_DEEPDIVE_TICKERS),'results':[]}
+    from chart_app.application import cput
+    cput(f"gap_deepdive_job_{job_id}", GAP_DEEPDIVE_JOBS[job_id])
     threading.Thread(target=_run_gap_deepdive,args=(job_id,),daemon=True).start()
     return jsonify({'job':job_id})
 
@@ -97,9 +109,35 @@ def gap_deepdive_start():
 def gap_deepdive_status(job_id):
     user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()
     if user not in _auth.ALLOWED_USERS or not _db_validate_session(user, token): return jsonify({'error':'Unauthorized'}),401
-    job=GAP_DEEPDIVE_JOBS.get(job_id)
+    from chart_app.application import cget
+    job=cget(f"gap_deepdive_job_{job_id}") or GAP_DEEPDIVE_JOBS.get(job_id)
     if not job: return jsonify({'error':'Scan not found; please start a new scan.'}),404
     return jsonify(clean(job))
+
+
+@app.route('/api/gap-deepdive/<job_id>/chart')
+def gap_deepdive_chart(job_id):
+    user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()
+    ticker=(request.args.get('ticker') or '').strip().upper(); day=(request.args.get('date') or '').strip()
+    if user not in _auth.ALLOWED_USERS or not _db_validate_session(user, token): return jsonify({'error':'Unauthorized'}),401
+    if not re.fullmatch(r'[A-Z.\-]{1,10}',ticker): return jsonify({'error':'Invalid ticker'}),400
+    try: dt.date.fromisoformat(day)
+    except ValueError: return jsonify({'error':'Invalid session date'}),400
+    from chart_app.application import cget
+    job=cget(f"gap_deepdive_job_{job_id}") or GAP_DEEPDIVE_JOBS.get(job_id)
+    if not job or job.get('status')!='complete': return jsonify({'error':'Scan is not complete or has expired.'}),404
+    if not any(item.get('ticker')==ticker and item.get('date')==day for item in job.get('results',[])):
+        return jsonify({'error':'Session is not part of this scan.'}),404
+    try:
+        daily=load_daily(ticker)
+        index=next((i for i,row in enumerate(daily) if row['date']==day),None)
+        if index is None or index==0: return jsonify({'error':'No previous close is available for this session.'}),404
+        frame=minute_df(ticker,day)
+        if frame is None or frame.empty: return jsonify({'error':'Cached intraday candles are unavailable.'}),404
+        packed=chart_pack(frame,metrics(frame,float(daily[index-1]['c']),True),float(daily[index-1]['c']),dt.date.fromisoformat(day))
+        return jsonify({'chart':packed})
+    except Exception as exc:
+        return jsonify({'error':f'{type(exc).__name__}: {exc}'}),502
 
 @app.route("/api/session-chart")
 def session_chart():

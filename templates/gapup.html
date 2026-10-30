@@ -46,7 +46,7 @@ canvas{display:block;width:100%}
 .evtf{height:21px;margin:0 0 0 2px;padding:0 3px;font-size:11px;border-color:#333;color:#aaa;background:#101010}
 .tag{border:1px solid var(--y);color:var(--y);padding:0 6px;font-size:11px;margin-left:8px}
 @media(max-width:1100px){.three{grid-template-columns:1fr}.two{grid-template-columns:1fr}.two>div+div{border-left:0;padding-left:14px}.evgrid{grid-template-columns:1fr}}
-@media(max-width:900px){#gap_deepdive_grid{grid-template-columns:1fr!important}#gap_deepdive_view{padding:16px!important}#gap_deepdive_grid canvas{height:390px!important}}
+@media(max-width:900px){#gap_deepdive_grid{grid-template-columns:1fr!important}#gap_deepdive_view{padding:16px!important}#gap_deepdive_grid canvas{height:500px!important}}
 #ag_tip{position:fixed;z-index:2147483647;background:#111;border:1px solid #444;color:#e0e0e0;font-size:12px;padding:7px 11px;border-radius:4px;max-width:300px;line-height:1.5;pointer-events:none;opacity:0;transition:opacity 0.15s;box-shadow:0 4px 16px rgba(0,0,0,0.7);white-space:pre-wrap;display:block}
 #ag_tip.visible{opacity:1}
 [data-tip]{cursor:help}
@@ -1227,7 +1227,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
     x.restore();
   }
   x.strokeStyle = '#29a8ff';
-  x.lineWidth = isLarge ? 1.6 : 1.3;
+  x.lineWidth = isLarge ? 2 : 1.4;
   x.beginPath();
   let on = false, lastVwapDate=null;
   for(let i = 0; i < b.t.length; i++){
@@ -1257,7 +1257,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
     clipP();
     poly(twap,'#c084fc',isLarge?1.7:1.3);
     x.setLineDash([2,3]);poly(activeTwap,'#e879f9',isLarge?1.4:1.1);x.setLineDash([]);
-    x.setLineDash([4,3]);poly(avh,'#ffd23f',isLarge?1.6:1.2);x.setLineDash([]);
+    x.setLineDash([5,3]);poly(avh,'#ffd23f',isLarge?2.2:1.5);x.setLineDash([]);
     x.restore();
   }
   x.lineWidth = 1;
@@ -1686,15 +1686,22 @@ $('#go').onclick=()=>run(false); $('#rf').onclick=()=>run(true); $('#cp').onclic
 $('#t').addEventListener('keydown',e=>{if(e.key==='Enter')run(false)});
 let gapDeepDiveRequest=0;
 function openGapDeepDive(){$('#tabs_view').style.display='none';$('#tab_bar').style.display='none';$('#multiday_view').style.display='none';$('#gap_deepdive_view').style.display='block';}
+async function gapDeepDiveJson(response){
+  const type=response.headers.get('content-type')||'';
+  if(!type.includes('application/json')){const body=(await response.text()).slice(0,100);throw new Error(`Scan API returned HTML instead of JSON (HTTP ${response.status}). Refresh the app after its server has updated. ${body}`);}
+  const data=await response.json();if(!response.ok)throw new Error(data.error||`Request failed (HTTP ${response.status})`);return data;
+}
 $('#nav_gap_deepdive_btn').onclick=openGapDeepDive;
 $('#gap_deepdive_scan').onclick=async()=>{
   openGapDeepDive();const status=$('#gap_deepdive_status'),grid=$('#gap_deepdive_grid'),button=$('#gap_deepdive_scan');button.disabled=true;grid.innerHTML='';status.textContent='Starting scan…';const runId=++gapDeepDiveRequest;
   try{
-    const start=await fetch('/api/gap-deepdive/start?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken),{method:'POST'}),started=await start.json();if(!start.ok)throw new Error(started.error||'Could not start scan');let result;
-    while(runId===gapDeepDiveRequest){await new Promise(resolve=>setTimeout(resolve,2000));const response=await fetch('/api/gap-deepdive/'+encodeURIComponent(started.job)+'?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken));result=await response.json();if(!response.ok)throw new Error(result.error||'Scan failed');status.textContent=result.message||'Scanning…';if(result.status==='complete'||result.status==='error')break;}
+    const start=await fetch('/api/gap-deepdive/start?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken),{method:'POST'}),started=await gapDeepDiveJson(start);let result;
+    while(runId===gapDeepDiveRequest){await new Promise(resolve=>setTimeout(resolve,2000));const response=await fetch('/api/gap-deepdive/'+encodeURIComponent(started.job)+'?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken));result=await gapDeepDiveJson(response);status.textContent=result.message||'Scanning…';if(result.status==='complete'||result.status==='error')break;}
     if(runId!==gapDeepDiveRequest)return;if(result.status==='error')throw new Error(result.message);const items=result.results||[];if(!items.length){status.textContent=(result.message||'Complete')+' · No qualifying sessions found.';return;}
-    grid.innerHTML=items.map((item,i)=>`<article style="min-width:0;background:#090c10;border:1px solid #29313a;border-radius:5px;padding:10px"><header style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:8px"><strong style="color:#e8edf3;font-size:14px">${esc(item.ticker)}</strong><span style="padding:3px 7px;border-radius:3px;background:#211b05;border:1px solid #655516;color:#ffe17d;font-size:12px">${esc(item.date)}</span><span style="color:#64d99b;font-size:12px">PM high +${(item.move*100).toFixed(1)}%</span><span style="color:#9ba3ad;font-size:12px">PM $vol $${(item.pm_dollar_volume/1e6).toFixed(1)}M</span><button class="gap-copy-png" data-index="${i}" style="margin-left:auto;height:30px;font-size:12px;border-color:#555">Copy PNG</button></header><canvas id="gap_deepdive_chart_${i}" style="width:100%;height:470px;display:block"></canvas><div style="font-size:11px;color:#9ba3ad;padding:4px 2px">1m candles · full premarket and regular session · 04:00–16:00 ET · continuous VWAP · anchored VWAP from session HOD</div></article>`).join('');
-    items.forEach((item,i)=>{const canvas=$('#gap_deepdive_chart_'+i);drawEv(canvas,item.chart,'none',false,470,'1m',1);});
+    status.textContent=`${items.length} qualifying sessions · scroll through the grid to load 1-minute candles on demand.`;
+    grid.innerHTML=items.map((item,i)=>`<article style="min-width:0;background:#090c10;border:1px solid #29313a;border-radius:5px;padding:10px"><header style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:8px"><strong style="color:#e8edf3;font-size:16px">${esc(item.ticker)}</strong><span style="padding:3px 8px;border-radius:3px;background:#211b05;border:1px solid #655516;color:#ffe17d;font-size:13px">${esc(item.date)}</span><span style="color:#64d99b;font-size:13px">PM high +${(item.move*100).toFixed(1)}%</span><span style="color:#b6c0ca;font-size:13px">PM $vol $${(item.pm_dollar_volume/1e6).toFixed(1)}M</span><button class="gap-copy-png" data-index="${i}" disabled style="margin-left:auto;height:32px;font-size:12px;border-color:#555">Copy PNG</button></header><div style="position:relative"><canvas id="gap_deepdive_chart_${i}" data-index="${i}" style="width:100%;height:540px;display:block"></canvas><span class="gap-chart-loading" style="position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);color:#89939e;font-size:14px">Scroll here to load this chart</span></div><div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#aab4bf;padding:7px 2px"><span style="color:#29a8ff">━ VWAP (04:00 ET)</span><span style="color:#ffd23f">┅ AVWAP (session HOD)</span><span style="color:#b0b0b0">░ Premarket</span><span>1-minute OHLCV · 04:00–16:00 ET · wheel zoom · drag to pan</span></div></article>`).join('');
+    const lazyCharts=new IntersectionObserver(entries=>entries.forEach(async entry=>{if(!entry.isIntersecting)return;const canvas=entry.target;lazyCharts.unobserve(canvas);const i=Number(canvas.dataset.index),item=items[i],url='/api/gap-deepdive/'+encodeURIComponent(started.job)+'/chart?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken)+'&ticker='+encodeURIComponent(item.ticker)+'&date='+encodeURIComponent(item.date);try{const response=await fetch(url),data=await gapDeepDiveJson(response);drawEv(canvas,data.chart,'none',false,540,'1m',1);canvas.dataset.chartLoaded='1';grid.querySelector(`.gap-copy-png[data-index="${i}"]`).disabled=false;canvas.parentElement.querySelector('.gap-chart-loading').remove();}catch(error){canvas.parentElement.querySelector('.gap-chart-loading').textContent=error.message;}}),{rootMargin:'500px 0px'});
+    grid.querySelectorAll('canvas[data-index]').forEach(canvas=>lazyCharts.observe(canvas));
     grid.querySelectorAll('.gap-copy-png').forEach(btn=>btn.onclick=async()=>{const canvas=$('#gap_deepdive_chart_'+btn.dataset.index);try{const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw new Error('Could not render PNG');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);btn.textContent='Copied ✓';setTimeout(()=>btn.textContent='Copy PNG',1300);}catch(error){status.textContent='PNG copy unavailable: '+error.message;}});
   }catch(error){if(runId===gapDeepDiveRequest)status.textContent='Scan error: '+error.message;}
   finally{if(runId===gapDeepDiveRequest)button.disabled=false;}
