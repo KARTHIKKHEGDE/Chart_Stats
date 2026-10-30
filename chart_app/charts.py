@@ -42,6 +42,96 @@ def _saved_gap_deepdive_manifest(year):
         return None
 
 
+def _extract_explicit_financing_party(excerpt, role_phrase):
+    """Fail closed: return a firm only when the filing explicitly links it to this role."""
+    role = re.escape(role_phrase)
+    suffix = r'(?:L\.L\.C\.?|LLC|Incorporated|Inc\.?|Corporation|Corp\.?|Limited|Ltd\.?|L\.P\.?|LP|LLP|PLC|N\.A\.?|Bank|Company|Co\.?|S\.A\.?)'
+    entity = rf"[A-Z0-9][A-Za-z0-9&.'’()\-/]*(?:\s+[A-Za-z0-9&.'’()\-/]+){{0,5}}\s+{suffix}"
+    role_match = re.search(rf'\b{role}\b', excerpt or '', re.I)
+    if not role_match:
+        return None
+    left, right = excerpt[:role_match.start()], excerpt[role_match.end():]
+    connectors = r"\s*[,(:\-]*\s*(?:(?:is|was|were|will be|has been|have been|acts? as|acting as|acted as|serves? as|served as|appointed as|engaged as|retained as|selected as|designated as|will act as|to be|as)\s*)*(?:(?:the|its|our|sole|exclusive|lead)\s+)*$"
+    found = set()
+    # Firm followed by an explicit role label, e.g. "Northstar LLC is the placement agent".
+    for end_match in re.finditer(suffix, left, re.I):
+        bridge = left[end_match.end():]
+        if not re.fullmatch(connectors, bridge, re.I):
+            continue
+        starts = [0] + [m.end() for m in re.finditer(r'\b(?:retained|engaged|appointed|selected|designated|named|identified|is|was|were|has been|have been|will be|acting|acts|acted|serves|served|as)\b', left[:end_match.start()], re.I)]
+        for start in starts:
+            name = left[start:end_match.end()].strip(" ,:;\"'()")
+            name = re.sub(r'^(?:the company|we|our company)\s+', '', name, flags=re.I).strip()
+            if re.fullmatch(entity, name):
+                found.add(name)
+    # Role followed by a named firm, e.g. "placement agent: Northstar LLC".
+    after = re.match(rf"\s*(?:[,(:\-]\s*)?(?:(?:is|was|will be|shall be|:|of)\s+)?(?:the\s+)?(?P<name>{entity})\b", right, re.I)
+    if after:
+        found.add(after.group('name').strip())
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def _sec_verified_gap_player(ticker, event_day):
+    """Find a named placement agent/underwriter in issuer SEC filings; ambiguity yields no tag."""
+    from chart_app.keyword_compare import _keyword_match_excerpt, _keyword_sec_get, _keyword_ticker_map
+    cache_key = f"gap_sec_player_{ticker}_{event_day}"
+    cached = cget(cache_key, 30 * 86400)
+    if cached is not None:
+        return cached
+    result = {'verified': False}
+    try:
+        ticker_map = _keyword_ticker_map()
+        cik, company = next(((cik, info) for cik, info in ticker_map.items()
+                             if str(info.get('ticker') or '').upper() == ticker), (None, None))
+        if not cik or not company:
+            cput(cache_key, result)
+            return result
+        day = dt.date.fromisoformat(event_day)
+        start = (day - dt.timedelta(days=180)).isoformat()
+        end = min(day + dt.timedelta(days=3), dt.date.today()).isoformat()
+        forms = '8-K,6-K,S-1,S-3,F-1,F-3,424B1,424B2,424B3,424B4,424B5,424B6,424B7'
+        disclosures = {}
+        for phrase, role_label in (('placement agent', 'Placement agent'), ('underwriter', 'Underwriter')):
+            response = _keyword_sec_get('https://efts.sec.gov/LATEST/search-index',
+                params={'q': f'"{company["name"]}" AND "{phrase}"', 'dateRange': 'custom',
+                        'startdt': start, 'enddt': end, 'forms': forms, 'from': 0, 'size': 100}, timeout=25)
+            response.raise_for_status()
+            hits = ((response.json().get('hits') or {}).get('hits') or [])
+            for hit in hits:
+                source = hit.get('_source') or {}
+                raw_ciks = source.get('ciks') or source.get('cik') or []
+                raw_ciks = raw_ciks if isinstance(raw_ciks, list) else [raw_ciks]
+                normalized_ciks=set()
+                for value in raw_ciks:
+                    try: normalized_ciks.add(str(int(str(value).lstrip('0') or '0')).zfill(10))
+                    except (TypeError,ValueError): continue
+                if cik not in normalized_ciks:
+                    continue
+                # Search highlights can omit the firm's name or the words linking
+                # it to the role. Read the filing context so the tag rests on an
+                # explicit relationship in the document itself.
+                document_hit = dict(hit)
+                document_hit['highlight'] = {}
+                document_hit['_source'] = {**source, 'highlight': {}}
+                excerpt = _keyword_match_excerpt(document_hit, phrase, fetch_document=True)
+                firm = _extract_explicit_financing_party(excerpt, phrase)
+                if not firm:
+                    continue
+                accession_match = re.search(r'\d{10}-\d{2}-\d{6}', str(hit.get('_id') or ''))
+                accession = accession_match.group(0) if accession_match else ''
+                if not accession:
+                    continue
+                filed = str(source.get('file_date') or source.get('display_date_filed') or '')
+                filing_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession.replace('-', '')}/{accession}-index.html"
+                disclosures[(role_label, firm)] = {'verified': True, 'role': role_label, 'name': firm,
+                    'filing_date': filed, 'filing_url': filing_url, 'evidence': excerpt[:420]}
+        result = next(iter(disclosures.values())) if len(disclosures) == 1 else result
+    except Exception:
+        app.logger.exception('SEC placement/underwriter verification failed for %s %s', ticker, event_day)
+    cput(cache_key, result)
+    return result
+
+
 def _run_gap_deepdive(job_id):
     from chart_app.market_data import PM_START
     from chart_app.application import clean, cput
@@ -172,6 +262,24 @@ def gap_deepdive_chart(job_id):
         return jsonify({'chart':packed})
     except Exception as exc:
         return jsonify({'error':f'{type(exc).__name__}: {exc}'}),502
+
+
+@app.route('/api/gap-deepdive/<job_id>/player')
+def gap_deepdive_player(job_id):
+    user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()
+    ticker=(request.args.get('ticker') or '').strip().upper(); day=(request.args.get('date') or '').strip()
+    if user not in _auth.ALLOWED_USERS or not _db_validate_session(user, token): return jsonify({'error':'Unauthorized'}),401
+    if not re.fullmatch(r'[A-Z.\-]{1,10}',ticker): return jsonify({'error':'Invalid ticker'}),400
+    try: dt.date.fromisoformat(day)
+    except ValueError: return jsonify({'error':'Invalid session date'}),400
+    from chart_app.application import cget
+    job=cget(f"gap_deepdive_job_{job_id}") or GAP_DEEPDIVE_JOBS.get(job_id)
+    if not job:
+        manifest=_saved_gap_deepdive_manifest(dt.date.today().year)
+        if manifest and manifest.get('job')==job_id: job=manifest
+    if not job or not any(item.get('ticker')==ticker and item.get('date')==day for item in job.get('results',[])):
+        return jsonify({'error':'Session is not part of this saved scan.'}),404
+    return jsonify(_sec_verified_gap_player(ticker,day))
 
 @app.route("/api/session-chart")
 def session_chart():
