@@ -123,11 +123,31 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
   <section id="gap_deepdive_view" style="display:none;padding:22px 30px;background:#050607;min-height:80vh">
     <header style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:16px">
       <strong style="font-size:20px;color:#ffe17d">Gap Up Deepdive</strong>
-      <span style="color:#9ba3ad;font-size:13px">This year · Premarket high ≥ +50% vs prior close · Premarket dollar volume ≥ $10M · 1-minute charts</span>
+      <span style="color:#9ba3ad;font-size:13px">This year · Premarket high ≥ +70% vs prior close · Premarket dollar volume ≥ $10M · 1-minute charts</span>
       <span id="gap_deepdive_status" style="margin-left:auto;color:#aeb6c0;font-size:13px">Opening the saved scan…</span>
     </header>
     <div id="gap_deepdive_grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px"></div>
   </section>
+  <div id="gap_deepdive_chart_modal" style="position:fixed;inset:0;z-index:100001;display:none;align-items:center;justify-content:center;padding:12px;background:rgba(0,0,0,.94)" onclick="if(event.target===this)closeGapDeepDiveChart()">
+    <section style="width:98vw;height:97vh;max-width:2200px;display:flex;flex-direction:column;background:#07090c;border:1px solid #35404a;border-radius:6px;overflow:hidden">
+      <header style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 14px;background:#101419;border-bottom:1px solid #29313a">
+        <strong id="gap_chart_title" style="font-size:17px;color:#e7eef5"></strong><span id="gap_chart_date" style="padding:3px 8px;border:1px solid #655516;background:#211b05;color:#ffe17d;border-radius:3px;font-size:13px"></span>
+        <span id="gap_chart_stats" style="color:#9ba6b0;font-size:12px"></span>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
+          <label style="font-size:12px;color:#ddd">Interval <select id="gap_chart_tf" style="height:30px;margin:0"><option>1m</option><option>2m</option><option>5m</option><option>15m</option></select></label>
+          <label style="font-size:12px;color:#d7ff6e"><input id="gap_chart_bz" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"> Bone Zone (9/21 EMA)</label>
+          <label style="font-size:12px;color:#29a8ff"><input id="gap_chart_vwap" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"> VWAP</label>
+          <label style="font-size:12px;color:#c084fc"><input id="gap_chart_twap" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"> TWAP</label>
+          <button id="gap_chart_avwap" style="height:32px;padding:0 12px;border-color:#ffd23f;color:#ffe17d">AVWAP · Select A → B</button>
+          <button id="gap_chart_clear_avwap" style="height:32px;padding:0 10px;font-size:12px">Clear AVWAP</button>
+          <button id="gap_chart_copy" style="height:32px;padding:0 10px;font-size:12px">Copy PNG</button>
+          <button onclick="closeGapDeepDiveChart()" style="height:32px;padding:0 10px">✕</button>
+        </div>
+      </header>
+      <div id="gap_chart_modal_body" style="position:relative;flex:1;min-height:0;padding:8px;background:#050607"><canvas id="gap_chart_modal_canvas" style="display:block;width:100%;height:100%"></canvas></div>
+      <footer id="gap_chart_avwap_status" style="padding:8px 14px;border-top:1px solid #252b31;color:#aab4bf;font-size:12px">VWAP and TWAP are shown. Choose AVWAP to click anchor A, then anchor B.</footer>
+    </section>
+  </div>
   <!-- Multiday Runner Stats Embedded View on Main Screen -->
   <div id="multiday_view" style="display:none;width:100%;background:#000;position:relative">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 34px;background:#08080a;border-bottom:1px solid #222">
@@ -310,8 +330,8 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
         <span class="y" data-tip="Pre-market High — the highest price reached before the US market open (9:30 ET / 19:00 IST). Often acts as the first major resistance target in gap-up fades.">┅ PM high</span> &nbsp;
         <span class="d" data-tip="Previous Close — yesterday's closing price. The base from which the gap % is measured. Price returning here = full gap fill.">┅ prev close</span> &nbsp;
         <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period Exponential Moving Average on 2-min closes. Fast-moving trend line. Breaks above/below signal short-term momentum shifts.">━ EMA9</span> &nbsp;
-        <span style="color:#ffa500" data-tip="EMA 20 — 20-period Exponential Moving Average on 2-min closes. Slower trend line. When EMA9 crosses below EMA20, bearish momentum is strengthening.">━ EMA20</span> &nbsp;
-        <span class="g" data-tip="Bone Zone cloud — shaded area between EMA9 and EMA20. Green = EMA9 above EMA20 (bullish). Red = EMA9 below EMA20 (bearish). Width shows momentum strength.">▒</span><span class="r">▒</span> cloud &nbsp;
+        <span style="color:#ffa500" data-tip="EMA 21 — 21-period Exponential Moving Average on 2-min closes. Slower trend line. When EMA9 crosses below EMA21, bearish momentum is strengthening.">━ EMA21</span> &nbsp;
+        <span class="g" data-tip="Bone Zone cloud — shaded area between EMA9 and EMA21. Green = EMA9 above EMA21 (bullish). Red = EMA9 below EMA21 (bearish). Width shows momentum strength.">▒</span><span class="r">▒</span> cloud &nbsp;
         <span class="d" data-tip="Bollinger Bands (20-period, 2 std deviations). Upper/lower bands show the expected price range. Price touching/breaking the lower band can signal exhaustion of a move.">━ BB(20,2)</span> &nbsp;
         <span data-tip="SELL signal — short entry triggered by an entry model (e.g. short at open, PM high rejection, VWAP loss). Triangle points down at the entry price.">▼ SELL (entry)</span> &nbsp;
         <span data-tip="BUY signal — cover the short position. Either hit the stop loss or target. Percentage shown is the P&amp;L of that trade.">▲ BUY (cover)</span>. <span data-tip="Shaded (lighter) background area = pre-market session (before 9:30 ET / 19:00 IST). Price action here happens before regular market hours.">Shaded = premarket</span>. Times in IST.
@@ -893,10 +913,10 @@ function renderTab(tab, r, isRefresh){
   });
   o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">`+
      `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:7px">${esc(T.p6)}<label style="font-size:11px;color:#aaa">All charts <select id="ev_all_tf" class="evtf"><option>1m</option><option selected>2m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label><select id="ev_all_days" class="evtf" title="Days for all charts"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="60">60 days</option></select><select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
-     (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/20 EMA cloud + BB)</label></div>`+
+     (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/21 EMA cloud + BB)</label></div>`+
      `<span style="font-size:12px;color:#29a8ff;font-weight:normal">🔍 Click any chart to enlarge</span></div>`+
   `<div class="evgrid">`+tab.EV.map((c,i)=>`<div class="evc" data-ev-slot="${i}" onclick="openChartModal(${i})"><div class="evhead"><div class="evt" id="evtitle${i}"></div><span class="eventDateTag" data-event-date></span><div class="evcontrols"><select class="evtf" title="Timeframe"><option>1m</option><option selected>2m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select><select class="evdays" title="Sessions shown"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="60">60 days</option></select><button class="evzoom" data-zoom="out" title="Zoom out">−</button><button class="evzoom" data-zoom="in" title="Zoom in">+</button><button class="evmeasure" type="button" title="Drag across bars to measure volume, dollar volume, and float rotation">Measure</button><button class="evtoday" type="button" title="Return to today's live chart">Today</button></div></div><canvas id="ev${i}"></canvas></div>`).join('')+
-     `<\/div><div class="foot"><span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance.">━ VWAP<\/span> &nbsp; <span style="color:#c084fc">━ TWAP</span> &nbsp; <span style="color:#e879f9">┅ active-minute TWAP</span> &nbsp; <span style="color:#ffd23f">┅ HOD-anchored AVWAP</span>  <span class="y" data-tip="Pre-market High — highest price before the US market open. Common fade target.">┅ PM high<\/span>  <span class="d" data-tip="Previous Close — yesterday’s close. Gap % is measured from here.">┅ prev close<\/span> &nbsp; <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period EMA on 2-min closes. Fast trend line.">━ EMA9<\/span> <span style="color:#ffa500" data-tip="EMA 20 — 20-period EMA on 2-min closes. Slower trend line. Bearish when EMA9 drops below it.">━ EMA20<\/span> <span class="g" data-tip="Bone Zone cloud — shaded between EMA9 &amp; EMA20. Green = bullish. Red = bearish.">▒<\/span><span class="r">▒<\/span> cloud <span class="d" data-tip="Bollinger Bands (20-period, 2 std dev). Shows expected volatility range on the 2-min chart.">━ BB(20,2)<\/span> &nbsp; <span data-tip="SELL signal — short entry triggered by an entry model.">▼ SELL<\/span> &nbsp; <span data-tip="BUY / Cover signal — close the short here. P&amp;L % shown next to it.">▲ BUY<\/span>. <span data-tip="Lighter shaded background = pre-market session (before 9:30 ET / 19:00 IST).">Shaded = premarket<\/span>. X axis = IST. Measure: activate Measure, then drag across bars for volume, estimated dollar volume, and float rotation.<\/div><\/div>`;
+     `<\/div><div class="foot"><span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance.">━ VWAP<\/span> &nbsp; <span style="color:#c084fc">━ TWAP</span> &nbsp; <span style="color:#e879f9">┅ active-minute TWAP</span> &nbsp; <span style="color:#ffd23f">┅ HOD-anchored AVWAP</span>  <span class="y" data-tip="Pre-market High — highest price before the US market open. Common fade target.">┅ PM high<\/span>  <span class="d" data-tip="Previous Close — yesterday’s close. Gap % is measured from here.">┅ prev close<\/span> &nbsp; <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period EMA on 2-min closes. Fast trend line.">━ EMA9<\/span> <span style="color:#ffa500" data-tip="EMA 21 — 20-period EMA on 2-min closes. Slower trend line. Bearish when EMA9 drops below it.">━ EMA21<\/span> <span class="g" data-tip="Bone Zone cloud — shaded between EMA9 &amp; EMA21. Green = bullish. Red = bearish.">▒<\/span><span class="r">▒<\/span> cloud <span class="d" data-tip="Bollinger Bands (20-period, 2 std dev). Shows expected volatility range on the 2-min chart.">━ BB(20,2)<\/span> &nbsp; <span data-tip="SELL signal — short entry triggered by an entry model.">▼ SELL<\/span> &nbsp; <span data-tip="BUY / Cover signal — close the short here. P&amp;L % shown next to it.">▲ BUY<\/span>. <span data-tip="Lighter shaded background = pre-market session (before 9:30 ET / 19:00 IST).">Shaded = premarket<\/span>. X axis = IST. Measure: activate Measure, then drag across bars for volume, estimated dollar volume, and float rotation.<\/div><\/div>`;
 
   const pmGapText = Number.isFinite(r.chart.premarket_gap_pct)
     ? `${(r.chart.premarket_gap_pct*100).toFixed(1)}% (PM high vs prev close)` : 'Not available';
@@ -954,13 +974,13 @@ function tri(x,px,py,dir,col){x.fillStyle=col;x.beginPath();
   x.closePath();x.fill();}
 
 function bone(b){
-  const n=b.c.length,a9=2/10,a20=2/21,e9=[],e20=[],bu=[],bl=[];
+  const n=b.c.length,a9=2/10,a21=2/22,e9=[],e21=[],bu=[],bl=[];
   for(let i=0;i<n;i++){
-    e9.push(i?a9*b.c[i]+(1-a9)*e9[i-1]:b.c[i]); e20.push(i?a20*b.c[i]+(1-a20)*e20[i-1]:b.c[i]);
+    e9.push(i?a9*b.c[i]+(1-a9)*e9[i-1]:b.c[i]); e21.push(i?a21*b.c[i]+(1-a21)*e21[i-1]:b.c[i]);
     if(i>=19){let s=0;for(let k=i-19;k<=i;k++)s+=b.c[k];const m=s/20;let v=0;for(let k=i-19;k<=i;k++)v+=(b.c[k]-m)**2;const sd=Math.sqrt(v/20);bu.push(m+2*sd);bl.push(m-2*sd);}
     else{bu.push(null);bl.push(null);}
   }
-  return {e9,e20,bu,bl};
+  return {e9,e21,bu,bl};
 }
 function drawEvAll(evList, containerEl){
   const cEl = containerEl || (activeTab && openTabs[activeTab] ? openTabs[activeTab].container : document);
@@ -1120,18 +1140,18 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   const hoverOffset=day=>{if(hoverOffsets.has(day))return hoverOffsets.get(day);let offset=Number(c.off)||0;try{const parts=etClock.formatToParts(new Date(day+'T12:00:00Z')),name=parts.find(p=>p.type==='timeZoneName')?.value||'',match=name.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/);if(match){const et=(match[1]==='-'?-1:1)*(Number(match[2])*60+Number(match[3]||0));offset=330-et;}}catch{}hoverOffsets.set(day,offset);return offset;};
   const hoverStamp=(day,minute)=>{const [yy,mm,dd]=String(day||'').split('-').map(Number);if(!yy||!mm||!dd)return 'time unavailable';const at=new Date(Date.UTC(yy,mm-1,dd,0,Math.round(minute+hoverOffset(day)))),parts=istClock.formatToParts(at),v=Object.fromEntries(parts.map(p=>[p.type,p.value]));return `${v.month}/${v.day}/${v.year} ${v.hour}:${v.minute} IST`;};
   cv._hoverItems=visible.map(i=>{const day=b.d?.[i]||c.date||'',dayIndex=multi?dates.indexOf(day):-1,minute=daily?0:b.t[i]-(dayIndex>=0?dayIndex*720:0);return {key:`${day}|${b.t[i]}`,index:i,x:X(b.t[i]+(daily?.5:tf/2)),label:daily?`${hoverStamp(day,0).split(' ').slice(0,1)[0]} · Daily IST`:hoverStamp(day,minute),o:b.o[i],h:b.h[i],l:b.l[i],c:b.c[i],v:b.v[i]||0};});
-  cv._showChartHover=(px,py)=>{if(px<L||px>W-R||!cv._hoverItems?.length){if(cv._hoverTip)cv._hoverTip.style.display='none';return}let item=cv._hoverItems.reduce((best,p)=>Math.abs(p.x-px)<Math.abs(best.x-px)?p:best,cv._hoverItems[0]);const tip=cv._hoverTip;if(!tip)return;const fmt=n=>Number.isFinite(Number(n))?Number(n).toFixed(Number(n)<1?4:2):'—';tip.textContent=item.label;tip.style.display='block';if(cv.id==='kwModalCanvas'){tip.style.left='' ;tip.style.top='' ;}else{tip.style.left=Math.max(4,cv.offsetLeft+8)+'px';tip.style.top=(cv.offsetTop+cv.offsetHeight+2)+'px';}cv.title=item.label;};
+  cv._showChartHover=(px,py)=>{if(px<L||px>W-R||!cv._hoverItems?.length){if(cv._hoverTip)cv._hoverTip.style.display='none';return}let item=cv._hoverItems.reduce((best,p)=>Math.abs(p.x-px)<Math.abs(best.x-px)?p:best,cv._hoverItems[0]);const tip=cv._hoverTip;if(!tip)return;const fmt=n=>Number.isFinite(Number(n))?Number(n).toFixed(Number(n)<1?4:2):'—';tip.textContent=cv._showOhlcTip?`${item.label}\nO ${fmt(item.o)}  H ${fmt(item.h)}\nL ${fmt(item.l)}  C ${fmt(item.c)}  V ${Number(item.v||0).toLocaleString('en-US')}`:item.label;tip.style.whiteSpace=cv._showOhlcTip?'pre-line':'nowrap';tip.style.display='block';if(cv.id==='kwModalCanvas'){tip.style.left='' ;tip.style.top='' ;}else if(cv._showOhlcTip){tip.style.left=Math.min(W-210,Math.max(L,px+14))+'px';tip.style.top=(cv.offsetTop+8)+'px';}else{tip.style.left=Math.max(4,cv.offsetLeft+8)+'px';tip.style.top=(cv.offsetTop+cv.offsetHeight+2)+'px';}cv.title=item.label;};
   cv._viewSpan=viewSpan;cv._panSpan=span;cv._plotWidth=pw;cv._drawEvArgs=[c,sel,bzChecked,targetH,timeframe,zoom];
   if(!cv._panBound){
     cv._panBound=true;cv.style.cursor='grab';
     const hoverParent=cv.parentElement;if(hoverParent){if(getComputedStyle(hoverParent).position==='static')hoverParent.style.position='relative';const tip=document.createElement('div');tip.className='chartHoverTip';tip.style.cssText='display:none;position:absolute;z-index:9;pointer-events:none;background:rgba(8,12,16,.96);border:1px solid #465362;color:#e7eef5;padding:5px 7px;border-radius:3px;font:11px Consolas,monospace;white-space:nowrap;box-shadow:0 2px 8px #000';if(cv.id==='kwModalCanvas'){tip.style.position='static';tip.style.background='transparent';tip.style.border='0';tip.style.padding='0';document.querySelector('.kwModalLegend')?.appendChild(tip)}else hoverParent.appendChild(tip);cv._hoverTip=tip;}
-    cv.addEventListener('pointerdown',e=>{if(e.button!==0)return;if(cv._measureMode&&e.offsetX>L&&e.offsetX<W-R){const p=cv._hoverItems?.reduce((a,z)=>Math.abs(z.x-e.offsetX)<Math.abs(a.x-e.offsetX)?z:a,cv._hoverItems?.[0]);if(p){cv._measureActive=true;cv._measureStartKey=p.key;cv._measureEndKey=p.key;cv.setPointerCapture(e.pointerId);drawEv(cv,...cv._drawEvArgs);}return;}cv._panActive=true;cv._panMode=e.offsetX<=L?'price':'time';cv._panStartX=e.clientX;cv._panStartY=e.clientY;cv._panStartOffset=cv._panOffset||0;cv._panStartYZoom=cv._yZoom||1;cv._panDidMove=false;cv.setPointerCapture(e.pointerId);cv.style.cursor=cv._panMode==='price'?'ns-resize':'grabbing';});
-    cv.addEventListener('pointermove',e=>{if(cv._measureActive){const p=cv._hoverItems?.reduce((a,z)=>Math.abs(z.x-e.offsetX)<Math.abs(a.x-e.offsetX)?z:a,cv._hoverItems?.[0]);if(p){cv._measureEndKey=p.key;drawEv(cv,...cv._drawEvArgs);}return;}if(!cv._panActive){cv.style.cursor=e.offsetX<=L?'ns-resize':'grab';cv._showChartHover?.(e.offsetX,e.offsetY);return;}if(cv._hoverTip)cv._hoverTip.style.display='none';const dx=e.clientX-cv._panStartX,dy=e.clientY-cv._panStartY;if(Math.abs(dx)>3||Math.abs(dy)>3)cv._panDidMove=true;if(cv._panMode==='price'){cv._yZoom=Math.max(.5,Math.min(20,cv._panStartYZoom*Math.exp(-dy/140)));cv._onYZoomChange?.(cv._yZoom);}else{cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,cv._panStartOffset-dx*cv._viewSpan/Math.max(1,cv._plotWidth)));cv._onPanChange?.(cv._panOffset);}if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);});
-    cv.addEventListener('pointerleave',()=>{if(cv._hoverTip)cv._hoverTip.style.display='none';});
+    cv.addEventListener('pointerdown',e=>{if(e.button!==0)return;if(cv._avwapSelectMode){if(e.offsetX<L||e.offsetX>W-R)return;const p=cv._hoverItems?.reduce((a,z)=>Math.abs(z.x-e.offsetX)<Math.abs(a.x-e.offsetX)?z:a,cv._hoverItems?.[0]);if(!p)return;if(cv._avwapAnchors?.a==null){cv._avwapAnchors={a:p.index,b:null};cv._avwapOnChange?.(`Anchor A selected · ${p.label} · ${p.c}`);}else if(p.index<=cv._avwapAnchors.a){cv._avwapOnChange?.('Choose point B after point A in time.');}else{cv._avwapAnchors={...cv._avwapAnchors,b:p.index};cv._avwapSelectMode=false;cv._avwapOnChange?.(`AVWAP drawn · A ${cv._hoverItems.find(z=>z.index===cv._avwapAnchors.a)?.label||''} → B ${p.label}`);}e.preventDefault();e.stopPropagation();drawEv(cv,...cv._drawEvArgs);return;}if(cv._measureMode&&e.offsetX>L&&e.offsetX<W-R){const p=cv._hoverItems?.reduce((a,z)=>Math.abs(z.x-e.offsetX)<Math.abs(a.x-e.offsetX)?z:a,cv._hoverItems?.[0]);if(p){cv._measureActive=true;cv._measureStartKey=p.key;cv._measureEndKey=p.key;cv.setPointerCapture(e.pointerId);drawEv(cv,...cv._drawEvArgs);}return;}cv._panActive=true;cv._panMode=e.offsetX<=L?'price':'time';cv._panStartX=e.clientX;cv._panStartY=e.clientY;cv._panStartOffset=cv._panOffset||0;cv._panStartYZoom=cv._yZoom||1;cv._panDidMove=false;cv.setPointerCapture(e.pointerId);cv.style.cursor=cv._panMode==='price'?'ns-resize':'grabbing';});
+    cv.addEventListener('pointermove',e=>{if(cv._measureActive){const p=cv._hoverItems?.reduce((a,z)=>Math.abs(z.x-e.offsetX)<Math.abs(a.x-e.offsetX)?z:a,cv._hoverItems?.[0]);if(p){cv._measureEndKey=p.key;drawEv(cv,...cv._drawEvArgs);}return;}if(!cv._panActive){cv.style.cursor=cv._avwapSelectMode?'crosshair':(e.offsetX<=L?'ns-resize':'grab');cv._showChartHover?.(e.offsetX,e.offsetY);if(cv._showCrosshair){cv._crosshair={x:e.offsetX,y:e.offsetY};if(!cv._crosshairFrame)cv._crosshairFrame=requestAnimationFrame(()=>{cv._crosshairFrame=0;if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);});}return;}if(cv._hoverTip)cv._hoverTip.style.display='none';const dx=e.clientX-cv._panStartX,dy=e.clientY-cv._panStartY;if(Math.abs(dx)>3||Math.abs(dy)>3)cv._panDidMove=true;if(cv._panMode==='price'){cv._yZoom=Math.max(.5,Math.min(20,cv._panStartYZoom*Math.exp(-dy/140)));cv._onYZoomChange?.(cv._yZoom);}else{cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,cv._panStartOffset-dx*cv._viewSpan/Math.max(1,cv._plotWidth)));cv._onPanChange?.(cv._panOffset);}if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);});
+    cv.addEventListener('pointerleave',()=>{if(cv._hoverTip)cv._hoverTip.style.display='none';if(cv._showCrosshair&&cv._crosshair){cv._crosshair=null;if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);}});
     cv.addEventListener('pointerup',e=>{if(cv._measureActive){cv._measureActive=false;return;}if(!cv._panActive)return;cv._panActive=false;cv.style.cursor='grab';if(cv._panDidMove&&cv._panMode==='time'){const dx=e.clientX-cv._panStartX;if(cv._panMinOffset===cv._panMaxOffset&&Math.abs(dx)>20)cv._onPanEdge?.(dx<0?1:-1);else if(cv._panOffset>=cv._panMaxOffset-1)cv._onPanEdge?.(1);else if(cv._panOffset<=cv._panMinOffset+1)cv._onPanEdge?.(-1);}});
     cv.addEventListener('pointercancel',()=>{cv._panActive=false;cv.style.cursor='grab';});
     cv.addEventListener('wheel',e=>{if(e.offsetX>L)return;e.preventDefault();cv._yZoom=Math.max(.5,Math.min(20,(cv._yZoom||1)*Math.exp(-Math.sign(e.deltaY)*.15)));cv._onYZoomChange?.(cv._yZoom);if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);},{passive:false});
-    cv.addEventListener('click',e=>{if(cv._panDidMove||cv._measureMode){e.preventDefault();e.stopPropagation();cv._panDidMove=false;}},true);
+    cv.addEventListener('click',e=>{if(cv._panDidMove||cv._measureMode){e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();cv._panDidMove=false;}},true);
   }
   // Premarket light grey background
   x.fillStyle = 'rgba(255, 255, 255, 0.085)';
@@ -1176,7 +1196,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
     x.setLineDash([]);
   };
   if(!daily){dash(c.pc, '#888');dash(c.pmh, '#ffd23f');}
-  // ---- bone zone: 9/20 EMA cloud + Bollinger Bands (20, 2) on the 2-min closes
+  // ---- bone zone: 9/21 EMA cloud + Bollinger Bands (21, 2) on the selected interval
   const BZ = bzChecked ? bone(b) : null;
   const clipP = () => { x.save(); x.beginPath(); x.rect(L, T, pw, ph); x.clip(); };
   const poly = (a, col, w) => {
@@ -1195,12 +1215,12 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   if(BZ){
     clipP();
     for(let i = 1; i < b.t.length; i++){
-      x.fillStyle = BZ.e9[i] > BZ.e20[i] ? 'rgba(0,255,0,0.30)' : 'rgba(255,0,0,0.30)';
+      x.fillStyle = BZ.e9[i] > BZ.e21[i] ? 'rgba(0,255,0,0.30)' : 'rgba(255,0,0,0.30)';
       x.beginPath();
       x.moveTo(X(b.t[i-1] + 1), Y(BZ.e9[i-1]));
       x.lineTo(X(b.t[i] + 1), Y(BZ.e9[i]));
-      x.lineTo(X(b.t[i] + 1), Y(BZ.e20[i]));
-      x.lineTo(X(b.t[i-1] + 1), Y(BZ.e20[i-1]));
+      x.lineTo(X(b.t[i] + 1), Y(BZ.e21[i]));
+      x.lineTo(X(b.t[i-1] + 1), Y(BZ.e21[i-1]));
       x.closePath();
       x.fill();
     }
@@ -1229,22 +1249,24 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   if(BZ){
     clipP();
     poly(BZ.e9, 'rgb(215,255,110)', isLarge ? 1.6 : 1.2);
-    poly(BZ.e20, 'rgb(255,165,0)', isLarge ? 1.6 : 1.2);
+    poly(BZ.e21, 'rgb(255,165,0)', isLarge ? 1.6 : 1.2);
     x.restore();
   }
-  x.strokeStyle = '#29a8ff';
-  x.lineWidth = isLarge ? 2 : 1.4;
-  x.beginPath();
-  let on = false, lastVwapDate=null;
-  for(let i = 0; i < b.t.length; i++){
-    const v = b.vw[i];
-    if(v == null){ on = false; continue; }
-    if(multi&&b.d?.[i]!==lastVwapDate)on=false;
-    const xx = X(b.t[i] + tf / 2), yy = Y(Math.min(hi, Math.max(lo, v)));
-    if(!on){ x.moveTo(xx, yy); on = true; } else x.lineTo(xx, yy);
-    lastVwapDate=b.d?.[i]||null;
+  if(cv._showVWAP!==false){
+    x.strokeStyle = '#29a8ff';
+    x.lineWidth = isLarge ? 2 : 1.4;
+    x.beginPath();
+    let on = false, lastVwapDate=null;
+    for(let i = 0; i < b.t.length; i++){
+      const v = b.vw[i];
+      if(v == null){ on = false; continue; }
+      if(multi&&b.d?.[i]!==lastVwapDate)on=false;
+      const xx = X(b.t[i] + tf / 2), yy = Y(Math.min(hi, Math.max(lo, v)));
+      if(!on){ x.moveTo(xx, yy); on = true; } else x.lineTo(xx, yy);
+      lastVwapDate=b.d?.[i]||null;
+    }
+    x.stroke();
   }
-  x.stroke();
   if(!daily){
     const twap=[], activeTwap=[], avh=[]; let dayKey=null, count=0, timeSum=0, activeCount=0, activeSum=0;
     let prevT=null, prevTp=null, anchorDollar=0, anchorVol=0;
@@ -1261,9 +1283,15 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
       prevT=b.t[i];prevTp=tp;
     }
     clipP();
-    poly(twap,'#c084fc',isLarge?1.7:1.3);
-    x.setLineDash([2,3]);poly(activeTwap,'#e879f9',isLarge?1.4:1.1);x.setLineDash([]);
-    x.setLineDash([5,3]);poly(avh,'#ffd23f',isLarge?2.2:1.5);x.setLineDash([]);
+    if(cv._showTWAP!==false){poly(twap,'#c084fc',isLarge?1.9:1.4);x.setLineDash([2,3]);poly(activeTwap,'#e879f9',isLarge?1.5:1.1);x.setLineDash([]);}
+    if(cv._showHODAVWAP!==false){x.setLineDash([5,3]);poly(avh,'#ffd23f',isLarge?2.2:1.5);x.setLineDash([]);}
+    const anchors=cv._avwapAnchors;
+    if(anchors&&Number.isInteger(anchors.a)&&Number.isInteger(anchors.b)&&anchors.b>anchors.a){
+      const anchored=new Array(b.t.length).fill(null);let vol=0,dollar=0;
+      for(let i=anchors.a;i<=anchors.b;i++){const v=Math.max(0,b.v[i]||0),tp=(b.h[i]+b.l[i]+b.c[i])/3;vol+=v;dollar+=tp*v;if(vol)anchored[i]=dollar/vol;}
+      poly(anchored,'#ffe45c',isLarge?2.6:1.8);
+      [[anchors.a,'A'],[anchors.b,'B']].forEach(([i,label])=>{const px=X(b.t[i]+tf/2),py=Y(b.c[i]);x.fillStyle='#ffe45c';x.beginPath();x.arc(px,py,5,0,Math.PI*2);x.fill();x.font='bold 12px Consolas,monospace';x.fillText(label,px+7,py-7);});
+    }
     x.restore();
   }
   x.lineWidth = 1;
@@ -1303,6 +1331,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
       const rot=Number(c.float_shares)>0?`${(vol/Number(c.float_shares)).toFixed(2)}x`:'Unavailable';const lines=[`${a.label} to ${z.label}`,`Volume ${vol.toLocaleString('en-US',{maximumFractionDigits:0})}`,`Dollar volume ~$${dv.toLocaleString('en-US',{maximumFractionDigits:0})}`,`Float rotation ${rot}${Number(c.float_shares)>0?' (float may be stale)':''}`];
       x.font='bold 11px Consolas,monospace';const boxW=Math.min(W-L-R,Math.max(...lines.map(t=>x.measureText(t).width))+16),boxH=lines.length*16+12,bx=Math.min(W-R-boxW,Math.max(L,left+6)),by=T+5;x.fillStyle='rgba(6,13,21,.96)';x.fillRect(bx,by,boxW,boxH);x.strokeStyle='#62c8ff';x.strokeRect(bx,by,boxW,boxH);lines.forEach((line,k)=>{x.fillStyle=k===0?'#8cb8d6':'#edf6ff';x.fillText(line,bx+8,by+16+k*16)});x.restore();}
   }
+  if(cv._showCrosshair&&cv._crosshair){const p=cv._crosshair;if(p.x>=L&&p.x<=W-R&&p.y>=T&&p.y<=T+ph){x.save();x.strokeStyle='rgba(220,232,244,.65)';x.lineWidth=1;x.setLineDash([3,4]);x.beginPath();x.moveTo(p.x,T);x.lineTo(p.x,vy1);x.moveTo(L,p.y);x.lineTo(W-R,p.y);x.stroke();x.restore();}}
 }
 
 let currentModalIndex = 0;
@@ -1704,6 +1733,36 @@ $('#nav_gap_deepdive_btn').onclick=()=>{
   if(location.pathname==='/gap-deepdive')location.assign('/');
   else window.open('/gap-deepdive','_blank','noopener');
 };
+const gapDeepDiveCharts=new Map(),gapDeepDiveChartPending=new Map();
+let gapDeepDiveCurrent=null;
+const gapDeepDiveKey=item=>`${item.ticker}|${item.date}`;
+async function loadGapDeepDiveChart(item,jobId){
+  const key=gapDeepDiveKey(item);if(gapDeepDiveCharts.has(key))return gapDeepDiveCharts.get(key);if(gapDeepDiveChartPending.has(key))return gapDeepDiveChartPending.get(key);
+  const url='/api/gap-deepdive/'+encodeURIComponent(jobId)+'/chart?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken)+'&ticker='+encodeURIComponent(item.ticker)+'&date='+encodeURIComponent(item.date);
+  const pending=(async()=>{const response=await fetch(url),data=await gapDeepDiveJson(response);gapDeepDiveCharts.set(key,data.chart);return data.chart;})();gapDeepDiveChartPending.set(key,pending);
+  try{return await pending;}finally{gapDeepDiveChartPending.delete(key);}
+}
+function renderGapDeepDiveModal(){
+  if(!gapDeepDiveCurrent)return;const cv=$('#gap_chart_modal_canvas'),body=$('#gap_chart_modal_body');
+  cv._showHODAVWAP=false;cv._showCrosshair=true;cv._showOhlcTip=true;cv._showVWAP=$('#gap_chart_vwap').checked;cv._showTWAP=$('#gap_chart_twap').checked;cv._avwapOnChange=message=>{$('#gap_chart_avwap_status').textContent=message;};
+  drawEv(cv,gapDeepDiveCurrent.chart,'none',$('#gap_chart_bz').checked,Math.max(500,body.clientHeight-12),$('#gap_chart_tf').value,1);
+}
+async function openGapDeepDiveChart(item,jobId){
+  try{
+    const chart=await loadGapDeepDiveChart(item,jobId);gapDeepDiveCurrent={item,jobId,chart};
+    $('#gap_chart_title').textContent=item.ticker;$('#gap_chart_date').textContent=item.date;$('#gap_chart_stats').textContent=`PM high +${(item.move*100).toFixed(1)}% · $${(item.pm_dollar_volume/1e6).toFixed(1)}M premarket`;
+    $('#gap_chart_tf').value='1m';$('#gap_chart_bz').checked=true;$('#gap_chart_vwap').checked=true;$('#gap_chart_twap').checked=true;
+    const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Bone Zone (9/21 EMA), VWAP and TWAP are on. Select AVWAP, then click anchor A and anchor B on the chart.';
+    $('#gap_deepdive_chart_modal').style.display='flex';setTimeout(renderGapDeepDiveModal,30);
+  }catch(error){$('#gap_deepdive_status').textContent=`Could not load ${item.ticker} ${item.date}: ${error.message}`;}
+}
+function closeGapDeepDiveChart(){ $('#gap_deepdive_chart_modal').style.display='none';const cv=$('#gap_chart_modal_canvas');cv._avwapSelectMode=false;gapDeepDiveCurrent=null; }
+['gap_chart_bz','gap_chart_vwap','gap_chart_twap'].forEach(id=>$('#'+id).onchange=renderGapDeepDiveModal);
+$('#gap_chart_tf').onchange=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Interval changed. Select AVWAP again to choose new anchor points.';renderGapDeepDiveModal();};
+$('#gap_chart_avwap').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=true;cv.style.cursor='crosshair';$('#gap_chart_avwap_status').textContent='AVWAP tool active · click point A, then click a later point B.';renderGapDeepDiveModal();cv.style.cursor='crosshair';};
+$('#gap_chart_clear_avwap').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;cv.style.cursor='grab';$('#gap_chart_avwap_status').textContent='AVWAP cleared. VWAP, TWAP and Bone Zone remain on.';renderGapDeepDiveModal();};
+$('#gap_chart_copy').onclick=async()=>{const cv=$('#gap_chart_modal_canvas');try{const blob=await new Promise(resolve=>cv.toBlob(resolve,'image/png'));if(!blob)throw new Error('Could not render PNG');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);$('#gap_chart_copy').textContent='Copied ✓';setTimeout(()=>$('#gap_chart_copy').textContent='Copy PNG',1200);}catch(error){$('#gap_chart_avwap_status').textContent='PNG copy unavailable: '+error.message;}};
+window.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#gap_deepdive_chart_modal').style.display==='flex')closeGapDeepDiveChart();});
 async function loadGapDeepDive(){
   if(gapDeepDivePromise)return gapDeepDivePromise;
   const status=$('#gap_deepdive_status'),grid=$('#gap_deepdive_grid');grid.innerHTML='';status.textContent='Loading saved scan results…';const runId=++gapDeepDiveRequest;
@@ -1712,10 +1771,10 @@ async function loadGapDeepDive(){
     const start=await fetch('/api/gap-deepdive/start?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken),{method:'POST'}),started=await gapDeepDiveJson(start);let result;
     while(runId===gapDeepDiveRequest){await new Promise(resolve=>setTimeout(resolve,2000));const response=await fetch('/api/gap-deepdive/'+encodeURIComponent(started.job)+'?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken));result=await gapDeepDiveJson(response);status.textContent=result.message||'Scanning…';if(result.status==='complete'||result.status==='error')break;}
     if(runId!==gapDeepDiveRequest)return;if(result.status==='error')throw new Error(result.message);const items=result.results||[];if(!items.length){status.textContent=(result.message||'Complete')+' · No qualifying sessions found.';gapDeepDiveLoaded=true;return;}
-    status.textContent=`Saved scan as of ${result.scanned_on||'latest saved date'} · ${items.length} qualifying sessions · scroll to load cached candles on demand.`+(result.errors?.length?` · Could not load full daily history for ${result.errors.length} ticker(s).`:'');
-    grid.innerHTML=items.map((item,i)=>`<article style="min-width:0;background:#090c10;border:1px solid #29313a;border-radius:5px;padding:10px"><header style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:8px"><strong style="color:#e8edf3;font-size:16px">${esc(item.ticker)}</strong><span style="padding:3px 8px;border-radius:3px;background:#211b05;border:1px solid #655516;color:#ffe17d;font-size:13px">${esc(item.date)}</span><span style="color:#64d99b;font-size:13px">PM high +${(item.move*100).toFixed(1)}%</span><span style="color:#b6c0ca;font-size:13px">PM $vol $${(item.pm_dollar_volume/1e6).toFixed(1)}M</span><button class="gap-copy-png" data-index="${i}" disabled style="margin-left:auto;height:32px;font-size:12px;border-color:#555">Copy PNG</button></header><div style="position:relative"><canvas id="gap_deepdive_chart_${i}" data-index="${i}" style="width:100%;height:540px;display:block"></canvas><span class="gap-chart-loading" style="position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);color:#89939e;font-size:14px">Scroll here to load this chart</span></div><div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#aab4bf;padding:7px 2px"><span style="color:#29a8ff">━ VWAP (04:00 ET)</span><span style="color:#ffd23f">┅ AVWAP (session HOD)</span><span style="color:#b0b0b0">░ Premarket</span><span>1-minute OHLCV · 04:00–16:00 ET · X-axis IST · wheel zoom · drag to pan</span></div></article>`).join('');
-    const lazyCharts=new IntersectionObserver(entries=>entries.forEach(async entry=>{if(!entry.isIntersecting)return;const canvas=entry.target;lazyCharts.unobserve(canvas);const i=Number(canvas.dataset.index),item=items[i],url='/api/gap-deepdive/'+encodeURIComponent(started.job)+'/chart?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken)+'&ticker='+encodeURIComponent(item.ticker)+'&date='+encodeURIComponent(item.date);try{const response=await fetch(url),data=await gapDeepDiveJson(response);drawEv(canvas,data.chart,'none',false,540,'1m',1);canvas.dataset.chartLoaded='1';grid.querySelector(`.gap-copy-png[data-index="${i}"]`).disabled=false;canvas.parentElement.querySelector('.gap-chart-loading').remove();}catch(error){canvas.parentElement.querySelector('.gap-chart-loading').textContent=error.message;}}),{rootMargin:'500px 0px'});
-    grid.querySelectorAll('canvas[data-index]').forEach(canvas=>lazyCharts.observe(canvas));
+    status.textContent=`Saved scan as of ${result.scanned_on||'latest saved date'} · ${items.length} qualifying sessions at ≥70% PM high · click a chart to expand.`+(result.errors?.length?` · Could not load full daily history for ${result.errors.length} ticker(s).`:'');
+    grid.innerHTML=items.map((item,i)=>`<article style="min-width:0;background:#090c10;border:1px solid #29313a;border-radius:5px;padding:10px"><header style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:8px"><strong style="color:#e8edf3;font-size:16px">${esc(item.ticker)}</strong><span style="padding:3px 8px;border-radius:3px;background:#211b05;border:1px solid #655516;color:#ffe17d;font-size:13px">${esc(item.date)}</span><span style="color:#64d99b;font-size:13px">PM high +${(item.move*100).toFixed(1)}%</span><span style="color:#b6c0ca;font-size:13px">PM $vol $${(item.pm_dollar_volume/1e6).toFixed(1)}M</span><button class="gap-copy-png" data-index="${i}" disabled style="margin-left:auto;height:32px;font-size:12px;border-color:#555">Copy PNG</button></header><div style="position:relative"><canvas id="gap_deepdive_chart_${i}" data-index="${i}" style="width:100%;height:540px;display:block;cursor:zoom-in"></canvas><span class="gap-chart-loading" style="position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);color:#89939e;font-size:14px">Scroll here to load this chart</span></div><div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#aab4bf;padding:7px 2px"><span style="color:#29a8ff">━ VWAP</span><span style="color:#c084fc">━ TWAP</span><span style="color:#ffe45c">AVWAP · set A/B in expanded chart</span><span style="color:#b0b0b0">░ Premarket</span><span>1-minute OHLCV · X-axis IST · click to expand</span></div></article>`).join('');
+    const lazyCharts=new IntersectionObserver(entries=>entries.forEach(async entry=>{if(!entry.isIntersecting)return;const canvas=entry.target;lazyCharts.unobserve(canvas);const i=Number(canvas.dataset.index),item=items[i];try{const chart=await loadGapDeepDiveChart(item,started.job);canvas._showHODAVWAP=false;drawEv(canvas,chart,'none',true,540,'1m',1);canvas.dataset.chartLoaded='1';grid.querySelector(`.gap-copy-png[data-index="${i}"]`).disabled=false;canvas.parentElement.querySelector('.gap-chart-loading').remove();canvas.onclick=()=>openGapDeepDiveChart(item,started.job);}catch(error){canvas.parentElement.querySelector('.gap-chart-loading').textContent=error.message;}}),{rootMargin:'500px 0px'});
+    grid.querySelectorAll('canvas[data-index]').forEach(canvas=>{const item=items[Number(canvas.dataset.index)];canvas.onclick=()=>openGapDeepDiveChart(item,started.job);lazyCharts.observe(canvas);});
     grid.querySelectorAll('.gap-copy-png').forEach(btn=>btn.onclick=async()=>{const canvas=$('#gap_deepdive_chart_'+btn.dataset.index);try{const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw new Error('Could not render PNG');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);btn.textContent='Copied ✓';setTimeout(()=>btn.textContent='Copy PNG',1300);}catch(error){status.textContent='PNG copy unavailable: '+error.message;}});
     gapDeepDiveLoaded=true;
   }catch(error){if(runId===gapDeepDiveRequest)status.textContent='Deepdive error: '+error.message;}

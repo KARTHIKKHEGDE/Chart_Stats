@@ -71,7 +71,7 @@ def _run_gap_deepdive(job_id):
                 move = pm_high / prev - 1 if prev > 0 else 0
                 tp = (pm.h + pm.l + pm.c) / 3
                 dollar_volume = float((tp * pm.v).sum())
-                if move >= .50 and dollar_volume >= 10_000_000:
+                if move >= .70 and dollar_volume >= 10_000_000:
                     # minute_df has persisted the raw 1-minute candles to disk. Keep only
                     # metadata in the scan response; cards request their chart on visibility.
                     days.append({'ticker': ticker, 'date': day, 'move': move, 'pm_dollar_volume': dollar_volume,
@@ -80,7 +80,7 @@ def _run_gap_deepdive(job_id):
                 continue
         return days
     try:
-        job.update(status='running', message=f'Scanning {len(GAP_DEEPDIVE_TICKERS)} tickers for {year}…', done=0, total=len(GAP_DEEPDIVE_TICKERS))
+        job.update(status='running', message=f'Scanning {len(GAP_DEEPDIVE_TICKERS)} tickers for {year}…', done=0, total=len(GAP_DEEPDIVE_TICKERS), min_pm_gap_pct=70)
         cput(f"gap_deepdive_job_{job_id}", job)
         with ThreadPoolExecutor(max_workers=min(12, max(1, len(GAP_DEEPDIVE_TICKERS)))) as pool:
             futures = {pool.submit(scan_ticker, ticker): ticker for ticker in GAP_DEEPDIVE_TICKERS}
@@ -94,7 +94,7 @@ def _run_gap_deepdive(job_id):
         found.sort(key=lambda x: (x['date'], x['ticker']), reverse=True)
         job.update(status='complete', message=f"Complete · {len(found)} qualifying sessions", results=clean(found), errors=errors[:20])
         cput(f"gap_deepdive_job_{job_id}", job)
-        cput(f"gap_deepdive_latest_{year}", {'job':job_id,'scanned_on':dt.date.today().isoformat(),**job})
+        cput(f"gap_deepdive_latest_{year}", {'job':job_id,'scanned_on':dt.date.today().isoformat(),'min_pm_gap_pct':70,**job})
     except Exception as exc:
         job.update(status='error', message=f"{type(exc).__name__}: {exc}")
         cput(f"gap_deepdive_job_{job_id}", job)
@@ -108,7 +108,7 @@ def gap_deepdive_start():
         from chart_app.application import cget, cput
         year=dt.date.today().year
         latest=cget(f"gap_deepdive_latest_{year}")
-        if latest and latest.get('status')=='complete':
+        if latest and latest.get('status')=='complete' and float(latest.get('min_pm_gap_pct',0))>=70:
             return jsonify({'job':latest['job'],'cached':True})
         latest=_saved_gap_deepdive_manifest(year)
         if latest:
