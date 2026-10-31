@@ -917,6 +917,22 @@ async function run(refresh){
   }
 }
 
+async function loadPremarketSpikeDays(tab,report){
+  const panel=tab.container.querySelector('[data-premarket-spikes]'),ticker=report?.head?.ticker;
+  if(!panel||!ticker)return;
+  if(tab._premarketSpikeLoad)return tab._premarketSpikeLoad;
+  const query=new URLSearchParams({ticker,user:currentUser||'',token:sessionToken||''});
+  tab._premarketSpikeLoad=fetch('/api/premarket-spikes?'+query.toString()).then(async response=>{
+    const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load premarket history.');
+    if(tab.result!==report)return;
+    const days=data.days||[],compact=n=>new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(Number(n)||0);
+    panel.innerHTML=`<div class="ttl">Premarket Spike Days · PM high ≥ +50% · PM $ volume ≥ $10M · last year</div>`+
+      (days.length?`<div class="kv">${days.map(item=>`<span>${esc(formatDateMDY(item.date))}</span><span>PM high +${Number(item.pm_high_pct).toFixed(2)}% · PM $Vol $${compact(item.pm_dollar_volume)} · PM Vol ${compact(item.pm_volume)} sh</span>`).join('')}</div>`:`<div class="foot">No sessions met both thresholds in the last year.</div>`);
+    report.premarket_surge_days=days;
+  }).catch(error=>{if(tab.result===report&&panel.isConnected){const status=panel.querySelector('[data-surge-status]');if(status)status.textContent='Premarket history unavailable: '+error.message;}}).finally(()=>{const stale=tab.result!==report;tab._premarketSpikeLoad=null;if(stale&&tab.result?.head?.ticker===ticker)loadPremarketSpikeDays(tab,tab.result);});
+  return tab._premarketSpikeLoad;
+}
+
 function renderTab(tab, r, isRefresh){
   tab.lastText = r.text;
   tab.lastChart = r.chart;
@@ -961,9 +977,10 @@ function renderTab(tab, r, isRefresh){
   const reverseSplits=r.reverse_splits||[];
   o += `<div class="panel"><div class="ttl">Reverse Splits · ${reverseSplits.length} ${reverseSplits.length===1?'event':'events'}</div>`+
     (reverseSplits.length?`<div class="kv">${reverseSplits.map(item=>`<span>Reverse split</span><span>${esc(formatDateMDY(item.date))} · ${esc(item.ratio)} reverse${item.price_conversion?` (${esc(item.price_conversion)})`:''}</span>`).join('')}</div>`:`<div class="foot">No reverse splits found in available split history.</div>`)+`</div>`;
-  const surgeDays=r.premarket_surge_days||[],compact=n=>new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(Number(n)||0);
-  o += `<div class="panel"><div class="ttl">Premarket Spike Days · PM high ≥ +50% · PM $ volume ≥ $10M · last year</div>`+
-    (surgeDays.length?`<div class="kv">${surgeDays.map(item=>`<span>${esc(formatDateMDY(item.date))}</span><span>PM high +${Number(item.pm_high_pct).toFixed(2)}% · PM $Vol $${compact(item.pm_dollar_volume)} · PM Vol ${compact(item.pm_volume)} sh</span>`).join('')}</div>`:`<div class="foot">No sessions met both thresholds in the last year.</div>`)+`</div>`;
+  const surgeDays=Array.isArray(r.premarket_surge_days)?r.premarket_surge_days:null,compact=n=>new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(Number(n)||0);
+  const surgeContent=days=>days.length?`<div class="kv">${days.map(item=>`<span>${esc(formatDateMDY(item.date))}</span><span>PM high +${Number(item.pm_high_pct).toFixed(2)}% · PM $Vol $${compact(item.pm_dollar_volume)} · PM Vol ${compact(item.pm_volume)} sh</span>`).join('')}</div>`:`<div class="foot">No sessions met both thresholds in the last year.</div>`;
+  o += `<div class="panel" data-premarket-spikes><div class="ttl">Premarket Spike Days · PM high ≥ +50% · PM $ volume ≥ $10M · last year</div>`+
+    (surgeDays?surgeContent(surgeDays):`<div class="foot" data-surge-status>Checking this history in the background…</div>`)+`</div>`;
   o += `<div class="panel two"><div><div class="ttl">${esc(T.p1)}</div>${kv(r.p1.left)}</div><div>${kv(r.p1.right)}</div></div>`;
   if(r.open_hod_stats){
     const s=r.open_hod_stats, fmt=x=>x==null?'—':`${x>=0?'+':''}${(x*100).toFixed(0)}%`, line=x=>`${fmt(x.median)}   avg ${fmt(x.avg)}   (${x.n} ${x.n===1?'day':'days'})`;
@@ -999,6 +1016,7 @@ function renderTab(tab, r, isRefresh){
   if(r.pd.rows.length) o += `<div class="panel"><div class="ttl">${esc(T.pd)}</div>${table(r.pd.cols,r.pd.rows,null,false)}</div>`;
 
   tab.container.innerHTML = o;
+  if(!surgeDays) loadPremarketSpikeDays(tab,r);
   loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'));
   tab.container.querySelectorAll('table.sort').forEach(makeSortable);
 

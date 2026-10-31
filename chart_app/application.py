@@ -370,34 +370,19 @@ def run_job(job, t, refresh):
         ctx = {"sec": sec, "splits": splits, "float": fl_now, "ratio": ratio}
 
         idxs = detect_events(daily, splits, live["date"])
-        split_dates = {str(split.get("date")) for split in (splits or []) if split.get("date")}
-        surge_cutoff = live["date"] - dt.timedelta(days=365)
-        surge_candidate_idxs = []
-        for i in range(1, len(daily)):
-            row = daily[i]
-            try:
-                day = dt.date.fromisoformat(str(row["date"]))
-                prior_close = float(daily[i - 1].get("c") or 0)
-                daily_high = float(row.get("h") or 0)
-            except (TypeError, ValueError, KeyError):
-                continue
-            if (day >= surge_cutoff and row["date"] not in split_dates and prior_close > 0
-                    and daily_high / prior_close - 1 >= 0.50):
-                surge_candidate_idxs.append(i)
 
         # ------------------------------------------------------------------ STAGE 2
         # Pre-fetch all 1-min files in parallel.
         # With N keys the pool fires up to N concurrent requests; each key self-throttles
         # to its own 12-second window via _acquire_slot, so rate limits are strictly respected.
         n_keys   = max(1, len(_key_pool))
-        minute_indices = sorted(set(idxs) | set(surge_candidate_idxs))
-        n_minute_days = len(minute_indices)
+        n_events = len(idxs)
 
-        if n_minute_days:
-            job["msg"] = (f"Fetching 1-min data for {n_minute_days} event days "
+        if n_events:
+            job["msg"] = (f"Fetching 1-min data for {n_events} event days "
                           f"in parallel ({n_keys} keys active)…")
 
-            fetch_args = [(t, i, daily) for i in minute_indices]
+            fetch_args = [(t, i, daily) for i in idxs]
             workers = min(20, max(n_keys * 2, 12))
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 futs = {pool.submit(_prefetch_minute, a): a for a in fetch_args}
@@ -405,32 +390,8 @@ def run_job(job, t, refresh):
                 for fut in as_completed(futs):
                     done += 1
                     _, day, ok = fut.result()
-                    job["msg"] = (f"Cached {done}/{n_minute_days} minute files… "
+                    job["msg"] = (f"Cached {done}/{n_events} minute files… "
                                   f"({day}{'  ✓' if ok else '  ✗ skipped'})")
-
-        premarket_surge_days = []
-        for i in surge_candidate_idxs:
-            day = daily[i]["date"]
-            prior_close = float(daily[i - 1].get("c") or 0)
-            try:
-                df = minute_df(t, day)
-                if df is None or df.empty or prior_close <= 0:
-                    continue
-                minutes = df.index.hour * 60 + df.index.minute
-                pm = df[(minutes >= 240) & (minutes < 570)]
-                if pm.empty:
-                    continue
-                pm_high = float(pm["h"].max())
-                typical_price = (pm["h"] + pm["l"] + pm["c"]) / 3
-                pm_dollar_volume = float((typical_price * pm["v"]).sum())
-                if pm_high / prior_close - 1 >= 0.50 and pm_dollar_volume >= 10_000_000:
-                    premarket_surge_days.append({"date": day,
-                        "pm_high_pct": round((pm_high / prior_close - 1) * 100, 2),
-                        "pm_dollar_volume": round(pm_dollar_volume, 2),
-                        "pm_volume": round(float(pm["v"].sum()))})
-            except Exception:
-                continue
-        premarket_surge_days.sort(key=lambda item: item["date"], reverse=True)
 
         # ------------------------------------------------------------------ STAGE 3
         # analyze_event is now fully CPU-bound (all 1-min data is in cache).
@@ -525,12 +486,9 @@ def run_job(job, t, refresh):
                      "which makes fades look weaker than reality (survivorship bias).")
 
         report = clean(build_report(t, live, lm, lpath, lctx, events, S, notes, daily))
-        report["premarket_surge_days"] = premarket_surge_days
+        report["premarket_surge_days"] = None
         report["text"] += "\n\nPremarket high ≥ +50% and dollar volume ≥ $10M\n"
-        report["text"] += ("\n".join(f"{fdate(item['date'])} · PM high +{item['pm_high_pct']:.2f}% · "
-                                     f"PM $ vol ${item['pm_dollar_volume']:,.0f} · PM vol {item['pm_volume']:,.0f} shares"
-                                     for item in premarket_surge_days)
-                            if premarket_surge_days else "No sessions met both thresholds in the last year.")
+        report["text"] += "This section loads after the main report."
         reverse_splits = []
         for split in splits or []:
             try:
@@ -758,6 +716,71 @@ from chart_app.scanner_settings import _get_app_ui_visibility
 from chart_app import charts as _charts
 from chart_app import keyword_compare as _keyword_compare
 from chart_app.scanner import _get_scanner_news, _scanner_details
+
+@app.route("/api/premarket-spikes")
+def premarket_spikes_api():
+    username = (request.args.get("user") or "").strip().lower()
+    token = (request.args.get("token") or "").strip()
+    ticker = (request.args.get("ticker") or "").strip().upper()
+    if not username or not _db_validate_session(username, token):
+        return jsonify({"error": "Session expired. Please sign in again."}), 401
+    if not re.fullmatch(r"[A-Z.-]{1,10}", ticker):
+        return jsonify({"error": "Invalid ticker."}), 400
+    cache_key = f"{ticker}_premarket_spikes_v1"
+    cached = cget(cache_key, 6 * 3600)
+    if cached is not None:
+        return jsonify({"days": cached, "cached": True})
+    try:
+        daily = load_daily(ticker)
+        if not daily:
+            return jsonify({"error": "No daily history available."}), 502
+        today = dt.datetime.now(ET).date()
+        today_text = today.isoformat()
+        cutoff = today - dt.timedelta(days=365)
+        daily = [row for row in daily if str(row.get("date") or "") < today_text]
+        splits = load_splits(ticker) or []
+        split_dates = {str(item.get("date")) for item in splits if item.get("date")}
+        candidates = []
+        for index in range(1, len(daily)):
+            row = daily[index]
+            try:
+                day = dt.date.fromisoformat(str(row["date"]))
+                prior_close = float(daily[index - 1].get("c") or 0)
+                high = float(row.get("h") or 0)
+            except (TypeError, ValueError, KeyError):
+                continue
+            if day >= cutoff and row["date"] not in split_dates and prior_close > 0 and high / prior_close - 1 >= 0.50:
+                candidates.append(index)
+        if candidates:
+            workers = min(20, max(4, len(_key_pool) * 2))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                list(pool.map(_prefetch_minute, [(ticker, index, daily) for index in candidates]))
+        found = []
+        for index in candidates:
+            day = daily[index]["date"]
+            prior_close = float(daily[index - 1].get("c") or 0)
+            try:
+                bars = minute_df(ticker, day)
+                if bars is None or bars.empty or prior_close <= 0:
+                    continue
+                minutes = bars.index.hour * 60 + bars.index.minute
+                premarket = bars[(minutes >= 240) & (minutes < 570)]
+                if premarket.empty:
+                    continue
+                high = float(premarket["h"].max())
+                typical_price = (premarket["h"] + premarket["l"] + premarket["c"]) / 3
+                dollar_volume = float((typical_price * premarket["v"]).sum())
+                if high / prior_close - 1 >= 0.50 and dollar_volume >= 10_000_000:
+                    found.append({"date": day, "pm_high_pct": round((high / prior_close - 1) * 100, 2),
+                                  "pm_dollar_volume": round(dollar_volume, 2),
+                                  "pm_volume": round(float(premarket["v"].sum()))})
+            except Exception:
+                continue
+        found.sort(key=lambda item: item["date"], reverse=True)
+        cput(cache_key, found)
+        return jsonify({"days": found, "cached": False})
+    except Exception as exc:
+        return jsonify({"error": f"Premarket history scan failed: {exc}"}), 502
 
 # Load account records only after auth and settings handlers are defined.
 _db_sync_users()
