@@ -11,6 +11,8 @@ services:
         sync: false
       - key: POLYGON_API_KEYS
         sync: false
+      - key: POLYGON_RPM
+        value: "600"
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_KEY

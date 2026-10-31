@@ -1851,7 +1851,7 @@ const gapDeepDiveKey=item=>`${item.ticker}|${item.date}`;
 let gapDeepDiveChartQueue=[],gapDeepDiveChartBatchTimer=null;
 function flushGapDeepDiveChartQueue(){
   if(gapDeepDiveChartBatchTimer){clearTimeout(gapDeepDiveChartBatchTimer);gapDeepDiveChartBatchTimer=null;}
-  const batch=gapDeepDiveChartQueue.splice(0,32);if(!batch.length)return;
+  const batch=gapDeepDiveChartQueue.splice(0,8);if(!batch.length)return;
   const url='/api/gap-deepdive/'+encodeURIComponent(batch[0].jobId)+'/charts?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken);
   fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({charts:batch.map(x=>({ticker:x.item.ticker,date:x.item.date}))})})
     .then(gapDeepDiveJson).then(data=>batch.forEach(entry=>{const key=gapDeepDiveKey(entry.item),chart=data.charts?.[key];if(chart){chart.ticker=entry.item.ticker;gapDeepDiveCharts.set(key,chart);entry.resolve(chart);}else entry.reject(new Error(data.errors?.[key]||'Chart data was not returned'));}))
