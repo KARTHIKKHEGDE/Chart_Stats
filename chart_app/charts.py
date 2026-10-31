@@ -324,6 +324,7 @@ def chart_context():
     user=(request.args.get("user") or "").strip().lower(); token=(request.args.get("token") or "").strip()
     ticker=(request.args.get("ticker") or "").strip().upper(); day=(request.args.get("date") or "").strip()
     tf=(request.args.get("tf") or "15m").strip().lower()
+    include_after_hours=request.args.get("postmarket") == "1"
     try: count=int(request.args.get("days", "5"))
     except ValueError: count=5
     if user not in _auth.ALLOWED_USERS or not _db_validate_session(user,token): return jsonify({"error":"Unauthorized"}),401
@@ -384,10 +385,10 @@ def chart_context():
                 dayframe=frame[frame.index.date==dt.date.fromisoformat(date)]
             else:
                 continue
-            packed=bars2(dayframe)
+            packed=bars2(dayframe, include_after_hours=include_after_hours)
             if packed:
                 packed["d"]=[date]*len(packed["t"]); chunks.append(packed)
         if not chunks: return jsonify({"error":"No intraday bars are available for this range"}),404
         bars={k:sum((p[k] for p in chunks),[]) for k in ("t","d","o","h","l","c","v","vw")}
-        return jsonify({"bars":bars,"dates":[p["d"][0] for p in chunks],"daily":False,"metrics":daily_metrics})
+        return jsonify({"bars":bars,"dates":[p["d"][0] for p in chunks],"daily":False,"metrics":daily_metrics,"after_hours":include_after_hours})
     except Exception as exc: return jsonify({"error":f"{type(exc).__name__}: {exc}"}),502
