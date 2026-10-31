@@ -35,8 +35,6 @@ GAP_DEEPDIVE_LOCK = threading.Lock()
 _GAP_DEEPDIVE_MANIFESTS = {}
 _GAP_DEEPDIVE_CHART_PAYLOADS = {}
 _GAP_DEEPDIVE_CHART_PAYLOAD_LOCK = threading.Lock()
-
-
 def _saved_gap_deepdive_manifest(year):
     if year in _GAP_DEEPDIVE_MANIFESTS:
         return _GAP_DEEPDIVE_MANIFESTS[year]
@@ -84,8 +82,8 @@ def _extract_explicit_financing_party(excerpt, role_phrase):
 
 def _sec_verified_gap_player(ticker, event_day):
     """Review issuer SEC filings in the six months before the event for named financing firms."""
-    from chart_app.keyword_compare import _keyword_match_excerpt, _keyword_sec_get, _keyword_ticker_map
-    cache_key = f"gap_sec_players_v3_{ticker}_{event_day}"
+    from chart_app.keyword_compare import _keyword_sec_get, _keyword_ticker_map
+    cache_key = f"gap_sec_players_v4_{ticker}_{event_day}"
     cached = cget(cache_key, 30 * 86400)
     if cached is not None:
         return cached
@@ -98,98 +96,80 @@ def _sec_verified_gap_player(ticker, event_day):
             cput(cache_key, result)
             return result
         day = dt.date.fromisoformat(event_day)
-        start = (day - dt.timedelta(days=180)).isoformat()
-        end = min(day + dt.timedelta(days=3), dt.date.today()).isoformat()
-        forms = '8-K,6-K,S-1,S-3,F-1,F-3,424B1,424B2,424B3,424B4,424B5,424B6,424B7'
-        disclosures = {}
-        roles = (('placement agent', 'Placement agent'), ('underwriter', 'Underwriter'),
-                 ('sales agent', 'Sales agent'), ('investment bank', 'Investment bank'),
-                 ('financial advisor', 'Financial advisor'), ('book-running manager', 'Book-running manager'))
-        for phrase, role_label in roles[:2]:
-            response = _keyword_sec_get('https://efts.sec.gov/LATEST/search-index',
-                params={'q': f'"{company["name"]}" AND "{phrase}"', 'dateRange': 'custom',
-                        'startdt': start, 'enddt': end, 'forms': forms, 'from': 0, 'size': 100}, timeout=25)
+        end_day = min(day + dt.timedelta(days=3), dt.date.today())
+        submissions_key = f"gap_sec_submissions_v1_{cik}"
+        submissions_data = cget(submissions_key, 12 * 3600)
+        if submissions_data is None:
+            response = _keyword_sec_get(f'https://data.sec.gov/submissions/CIK{cik}.json', timeout=20)
             response.raise_for_status()
-            hits = ((response.json().get('hits') or {}).get('hits') or [])
-            for hit in hits:
-                source = hit.get('_source') or {}
-                raw_ciks = source.get('ciks') or source.get('cik') or []
-                raw_ciks = raw_ciks if isinstance(raw_ciks, list) else [raw_ciks]
-                normalized_ciks=set()
-                for value in raw_ciks:
-                    try: normalized_ciks.add(str(int(str(value).lstrip('0') or '0')).zfill(10))
-                    except (TypeError,ValueError): continue
-                if cik not in normalized_ciks:
-                    continue
-                # Search highlights can omit the firm's name or the words linking
-                # it to the role. Read the filing context so the tag rests on an
-                # explicit relationship in the document itself.
-                document_hit = dict(hit)
-                document_hit['highlight'] = {}
-                document_hit['_source'] = {**source, 'highlight': {}}
-                excerpt = _keyword_match_excerpt(document_hit, phrase, fetch_document=True)
-                firm = _extract_explicit_financing_party(excerpt, phrase)
-                if not firm:
-                    continue
-                accession_match = re.search(r'\d{10}-\d{2}-\d{6}', str(hit.get('_id') or ''))
-                accession = accession_match.group(0) if accession_match else ''
-                if not accession:
-                    continue
-                filed = str(source.get('file_date') or source.get('display_date_filed') or '')
-                filing_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession.replace('-', '')}/{accession}-index.html"
-                disclosures[(role_label, firm)] = {'verified': True, 'role': role_label, 'name': firm,
-                    'filing_date': filed, 'filing_url': filing_url, 'evidence': excerpt[:420]}
-        # EFTS phrase searches can miss exhibit documents. Walk the issuer's
-        # actual recent submissions as a fallback and inspect every relevant
-        # offering filing in the full six-month window.
-        if not disclosures:
-            submissions = _keyword_sec_get(f'https://data.sec.gov/submissions/CIK{cik}.json', timeout=20)
-            submissions.raise_for_status()
-            recent = (((submissions.json().get('filings') or {}).get('recent')) or {})
-            accession_numbers = recent.get('accessionNumber') or []
-            forms_to_check = {'8-K', '6-K', 'S-1', 'S-3', 'F-1', 'F-3', 'FWP',
-                              '424B1', '424B2', '424B3', '424B4', '424B5', '424B6', '424B7'}
-            role_patterns = [(re.compile(r'\bplacement\s+agents?\b', re.I), 'placement agent', 'Placement agent'),
-                             (re.compile(r'\bunderwriters?\b', re.I), 'underwriter', 'Underwriter'),
-                             (re.compile(r'\bsales\s+agents?\b', re.I), 'sales agent', 'Sales agent'),
-                             (re.compile(r'\binvestment\s+banks?\b', re.I), 'investment bank', 'Investment bank'),
-                             (re.compile(r'\bfinancial\s+advisors?\b', re.I), 'financial advisor', 'Financial advisor'),
-                             (re.compile(r'\bbook[- ]running\s+managers?\b', re.I), 'book-running manager', 'Book-running manager')]
-            from html import unescape
-            from urllib.parse import quote
-            for index, accession in enumerate(accession_numbers):
-                filed = str((recent.get('filingDate') or [])[index] if index < len(recent.get('filingDate') or []) else '')
-                form = str((recent.get('form') or [])[index] if index < len(recent.get('form') or []) else '')
-                primary = str((recent.get('primaryDocument') or [])[index] if index < len(recent.get('primaryDocument') or []) else '')
-                try:
-                    filing_day = dt.date.fromisoformat(filed)
-                except ValueError:
-                    continue
-                if filing_day < day - dt.timedelta(days=180) or filing_day > dt.date.fromisoformat(end) or form not in forms_to_check:
-                    continue
-                if not re.fullmatch(r'[\w./-]+\.(?:htm|html|txt|xml)', primary, re.I):
-                    continue
-                accession = str(accession)
-                accession_path = accession.replace('-', '')
-                filing_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_path}/{accession}-index.html"
-                document_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_path}/{quote(primary, safe='.-_/')}"
-                try:
-                    response = _keyword_sec_get(document_url, timeout=15)
-                    if response.status_code >= 400:
-                        continue
-                    body = re.sub(r'(?is)<(script|style).*?</\1>', ' ', response.text)
-                    body = unescape(re.sub(r'<[^>]+>', ' ', body))
-                    body = re.sub(r'\s+', ' ', body)
-                except Exception:
-                    continue
-                for pattern, phrase, role_label in role_patterns:
-                    for match in pattern.finditer(body):
-                        excerpt = body[max(0, match.start()-340):min(len(body), match.end()+340)]
-                        firm = _extract_explicit_financing_party(excerpt, phrase)
-                        if firm:
-                            key = (role_label, firm)
-                            disclosures.setdefault(key, {'verified': True, 'role': role_label, 'name': firm,
-                                'filing_date': filed, 'filing_url': filing_url, 'evidence': excerpt[:420]})
+            submissions_data = response.json()
+            cput(submissions_key, submissions_data)
+        recent = (((submissions_data.get('filings') or {}).get('recent')) or {})
+        forms_to_check = {'8-K', '6-K', 'S-1', 'S-3', 'F-1', 'F-3', 'FWP',
+                          '424B1', '424B2', '424B3', '424B4', '424B5', '424B6', '424B7'}
+        role_patterns = [(re.compile(r'\bplacement\s+agents?\b', re.I), 'placement agent', 'Placement agent'),
+                         (re.compile(r'\bunderwriters?\b', re.I), 'underwriter', 'Underwriter'),
+                         (re.compile(r'\bsales\s+agents?\b', re.I), 'sales agent', 'Sales agent'),
+                         (re.compile(r'\binvestment\s+banks?\b', re.I), 'investment bank', 'Investment bank'),
+                         (re.compile(r'\bfinancial\s+advisors?\b', re.I), 'financial advisor', 'Financial advisor'),
+                         (re.compile(r'\bbook[- ]running\s+managers?\b', re.I), 'book-running manager', 'Book-running manager')]
+        from html import unescape
+        from urllib.parse import quote
+        candidates = []
+        for index, accession in enumerate(recent.get('accessionNumber') or []):
+            filed = str((recent.get('filingDate') or [])[index] if index < len(recent.get('filingDate') or []) else '')
+            form = str((recent.get('form') or [])[index] if index < len(recent.get('form') or []) else '')
+            primary = str((recent.get('primaryDocument') or [])[index] if index < len(recent.get('primaryDocument') or []) else '')
+            try:
+                filing_day = dt.date.fromisoformat(filed)
+            except ValueError:
+                continue
+            if filing_day < day - dt.timedelta(days=184) or filing_day > end_day or form not in forms_to_check:
+                continue
+            if not re.fullmatch(r'[\w./-]+\.(?:htm|html|txt|xml)', primary, re.I):
+                continue
+            accession = str(accession)
+            accession_path = accession.replace('-', '')
+            filing_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_path}/{accession}-index.html"
+            document_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_path}/{quote(primary, safe='.-_/')}"
+            candidates.append({'accession': accession, 'filed': filed, 'form': form,
+                               'filing_url': filing_url, 'document_url': document_url,
+                               'cache_key': f"gap_sec_filing_players_v1_{cik}_{accession.replace('-', '')}"})
+
+        def inspect_filing(filing):
+            filing_cache = cget(filing['cache_key'], 180 * 86400)
+            if filing_cache is not None:
+                return filing, filing_cache
+            try:
+                response = _keyword_sec_get(filing['document_url'], timeout=18)
+                if response.status_code >= 400:
+                    return filing, []
+                body = re.sub(r'(?is)<(script|style).*?</\1>', ' ', response.text)
+                body = unescape(re.sub(r'<[^>]+>', ' ', body))
+                body = re.sub(r'\s+', ' ', body)
+            except Exception:
+                return filing, []
+            found = {}
+            for pattern, phrase, role_label in role_patterns:
+                for match in pattern.finditer(body):
+                    excerpt = body[max(0, match.start()-420):min(len(body), match.end()+420)]
+                    firm = _extract_explicit_financing_party(excerpt, phrase)
+                    if firm:
+                        found[(role_label, firm)] = {'role': role_label, 'name': firm,
+                            'filing_date': filing['filed'], 'filing_url': filing['filing_url'],
+                            'form': filing['form'], 'evidence': excerpt[:420]}
+            found_list = list(found.values())
+            cput(filing['cache_key'], found_list)
+            return filing, found_list
+
+        disclosures = {}
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=min(6, max(1, len(candidates)))) as pool:
+            futures = [pool.submit(inspect_filing, filing) for filing in candidates]
+            for future in as_completed(futures):
+                filing, players = future.result()
+                for player in players:
+                    disclosures[(player['role'], player['name'])] = {'verified': True, **player}
         players = sorted(disclosures.values(), key=lambda player: (player['role'], player['name'].casefold()))
         result = {'verified': bool(players), 'players': players}
         if len(players) == 1:

@@ -51,26 +51,25 @@ _kw_sec_last_request = 0.0
 
 
 def _keyword_sec_get(url, params=None, timeout=25):
-    """Serialize keyword-search SEC traffic to stay comfortably below 10 req/s."""
+    """Pace SEC request starts below 10 req/s while allowing downloads to overlap."""
     global _kw_sec_last_request
-    with _kw_sec_request_lock:
-        wait = 0.12 - (time.monotonic() - _kw_sec_last_request)
-        if wait > 0:
-            time.sleep(wait)
-        for attempt in range(3):
-            try:
-                response = requests.get(url, params=params,
-                                        headers={"User-Agent": SEC_UA, "Accept-Encoding": "gzip, deflate"},
-                                        timeout=timeout)
-                _kw_sec_last_request = time.monotonic()
-                if response.status_code not in (429, 503) or attempt == 2:
-                    return response
-            except requests.RequestException:
-                if attempt == 2:
-                    raise
-                _kw_sec_last_request = time.monotonic()
-            time.sleep(0.5 * (attempt + 1))
-        return response
+    for attempt in range(3):
+        with _kw_sec_request_lock:
+            wait = 0.13 - (time.monotonic() - _kw_sec_last_request)
+            if wait > 0:
+                time.sleep(wait)
+            _kw_sec_last_request = time.monotonic()
+        try:
+            response = requests.get(url, params=params,
+                                    headers={"User-Agent": SEC_UA, "Accept-Encoding": "gzip, deflate"},
+                                    timeout=timeout)
+            if response.status_code not in (429, 503) or attempt == 2:
+                return response
+        except requests.RequestException:
+            if attempt == 2:
+                raise
+        time.sleep(0.5 * (attempt + 1))
+    return response
 
 
 _KW_PLAYER_ROLES = [
