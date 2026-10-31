@@ -53,7 +53,10 @@ def _saved_gap_deepdive_manifest(year):
 def _extract_explicit_financing_party(excerpt, role_phrase):
     """Fail closed: return a firm only when the filing explicitly links it to this role."""
     role = re.escape(role_phrase)
-    suffix = r'(?:L\.L\.C\.?|LLC|Incorporated|Inc\.?|Corporation|Corp\.?|Limited|Ltd\.?|L\.P\.?|LP|LLP|PLC|N\.A\.?|Bank|Company|Co\.?|S\.A\.?)'
+    role = {'underwriter': r'underwriters?', 'placement agent': r'placement agents?',
+            'sales agent': r'sales agents?', 'investment bank': r'investment banks?',
+            'financial advisor': r'financial advisors?', 'book-running manager': r'book[- ]running managers?'} .get(role_phrase.casefold(), role)
+    suffix = r'(?:L\.L\.C\.?|LLC|Incorporated|Inc\.?|Corporation|Corp\.?|Limited|Ltd\.?|L\.P\.?|LP|LLP|PLC|N\.A\.?|Bank|Company|Co\.?|S\.A\.?|Group|Partners?|Securities|Capital|Financial|Advisors?|Advisory|Markets)'
     entity = rf"[A-Z0-9][A-Za-z0-9&.'’()\-/]*(?:\s+[A-Za-z0-9&.'’()\-/]+){{0,5}}\s+{suffix}"
     role_match = re.search(rf'\b{role}\b', excerpt or '', re.I)
     if not role_match:
@@ -80,9 +83,9 @@ def _extract_explicit_financing_party(excerpt, role_phrase):
 
 
 def _sec_verified_gap_player(ticker, event_day):
-    """Find a named placement agent/underwriter in issuer SEC filings; ambiguity yields no tag."""
+    """Review issuer SEC filings in the six months before the event for named financing firms."""
     from chart_app.keyword_compare import _keyword_match_excerpt, _keyword_sec_get, _keyword_ticker_map
-    cache_key = f"gap_sec_players_v2_{ticker}_{event_day}"
+    cache_key = f"gap_sec_players_v3_{ticker}_{event_day}"
     cached = cget(cache_key, 30 * 86400)
     if cached is not None:
         return cached
@@ -99,7 +102,10 @@ def _sec_verified_gap_player(ticker, event_day):
         end = min(day + dt.timedelta(days=3), dt.date.today()).isoformat()
         forms = '8-K,6-K,S-1,S-3,F-1,F-3,424B1,424B2,424B3,424B4,424B5,424B6,424B7'
         disclosures = {}
-        for phrase, role_label in (('placement agent', 'Placement agent'), ('underwriter', 'Underwriter')):
+        roles = (('placement agent', 'Placement agent'), ('underwriter', 'Underwriter'),
+                 ('sales agent', 'Sales agent'), ('investment bank', 'Investment bank'),
+                 ('financial advisor', 'Financial advisor'), ('book-running manager', 'Book-running manager'))
+        for phrase, role_label in roles[:2]:
             response = _keyword_sec_get('https://efts.sec.gov/LATEST/search-index',
                 params={'q': f'"{company["name"]}" AND "{phrase}"', 'dateRange': 'custom',
                         'startdt': start, 'enddt': end, 'forms': forms, 'from': 0, 'size': 100}, timeout=25)
@@ -133,6 +139,57 @@ def _sec_verified_gap_player(ticker, event_day):
                 filing_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession.replace('-', '')}/{accession}-index.html"
                 disclosures[(role_label, firm)] = {'verified': True, 'role': role_label, 'name': firm,
                     'filing_date': filed, 'filing_url': filing_url, 'evidence': excerpt[:420]}
+        # EFTS phrase searches can miss exhibit documents. Walk the issuer's
+        # actual recent submissions as a fallback and inspect every relevant
+        # offering filing in the full six-month window.
+        if not disclosures:
+            submissions = _keyword_sec_get(f'https://data.sec.gov/submissions/CIK{cik}.json', timeout=20)
+            submissions.raise_for_status()
+            recent = (((submissions.json().get('filings') or {}).get('recent')) or {})
+            accession_numbers = recent.get('accessionNumber') or []
+            forms_to_check = {'8-K', '6-K', 'S-1', 'S-3', 'F-1', 'F-3', 'FWP',
+                              '424B1', '424B2', '424B3', '424B4', '424B5', '424B6', '424B7'}
+            role_patterns = [(re.compile(r'\bplacement\s+agents?\b', re.I), 'placement agent', 'Placement agent'),
+                             (re.compile(r'\bunderwriters?\b', re.I), 'underwriter', 'Underwriter'),
+                             (re.compile(r'\bsales\s+agents?\b', re.I), 'sales agent', 'Sales agent'),
+                             (re.compile(r'\binvestment\s+banks?\b', re.I), 'investment bank', 'Investment bank'),
+                             (re.compile(r'\bfinancial\s+advisors?\b', re.I), 'financial advisor', 'Financial advisor'),
+                             (re.compile(r'\bbook[- ]running\s+managers?\b', re.I), 'book-running manager', 'Book-running manager')]
+            from html import unescape
+            from urllib.parse import quote
+            for index, accession in enumerate(accession_numbers):
+                filed = str((recent.get('filingDate') or [])[index] if index < len(recent.get('filingDate') or []) else '')
+                form = str((recent.get('form') or [])[index] if index < len(recent.get('form') or []) else '')
+                primary = str((recent.get('primaryDocument') or [])[index] if index < len(recent.get('primaryDocument') or []) else '')
+                try:
+                    filing_day = dt.date.fromisoformat(filed)
+                except ValueError:
+                    continue
+                if filing_day < day - dt.timedelta(days=180) or filing_day > dt.date.fromisoformat(end) or form not in forms_to_check:
+                    continue
+                if not re.fullmatch(r'[\w./-]+\.(?:htm|html|txt|xml)', primary, re.I):
+                    continue
+                accession = str(accession)
+                accession_path = accession.replace('-', '')
+                filing_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_path}/{accession}-index.html"
+                document_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_path}/{quote(primary, safe='.-_/')}"
+                try:
+                    response = _keyword_sec_get(document_url, timeout=15)
+                    if response.status_code >= 400:
+                        continue
+                    body = re.sub(r'(?is)<(script|style).*?</\1>', ' ', response.text)
+                    body = unescape(re.sub(r'<[^>]+>', ' ', body))
+                    body = re.sub(r'\s+', ' ', body)
+                except Exception:
+                    continue
+                for pattern, phrase, role_label in role_patterns:
+                    for match in pattern.finditer(body):
+                        excerpt = body[max(0, match.start()-340):min(len(body), match.end()+340)]
+                        firm = _extract_explicit_financing_party(excerpt, phrase)
+                        if firm:
+                            key = (role_label, firm)
+                            disclosures.setdefault(key, {'verified': True, 'role': role_label, 'name': firm,
+                                'filing_date': filed, 'filing_url': filing_url, 'evidence': excerpt[:420]})
         players = sorted(disclosures.values(), key=lambda player: (player['role'], player['name'].casefold()))
         result = {'verified': bool(players), 'players': players}
         if len(players) == 1:
@@ -162,6 +219,12 @@ def _gap_deepdive_yahoo_news(ticker):
                 item = _normalize_yahoo_news(article, "Yahoo Finance news")
                 if not item or not item.get("url"):
                     continue
+                content = article.get("content") if isinstance(article.get("content"), dict) else article
+                exact_publish_time = content.get("providerPublishTime") or content.get("pubDate")
+                if exact_publish_time is not None:
+                    item["published"] = (pd.to_datetime(exact_publish_time, unit="s", utc=True).isoformat()
+                                          if isinstance(exact_publish_time, (int, float))
+                                          else str(exact_publish_time))
                 host = (urlparse(item["url"]).hostname or "").lower()
                 if host not in ("finance.yahoo.com", "www.finance.yahoo.com"):
                     continue
