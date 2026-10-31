@@ -966,7 +966,7 @@ function renderTab(tab, r, isRefresh){
     }).join('') : `<div class="foot">${esc(r.news_status || 'No press releases found on Yahoo Finance.')}</div>`) + `</div>`;
   const reverseSplits=r.reverse_splits||[];
   o += `<div class="panel"><div class="ttl">Reverse Splits · ${reverseSplits.length} ${reverseSplits.length===1?'event':'events'}</div>`+
-    (reverseSplits.length?`<div class="kv"><span>Reverse split date${reverseSplits.length===1?'':'s'}</span><span>${reverseSplits.map(item=>`${esc(formatDateMDY(item.date))} · ${esc(item.ratio)} reverse`).join(' · ')}</span></div>`:`<div class="foot">No reverse splits found in available split history.</div>`)+`</div>`;
+    (reverseSplits.length?`<div class="kv">${reverseSplits.map(item=>`<span>Reverse split</span><span>${esc(formatDateMDY(item.date))} · ${esc(item.ratio)} reverse</span>`).join('')}</div>`:`<div class="foot">No reverse splits found in available split history.</div>`)+`</div>`;
   o += `<div class="panel two"><div><div class="ttl">${esc(T.p1)}</div>${kv(r.p1.left)}</div><div>${kv(r.p1.right)}</div></div>`;
   if(r.open_hod_stats){
     const s=r.open_hod_stats, fmt=x=>x==null?'—':`${x>=0?'+':''}${(x*100).toFixed(0)}%`, line=x=>`${fmt(x.median)}   avg ${fmt(x.avg)}   (${x.n} ${x.n===1?'day':'days'})`;
