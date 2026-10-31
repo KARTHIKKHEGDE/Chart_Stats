@@ -1546,7 +1546,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
     }
     clipP();
     if(cv._showTWAP!==false){poly(twap,'#c084fc',isLarge?1.9:1.4);x.setLineDash([2,3]);poly(activeTwap,'#e879f9',isLarge?1.5:1.1);x.setLineDash([]);}
-    if(cv._showHODAVWAP!==false){x.setLineDash([5,3]);poly(avh,'#ffd23f',isLarge?2.2:1.5);x.setLineDash([]);}
+    if(cv._showHODAVWAP===true){x.setLineDash([5,3]);poly(avh,'#ffd23f',isLarge?2.2:1.5);x.setLineDash([]);}
     const anchors=cv._avwapAnchors;
     if(anchors&&Number.isInteger(anchors.a)&&Number.isInteger(anchors.b)&&anchors.b>anchors.a){
       const anchored=new Array(b.t.length).fill(null);let vol=0,dollar=0;
