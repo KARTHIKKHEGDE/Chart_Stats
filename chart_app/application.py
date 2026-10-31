@@ -502,8 +502,8 @@ def run_job(job, t, refresh):
                 if prior_close is not None:
                     old_price = float(prior_close)
                     adjusted_price = old_price * ratio_factor
-                    price_conversion = (f"old ${old_price:,.4f}".rstrip("0").rstrip(".") +
-                                        f" → split adjusted ${adjusted_price:,.4f}".rstrip("0").rstrip("."))
+                    price_conversion = (f"${old_price:,.4f}".rstrip("0").rstrip(".") +
+                                        f" → ${adjusted_price:,.4f}".rstrip("0").rstrip("."))
                 reverse_splits.append({"date": split_date, "ratio": f"{split_from:g}:1",
                                        "price_conversion": price_conversion})
         reverse_splits.sort(key=lambda item: item["date"], reverse=True)
