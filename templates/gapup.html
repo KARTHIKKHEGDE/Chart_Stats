@@ -1990,6 +1990,7 @@ const gapDeepDivePlayers=new Map();
 const gapDeepDiveEventDays=new Map(),gapDeepDiveEventPending=new Map(),gapDeepDiveEventPreviousDays=new Map();
 let gapDeepDiveCurrent=null,gapDeepDiveItems=[],gapDeepDiveJobId='',gapDeepDiveGroupBy='ticker',gapDeepDiveViewObservers=[],gapDeepDiveStatusBase='',gapDeepDiveGroupRequest=0;
 const gapDeepDiveKey=item=>`${item.ticker}|${item.date}`;
+const gapDeepDivePlayerKey=item=>`${String(item.ticker||'').toUpperCase()}|${item.date}`;
 let gapDeepDiveChartQueue=[],gapDeepDiveChartBatchTimer=null,gapDeepDiveChartActiveBatches=0;
 let gapDeepDiveBrowserDbPromise=null;
 function gapDeepDiveOpenBrowserCache(){
@@ -2019,11 +2020,11 @@ function loadGapDeepDiveChart(item,jobId){
   gapDeepDiveChartPending.set(key,pending);pending.then(()=>gapDeepDiveChartPending.delete(key),()=>gapDeepDiveChartPending.delete(key));return pending;
 }
 async function loadGapDeepDivePlayer(item,jobId){
-  const key=gapDeepDiveKey(item);
-  const showTag=data=>{if(data?.verified&&gapDeepDiveCurrent&&gapDeepDiveKey(gapDeepDiveCurrent.item)===key){const tag=$('#gap_chart_player_tag'),players=data.players?.length?data.players:[data];tag.textContent=players.length===1?`${players[0].role} · ${players[0].name}`:`${players.length} SEC financing parties`;tag.href=players[0].filing_url;tag.title=players.map(player=>`${player.role} · ${player.name} · filed ${formatDateMDY(player.filing_date||item.date)}`).join('\n')+'\nClick to open a filing.';tag.hidden=false;}};
-  if(gapDeepDivePlayers.has(key)){const cached=await gapDeepDivePlayers.get(key);showTag(cached);return cached;}
+  const key=gapDeepDivePlayerKey(item);
+  const showTag=data=>{if(data?.verified&&gapDeepDiveCurrent&&gapDeepDivePlayerKey(gapDeepDiveCurrent.item)===key){const tag=$('#gap_chart_player_tag'),players=data.players?.length?data.players:[data];tag.textContent=players.length===1?`${players[0].role} · ${players[0].name}`:`${players.length} SEC financing parties`;tag.href=players[0].filing_url;tag.title=players.map(player=>`${player.role} · ${player.name} · filed ${formatDateMDY(player.filing_date||item.date)}`).join('\n')+'\nClick to open a filing.';tag.hidden=false;}};
+  if(gapDeepDivePlayers.has(key)){const cached=await gapDeepDivePlayers.get(key);item._gapPlayerData=cached;showTag(cached);return cached;}
   const url='/api/gap-deepdive/'+encodeURIComponent(jobId)+'/player?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken)+'&ticker='+encodeURIComponent(item.ticker)+'&date='+encodeURIComponent(item.date);
-  const pending=(async()=>{try{const response=await fetch(url);return await gapDeepDiveJson(response);}catch(error){return {verified:false,players:[],error:true};}})();gapDeepDivePlayers.set(key,pending);const data=await pending;gapDeepDivePlayers.set(key,data);showTag(data);return data;
+  const pending=(async()=>{try{const response=await fetch(url);return await gapDeepDiveJson(response);}catch(error){return {verified:false,players:[],error:true};}})();gapDeepDivePlayers.set(key,pending);const data=await pending;gapDeepDivePlayers.set(key,data);item._gapPlayerData=data;showTag(data);return data;
 }
 async function loadGapDeepDiveEvents(item,jobId,dates,includePrevious=false){
   const ticker=String(item.ticker||'').toUpperCase(),unique=[...new Set((dates||[]).filter(Boolean))],missing=unique.filter(day=>!gapDeepDiveEventDays.has(`${ticker}|${day}`)),previousKey=`${ticker}|previous|${[...unique].sort()[0]||''}`,needPrevious=includePrevious&&!gapDeepDiveEventPreviousDays.has(previousKey);
@@ -2051,7 +2052,7 @@ function renderGapDeepDiveGroups(items,jobId,mode=gapDeepDiveGroupBy){
     const data=item._gapPlayerData,players=data?.players?.length?data.players:(data?.verified&&data.name?[data]:[]);
     if(data?.error){failed.push({item,index});return;}
     if(!players.length){unmatched.push({item,index});return;}
-    players.forEach(player=>{const key=`${player.role}|${player.name}`;if(!playerGroups.has(key))playerGroups.set(key,{title:key,player,entries:[]});playerGroups.get(key).entries.push({item,index});});
+    players.forEach(player=>{const normalizedName=String(player.name||'').toLocaleLowerCase().replace(/[^a-z0-9]+/g,' ').trim(),key=normalizedName||`${player.role}|${player.filing_url}`;if(!playerGroups.has(key))playerGroups.set(key,{title:player.name||player.role,player,roles:new Set(),entries:[],entryKeys:new Set()});const group=playerGroups.get(key),entryKey=gapDeepDiveKey(item);group.roles.add(player.role||'Financing party');if(!group.entryKeys.has(entryKey)){group.entryKeys.add(entryKey);group.entries.push({item,index});}});
   });
   let groups;
   if(mode==='player'){
@@ -2062,7 +2063,7 @@ function renderGapDeepDiveGroups(items,jobId,mode=gapDeepDiveGroupBy){
   const sessionMarkup=(entry,groupIndex)=>{const {item,index}=entry;return `<article class="gap-session-card"><header class="gap-session-head"><strong>${mode==='player'?`${esc(item.ticker)} · `:''}${esc(formatDateMDY(item.date))}</strong><span style="color:#64d99b;font-size:13px">PM high +${(item.move*100).toFixed(1)}%</span><span style="color:#b6c0ca;font-size:13px">PM $vol $${(item.pm_dollar_volume/1e6).toFixed(1)}M</span><button class="gap-copy-png" data-index="${index}" disabled style="margin-left:auto;height:32px;font-size:12px;border-color:#555">Copy PNG</button></header><div class="gap-session-canvas-wrap"><canvas id="gap_deepdive_chart_${index}_${groupIndex}" data-index="${index}"></canvas><span class="gap-chart-loading" style="position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);color:#89939e;font-size:14px">Scroll here to load this chart</span></div><div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#aab4bf;padding:7px 2px"><span style="color:#fff">━ VWAP</span><span style="color:#c084fc">━ TWAP</span><span style="color:#ffe45c">AVWAP · set A/B in expanded chart</span><span style="color:#b0b0b0">░ Premarket</span><span>1-minute OHLCV · Postmarket to 20:00 ET · X-axis IST · click to expand</span></div></article>`;};
   grid.innerHTML=groups.map((group,groupIndex)=>{
     const entries=mode==='player'?group.entries.slice().sort((a,b)=>String(a.item.date).localeCompare(String(b.item.date))||String(a.item.ticker).localeCompare(String(b.item.ticker))):group.entries;
-    const heading=mode==='player'&&group.player?`<strong>${esc(group.player.role)} · ${esc(group.player.name)}</strong><a href="${esc(group.player.filing_url)}" target="_blank" rel="noopener noreferrer" title="Open the SEC filing">SEC filing</a>`:`<strong>${esc(group.title)}</strong>`;
+    const heading=mode==='player'&&group.player?`<strong>${esc(group.title)}</strong><span class="gap-player-date">${esc([...group.roles].join(' · '))}</span><a href="${esc(group.player.filing_url)}" target="_blank" rel="noopener noreferrer" title="Open the SEC filing">SEC filing</a>`:`<strong>${esc(group.title)}</strong>`;
     const summary=mode==='player'?group.kind==='unmatched'?'No unambiguous underwriter or placement-agent disclosure was found for these sessions.':group.kind==='failed'?'SEC financing-player lookup failed for these sessions.':`Qualifying gap-up sessions · oldest to newest · ${group.player?.filing_date?`SEC filing date ${esc(formatDateMDY(group.player.filing_date))}`:''}`:'Checking SEC offering disclosures around these gap-up dates…';
     return `<section class="gap-ticker-group ${mode==='player'?'gap-player-group':''}" data-group-index="${groupIndex}"><header class="gap-ticker-head">${heading}<span class="gap-ticker-count">${entries.length} qualifying gap-up session${entries.length===1?'':'s'}</span></header><div class="gap-player-summary">${summary}</div><div class="gap-session-grid">${entries.map(entry=>sessionMarkup(entry,groupIndex)).join('')}</div></section>`;
   }).join('');
@@ -2076,9 +2077,17 @@ function renderGapDeepDiveGroups(items,jobId,mode=gapDeepDiveGroupBy){
   grid.querySelectorAll('.gap-copy-png').forEach(btn=>btn.onclick=async()=>{const canvas=btn.closest('.gap-session-card').querySelector('canvas');try{const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw new Error('Could not render PNG');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);btn.textContent='Copied ✓';setTimeout(()=>btn.textContent='Copy PNG',1300);}catch(error){$('#gap_deepdive_status').textContent='PNG copy unavailable: '+error.message;}});
 }
 async function ensureGapDeepDivePlayers(items,jobId){
-  let next=0,done=0;const status=$('#gap_deepdive_status');
-  const worker=async()=>{while(next<items.length){const item=items[next++];if(!item._gapPlayerData)item._gapPlayerData=await loadGapDeepDivePlayer(item,jobId);done++;if(gapDeepDiveGroupBy==='player')status.textContent=`Checking SEC financing players · ${done}/${items.length} gap-up sessions…`;}};
-  await Promise.all(Array.from({length:Math.min(8,items.length)},worker));
+  const status=$('#gap_deepdive_status'),unique=new Map();let done=0;
+  for(const item of items){if(item._gapPlayerData)continue;const key=gapDeepDivePlayerKey(item);if(!gapDeepDivePlayers.has(key)&&!unique.has(key))unique.set(key,item);}
+  const pending=[...items].filter(item=>!item._gapPlayerData&&gapDeepDivePlayers.has(gapDeepDivePlayerKey(item))).map(item=>gapDeepDivePlayers.get(gapDeepDivePlayerKey(item)));
+  const missing=[...unique.entries()],batches=[];for(let i=0;i<missing.length;i+=24)batches.push(missing.slice(i,i+24));
+  let next=0;const worker=async()=>{while(next<batches.length){const batch=batches[next++],keys=batch.map(([key])=>key),query=new URLSearchParams({user:currentUser||'',token:sessionToken||''});let requestPromise;
+      const request=(async()=>{try{const response=await fetch('/api/gap-deepdive/'+encodeURIComponent(jobId)+'/players?'+query.toString(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessions:batch.map(([,item])=>({ticker:item.ticker,date:item.date}))})}),data=await gapDeepDiveJson(response);return data.players||{};}catch{return {};}})();requestPromise=request;
+      batch.forEach(([,item],i)=>{const key=keys[i],entryPromise=requestPromise.then(players=>players[key]||{verified:false,players:[],error:true});gapDeepDivePlayers.set(key,entryPromise);});
+      const loaded=await Promise.all(batch.map(([,item],i)=>gapDeepDivePlayers.get(keys[i])));loaded.forEach((data,i)=>{const [key,item]=batch[i];item._gapPlayerData=data;gapDeepDivePlayers.set(key,data);});done+=batch.length;if(gapDeepDiveGroupBy==='player')status.textContent=`Checking SEC financing players · ${done}/${missing.length} new sessions (${items.length} total)…`;
+    }};
+  await Promise.all([Promise.all(pending),...Array.from({length:Math.min(3,batches.length)},worker)]);
+  for(const item of items)if(!item._gapPlayerData&&gapDeepDivePlayers.has(gapDeepDivePlayerKey(item)))item._gapPlayerData=await gapDeepDivePlayers.get(gapDeepDivePlayerKey(item));
   if(gapDeepDiveGroupBy==='player')status.textContent=`${gapDeepDiveStatusBase} · financing-player groups ready · gap-ups sorted oldest to newest`;
 }
 async function loadGapDeepDiveFloat(item,jobId){

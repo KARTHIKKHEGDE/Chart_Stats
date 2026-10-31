@@ -529,6 +529,36 @@ def gap_deepdive_player(job_id):
     return jsonify(_sec_verified_gap_player(ticker,day))
 
 
+@app.route('/api/gap-deepdive/<job_id>/players', methods=['POST'])
+def gap_deepdive_players(job_id):
+    """Fetch cached SEC financing parties for a batch of sessions in parallel."""
+    user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()
+    if user not in _auth.ALLOWED_USERS or not _db_validate_session(user,token): return jsonify({'error':'Unauthorized'}),401
+    sessions=(request.get_json(silent=True) or {}).get('sessions') or []
+    if not isinstance(sessions,list) or not sessions or len(sessions)>32:
+        return jsonify({'error':'Choose between 1 and 32 sessions.'}),400
+    job=cget(f"gap_deepdive_job_{job_id}") or GAP_DEEPDIVE_JOBS.get(job_id)
+    if not job:
+        manifest=_saved_gap_deepdive_manifest(dt.date.today().year)
+        if manifest and manifest.get('job')==job_id: job=manifest
+    if not job: return jsonify({'error':'Saved scan not found.'}),404
+    available={(str(item.get('ticker') or '').upper(),str(item.get('date') or '')) for item in job.get('results',[])}
+    normalized=[]
+    for session in sessions:
+        if not isinstance(session,dict): return jsonify({'error':'Invalid session.'}),400
+        ticker=str(session.get('ticker') or '').strip().upper(); day=str(session.get('date') or '').strip()
+        if not re.fullmatch(r'[A-Z.\-]{1,10}',ticker): return jsonify({'error':'Invalid ticker.'}),400
+        try: dt.date.fromisoformat(day)
+        except ValueError: return jsonify({'error':'Invalid session date.'}),400
+        if (ticker,day) not in available: return jsonify({'error':'Session is not part of this saved scan.'}),404
+        normalized.append((ticker,day))
+    normalized=list(dict.fromkeys(normalized))
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(4,len(normalized))) as pool:
+        values=list(pool.map(lambda pair:_sec_verified_gap_player(*pair),normalized))
+    return jsonify({'players':{f'{ticker}|{day}':value for (ticker,day),value in zip(normalized,values)}})
+
+
 @app.route('/api/gap-deepdive/<job_id>/events')
 def gap_deepdive_events(job_id):
     user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()
