@@ -425,10 +425,11 @@ def twap_frame_paths(df, pc, full=True):
     return tw, dtp, spread, active
 
 
-def bars2(df):
-    """1-minute OHLCV + continuous VWAP, 04:00 -> 16:00 ET, for interactive chart timeframes."""
+def bars2(df, include_after_hours=False):
+    """1-minute OHLCV + continuous VWAP for interactive chart timeframes."""
     mm = df.index.hour * 60 + df.index.minute
-    s = df[(mm >= PM_START) & (mm < RG_END)]
+    end = 1200 if include_after_hours else RG_END
+    s = df[(mm >= PM_START) & (mm < end)]
     if s.empty:
         return None
     tp = (s.h + s.l + s.c) / 3
@@ -682,13 +683,14 @@ def metrics(df, pc, full=True):
     return r
 
 
-def chart_pack(df, m, pc, day, float_shares=None):
+def chart_pack(df, m, pc, day, float_shares=None, include_after_hours=False):
     """Everything the browser needs for one 2-min chart (bars + VWAP + entry-model signals)."""
     sig = [{"name": k, "m": v["m"], "p": v["p"], "stop_m": v["stop_m"], "pnl": v["pnl"]}
            for k, v in (m.get("models") or {}).items()]
-    return {"bars": bars2(df), "date": str(day), "pc": pc, "open": m.get("open"), "pmh": m.get("pm_high"),
+    return {"bars": bars2(df, include_after_hours), "date": str(day), "pc": pc, "open": m.get("open"), "pmh": m.get("pm_high"),
             "off": ist_off(day), "stop": STOP_PCT, "sig": sig, "float_shares": float_shares,
-            "cover": ({"m": m["close_min"], "p": m["close"]} if m.get("rg") else None)}
+            "cover": ({"m": m["close_min"], "p": m["close"]} if m.get("rg") else None),
+            "after_hours": bool(include_after_hours)}
 
 
 def float_at(day, ctx):

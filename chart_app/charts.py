@@ -258,7 +258,7 @@ def gap_deepdive_chart(job_id):
         if index is None or index==0: return jsonify({'error':'No previous close is available for this session.'}),404
         frame=minute_df(ticker,day)
         if frame is None or frame.empty: return jsonify({'error':'Cached intraday candles are unavailable.'}),404
-        packed=chart_pack(frame,metrics(frame,float(daily[index-1]['c']),True),float(daily[index-1]['c']),dt.date.fromisoformat(day))
+        packed=chart_pack(frame,metrics(frame,float(daily[index-1]['c']),True),float(daily[index-1]['c']),dt.date.fromisoformat(day),include_after_hours=True)
         return jsonify({'chart':packed})
     except Exception as exc:
         return jsonify({'error':f'{type(exc).__name__}: {exc}'}),502
