@@ -264,6 +264,32 @@ def gap_deepdive_chart(job_id):
         return jsonify({'error':f'{type(exc).__name__}: {exc}'}),502
 
 
+@app.route('/api/gap-deepdive/<job_id>/float')
+def gap_deepdive_float(job_id):
+    user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()
+    ticker=(request.args.get('ticker') or '').strip().upper()
+    if user not in _auth.ALLOWED_USERS or not _db_validate_session(user,token): return jsonify({'error':'Unauthorized'}),401
+    if not re.fullmatch(r'[A-Z.\-]{1,10}',ticker): return jsonify({'error':'Invalid ticker'}),400
+    from chart_app.application import cget,cput
+    job=cget(f"gap_deepdive_job_{job_id}") or GAP_DEEPDIVE_JOBS.get(job_id)
+    if not job:
+        manifest=_saved_gap_deepdive_manifest(dt.date.today().year)
+        if manifest and manifest.get('job')==job_id: job=manifest
+    if not job or not any(item.get('ticker')==ticker for item in job.get('results',[])):
+        return jsonify({'error':'Ticker is not part of this scan.'}),404
+    key=f"gap_deepdive_float_{ticker}"
+    cached=cget(key,30*86400)
+    if cached is None:
+        try:
+            from chart_app.runner import poly_float
+            shares,asof,percent,error=poly_float(ticker)
+            cached={'float_shares':shares,'asof':asof,'float_percent':percent,'error':error}
+        except Exception as exc:
+            cached={'float_shares':None,'error':str(exc)}
+        cput(key,cached)
+    return jsonify(cached)
+
+
 @app.route('/api/gap-deepdive/<job_id>/player')
 def gap_deepdive_player(job_id):
     user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()

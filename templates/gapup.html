@@ -133,7 +133,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
     <section style="width:98vw;height:97vh;max-width:2200px;display:flex;flex-direction:column;background:#07090c;border:1px solid #35404a;border-radius:6px;overflow:hidden">
       <header style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 14px;background:#101419;border-bottom:1px solid #29313a">
         <strong id="gap_chart_title" style="font-size:17px;color:#e7eef5"></strong><span id="gap_chart_date" style="padding:3px 8px;border:1px solid #655516;background:#211b05;color:#ffe17d;border-radius:3px;font-size:13px"></span>
-        <span id="gap_chart_stats" style="color:#9ba6b0;font-size:12px"></span><a id="gap_chart_player_tag" hidden target="_blank" rel="noopener noreferrer" style="padding:4px 9px;border:1px solid #8b74ff;background:#171127;color:#c8baff;border-radius:12px;font-size:12px;text-decoration:none" title="Named in an SEC filing as placement agent or underwriter"></a>
+        <span id="gap_chart_stats" style="color:#9ba6b0;font-size:12px"></span><span id="gap_chart_quote_line" style="color:#e8edf3;font-size:12px;font-family:Consolas,monospace;padding:4px 8px;border:1px solid #29313a;border-radius:3px">Hover a candle · change, volume, dollar volume, float</span><a id="gap_chart_player_tag" hidden target="_blank" rel="noopener noreferrer" style="padding:4px 9px;border:1px solid #8b74ff;background:#171127;color:#c8baff;border-radius:12px;font-size:12px;text-decoration:none" title="Named in an SEC filing as placement agent or underwriter"></a>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
           <label style="font-size:12px;color:#ddd">Interval <select id="gap_chart_tf" style="height:30px;margin:0"><option>1m</option><option>2m</option><option>5m</option><option>15m</option></select></label>
           <label style="font-size:12px;color:#d7ff6e"><input id="gap_chart_bz" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"> Bone Zone (9/21 EMA)</label>
@@ -1090,18 +1090,18 @@ function aggregateEvBars(source, tf){
 }
 function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   const parentW = (cv.parentElement && cv.parentElement.clientWidth) ? cv.parentElement.clientWidth : 0;
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = Math.min(3,Math.max(window.devicePixelRatio||1,Number(cv._renderDpr)||1));
   const W = Math.max(300, parentW - (targetH ? 0 : 16));
   const H = targetH || 390;
   cv.style.width = W + 'px';
   cv.style.height = H + 'px';
-  cv.width = W * dpr;
-  cv.height = H * dpr;
+  cv.width = Math.round(W * dpr);
+  cv.height = Math.round(H * dpr);
   const x = cv.getContext('2d');
-  x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  x.setTransform(cv.width / W, 0, 0, cv.height / H, 0, 0);
   x.clearRect(0, 0, W, H);
   const isLarge = H > 450;
-  x.font = (isLarge ? '13px' : '11px') + ' Consolas,monospace';
+  x.font = (isLarge ? '15px' : '12px') + ' Consolas,monospace';
   const daily=timeframe==='1d', tf=parseInt(timeframe,10)||2, source=c.bars, sessionSpan=c.after_hours?960:720;
   let b,dates,multi;const cached=cv._seriesCache;
   if(cached?.source===source&&cached.tf===timeframe){b=cached.bars;dates=cached.dates;multi=cached.multi;}
@@ -1140,8 +1140,8 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   const hoverOffsets=new Map(),etClock=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',timeZoneName:'shortOffset'}),istClock=new Intl.DateTimeFormat('en-US',{timeZone:'UTC',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
   const hoverOffset=day=>{if(hoverOffsets.has(day))return hoverOffsets.get(day);let offset=Number(c.off)||0;try{const parts=etClock.formatToParts(new Date(day+'T12:00:00Z')),name=parts.find(p=>p.type==='timeZoneName')?.value||'',match=name.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/);if(match){const et=(match[1]==='-'?-1:1)*(Number(match[2])*60+Number(match[3]||0));offset=330-et;}}catch{}hoverOffsets.set(day,offset);return offset;};
   const hoverStamp=(day,minute)=>{const [yy,mm,dd]=String(day||'').split('-').map(Number);if(!yy||!mm||!dd)return 'time unavailable';const at=new Date(Date.UTC(yy,mm-1,dd,0,Math.round(minute+hoverOffset(day)))),parts=istClock.formatToParts(at),v=Object.fromEntries(parts.map(p=>[p.type,p.value]));return `${v.month}/${v.day}/${v.year} ${v.hour}:${v.minute} IST`;};
-  cv._hoverItems=visible.map(i=>{const day=b.d?.[i]||c.date||'',dayIndex=multi?dates.indexOf(day):-1,minute=daily?0:b.t[i]-(dayIndex>=0?dayIndex*sessionSpan:0);return {key:`${day}|${b.t[i]}`,index:i,x:X(b.t[i]+(daily?.5:tf/2)),label:daily?`${hoverStamp(day,0).split(' ').slice(0,1)[0]} · Daily IST`:hoverStamp(day,minute),o:b.o[i],h:b.h[i],l:b.l[i],c:b.c[i],v:b.v[i]||0};});
-  cv._showChartHover=(px,py)=>{if(px<L||px>W-R||!cv._hoverItems?.length){if(cv._hoverTip)cv._hoverTip.style.display='none';return}let item=cv._hoverItems.reduce((best,p)=>Math.abs(p.x-px)<Math.abs(best.x-px)?p:best,cv._hoverItems[0]);const tip=cv._hoverTip;if(!tip)return;const fmt=n=>Number.isFinite(Number(n))?Number(n).toFixed(Number(n)<1?4:2):'—';tip.textContent=cv._showOhlcTip?`${item.label}\nO ${fmt(item.o)}  H ${fmt(item.h)}\nL ${fmt(item.l)}  C ${fmt(item.c)}  V ${Number(item.v||0).toLocaleString('en-US')}`:item.label;tip.style.whiteSpace=cv._showOhlcTip?'pre-line':'nowrap';tip.style.display='block';if(cv.id==='kwModalCanvas'){tip.style.left='' ;tip.style.top='' ;}else if(cv._showOhlcTip){tip.style.left=Math.min(W-210,Math.max(L,px+14))+'px';tip.style.top=(cv.offsetTop+8)+'px';}else{tip.style.left=Math.max(4,cv.offsetLeft+8)+'px';tip.style.top=(cv.offsetTop+cv.offsetHeight+2)+'px';}cv.title=item.label;};
+  cv._hoverItems=visible.map(i=>{const day=b.d?.[i]||c.date||'',dayIndex=multi?dates.indexOf(day):-1,minute=daily?0:b.t[i]-(dayIndex>=0?dayIndex*sessionSpan:0);return {key:`${day}|${b.t[i]}`,index:i,x:X(b.t[i]+(daily?.5:tf/2)),label:daily?`${hoverStamp(day,0).split(' ').slice(0,1)[0]} · Daily IST`:hoverStamp(day,minute),o:b.o[i],h:b.h[i],l:b.l[i],c:b.c[i],prevC:i>0?b.c[i-1]:c.pc,v:b.v[i]||0};});
+  cv._showChartHover=(px,py)=>{if(px<L||px>W-R||!cv._hoverItems?.length){if(cv._hoverTip)cv._hoverTip.style.display='none';return}let item=cv._hoverItems.reduce((best,p)=>Math.abs(p.x-px)<Math.abs(best.x-px)?p:best,cv._hoverItems[0]);const tip=cv._hoverTip;if(!tip)return;const fmt=n=>Number.isFinite(Number(n))?Number(n).toFixed(Number(n)<1?4:2):'—';tip.textContent=cv._showOhlcTip?`${item.label}\nO ${fmt(item.o)}  H ${fmt(item.h)}\nL ${fmt(item.l)}  C ${fmt(item.c)}  V ${Number(item.v||0).toLocaleString('en-US')}`:item.label;tip.style.whiteSpace=cv._showOhlcTip?'pre-line':'nowrap';tip.style.display='block';if(cv._quoteLine){const change=item.c-Number(item.prevC||0),pct=item.prevC?change/Number(item.prevC)*100:0,tp=(item.h+item.l+item.c)/3,dv=tp*item.v,float=Number(cv._floatShares),compact=n=>Number.isFinite(n)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(n):'—',money=n=>Number.isFinite(n)?(Math.abs(n)>=1000?'$'+compact(Math.abs(n)):Math.abs(n)<1?'$'+Math.abs(n).toFixed(4):'$'+Math.abs(n).toFixed(2)):'—',signedMoney=n=>`${n>=0?'+':'-'}${money(change)}`;cv._quoteLine.textContent=`${item.label} · %Chg ${pct>=0?'+':''}${pct.toFixed(2)}% · $Chg ${signedMoney(change)} · Vol ${Number(item.v).toLocaleString('en-US')} · $Vol ${money(dv)} · Float ${Number.isFinite(float)?compact(float)+' sh':'unavailable'}`;cv._quoteLine.style.color=change>=0?'#64d99b':'#ff7777';}if(cv.id==='kwModalCanvas'){tip.style.left='' ;tip.style.top='' ;}else if(cv._showOhlcTip){tip.style.left=Math.min(W-210,Math.max(L,px+14))+'px';tip.style.top=(cv.offsetTop+8)+'px';}else{tip.style.left=Math.max(4,cv.offsetLeft+8)+'px';tip.style.top=(cv.offsetTop+cv.offsetHeight+2)+'px';}cv.title=item.label;};
   cv._viewSpan=viewSpan;cv._panSpan=span;cv._plotWidth=pw;cv._drawEvArgs=[c,sel,bzChecked,targetH,timeframe,zoom];
   if(!cv._panBound){
     cv._panBound=true;cv.style.cursor='grab';
@@ -1158,7 +1158,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   x.fillStyle = 'rgba(255, 255, 255, 0.085)';
   if(!daily)for(let day=0;day<(multi?dates.length:1);day++)x.fillRect(X(240+day*sessionSpan),T,X(570+day*sessionSpan)-X(240+day*sessionSpan),ph+6+VH);
   x.fillStyle = '#8e8e9e';
-  x.font = 'bold 10px Consolas,monospace';
+  x.font = (isLarge?'bold 12px':'bold 10px')+' Consolas,monospace';
   if(!daily){const anchorIndex=multi?Math.max(0,dates.indexOf(cv._anchorDate||c.date)):0;x.fillText('PRE-MARKET', X(240+anchorIndex*sessionSpan) + 6, T + 13);}
   x.lineWidth = 1;
   x.strokeStyle = '#292d32';
@@ -1734,7 +1734,7 @@ $('#nav_gap_deepdive_btn').onclick=()=>{
   if(location.pathname==='/gap-deepdive')location.assign('/');
   else window.open('/gap-deepdive','_blank','noopener');
 };
-const gapDeepDiveCharts=new Map(),gapDeepDiveChartPending=new Map();
+const gapDeepDiveCharts=new Map(),gapDeepDiveChartPending=new Map(),gapDeepDiveFloats=new Map();
 const gapDeepDivePlayers=new Map();
 let gapDeepDiveCurrent=null;
 const gapDeepDiveKey=item=>`${item.ticker}|${item.date}`;
@@ -1751,9 +1751,17 @@ async function loadGapDeepDivePlayer(item,jobId){
   const url='/api/gap-deepdive/'+encodeURIComponent(jobId)+'/player?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken)+'&ticker='+encodeURIComponent(item.ticker)+'&date='+encodeURIComponent(item.date);
   try{const response=await fetch(url),data=await gapDeepDiveJson(response);gapDeepDivePlayers.set(key,data);showTag(data);return data;}catch(error){return null;}
 }
+async function loadGapDeepDiveFloat(item,jobId){
+  const key=item.ticker.toUpperCase();if(gapDeepDiveFloats.has(key))return gapDeepDiveFloats.get(key);
+  const url='/api/gap-deepdive/'+encodeURIComponent(jobId)+'/float?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken)+'&ticker='+encodeURIComponent(key);
+  const pending=(async()=>{const response=await fetch(url),data=await gapDeepDiveJson(response);gapDeepDiveFloats.set(key,data);return data;})();gapDeepDiveFloats.set(key,pending);
+  try{const data=await pending;gapDeepDiveFloats.set(key,data);return data;}catch(error){gapDeepDiveFloats.delete(key);return {float_shares:null,error:error.message};}
+}
 function drawGapDeepDiveCanvas(cv,baseChart,timeframe,targetH){
   const state=cv._gapDeepDiveState,chart=state?.bars?{...baseChart,bars:state.bars,after_hours:true}:baseChart;
+  cv._renderDpr=cv.id==='gap_chart_modal_canvas'?3:2;
   if(state){cv._anchorDate=baseChart.date;cv._panOffset=state.panOffset||0;cv._onPanChange=value=>{state.panOffset=value;};cv._onPanEdge=side=>loadGapDeepDiveAdjacent(cv,baseChart,side);}
+  if(cv.id==='gap_chart_modal_canvas'){cv._quoteLine=$('#gap_chart_quote_line');cv._floatShares=gapDeepDiveCurrent?.float_shares??baseChart.float_shares??null;}
   drawEv(cv,chart,'none',cv.id==='gap_chart_modal_canvas'?$('#gap_chart_bz').checked:true,targetH,timeframe,1);
 }
 async function loadGapDeepDiveAdjacent(cv,baseChart,side){
@@ -1790,12 +1798,13 @@ function setGapDeepDiveTimeframe(timeframe){
 }
 async function openGapDeepDiveChart(item,jobId){
   try{
-    const chart=await loadGapDeepDiveChart(item,jobId);gapDeepDiveCurrent={item,jobId,chart};
+    const chart=await loadGapDeepDiveChart(item,jobId);gapDeepDiveCurrent={item,jobId,chart,float_shares:null};
     $('#gap_chart_title').textContent=item.ticker;$('#gap_chart_date').textContent=item.date;$('#gap_chart_stats').textContent=`PM high +${(item.move*100).toFixed(1)}% · $${(item.pm_dollar_volume/1e6).toFixed(1)}M premarket`;
     $('#gap_chart_player_tag').hidden=true;$('#gap_chart_player_tag').removeAttribute('href');loadGapDeepDivePlayer(item,jobId);
     $('#gap_chart_tf').value=$('#gap_deepdive_tf').value||'1m';$('#gap_chart_bz').checked=true;$('#gap_chart_vwap').checked=true;$('#gap_chart_twap').checked=true;
     const cv=$('#gap_chart_modal_canvas'),gridCv=[...$('#gap_deepdive_grid').querySelectorAll('canvas[data-key]')].find(node=>node.dataset.key===gapDeepDiveKey(item));cv.dataset.key=gapDeepDiveKey(item);cv._gapDeepDiveState=gridCv?._gapDeepDiveState||{days:1,dates:[],bars:null,panOffset:0,loading:false};cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Bone Zone (9/21 EMA), VWAP and TWAP are on. Select AVWAP, then click anchor A and anchor B on the chart.';
-    $('#gap_deepdive_chart_modal').style.display='flex';setTimeout(renderGapDeepDiveModal,30);
+    $('#gap_chart_quote_line').textContent='Float loading · move the cursor over a candle for change and volume';$('#gap_deepdive_chart_modal').style.display='flex';setTimeout(renderGapDeepDiveModal,30);
+    loadGapDeepDiveFloat(item,jobId).then(data=>{if(!gapDeepDiveCurrent||gapDeepDiveKey(gapDeepDiveCurrent.item)!==gapDeepDiveKey(item))return;gapDeepDiveCurrent.float_shares=data.float_shares;$('#gap_chart_modal_canvas')._floatShares=data.float_shares;const value=Number(data.float_shares);$('#gap_chart_quote_line').textContent=`Float ${Number.isFinite(value)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(value)+' shares':'unavailable'} · move the cursor over a candle for change and volume`;});
   }catch(error){$('#gap_deepdive_status').textContent=`Could not load ${item.ticker} ${item.date}: ${error.message}`;}
 }
 function closeGapDeepDiveChart(){ $('#gap_deepdive_chart_modal').style.display='none';const cv=$('#gap_chart_modal_canvas');cv._avwapSelectMode=false;gapDeepDiveCurrent=null; }
