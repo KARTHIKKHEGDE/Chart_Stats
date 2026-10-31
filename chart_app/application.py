@@ -370,19 +370,34 @@ def run_job(job, t, refresh):
         ctx = {"sec": sec, "splits": splits, "float": fl_now, "ratio": ratio}
 
         idxs = detect_events(daily, splits, live["date"])
+        split_dates = {str(split.get("date")) for split in (splits or []) if split.get("date")}
+        surge_cutoff = live["date"] - dt.timedelta(days=365)
+        surge_candidate_idxs = []
+        for i in range(1, len(daily)):
+            row = daily[i]
+            try:
+                day = dt.date.fromisoformat(str(row["date"]))
+                prior_close = float(daily[i - 1].get("c") or 0)
+                daily_high = float(row.get("h") or 0)
+            except (TypeError, ValueError, KeyError):
+                continue
+            if (day >= surge_cutoff and row["date"] not in split_dates and prior_close > 0
+                    and daily_high / prior_close - 1 >= 0.50):
+                surge_candidate_idxs.append(i)
 
         # ------------------------------------------------------------------ STAGE 2
         # Pre-fetch all 1-min files in parallel.
         # With N keys the pool fires up to N concurrent requests; each key self-throttles
         # to its own 12-second window via _acquire_slot, so rate limits are strictly respected.
         n_keys   = max(1, len(_key_pool))
-        n_events = len(idxs)
+        minute_indices = sorted(set(idxs) | set(surge_candidate_idxs))
+        n_minute_days = len(minute_indices)
 
-        if n_events:
-            job["msg"] = (f"Fetching 1-min data for {n_events} event days "
+        if n_minute_days:
+            job["msg"] = (f"Fetching 1-min data for {n_minute_days} event days "
                           f"in parallel ({n_keys} keys active)…")
 
-            fetch_args = [(t, i, daily) for i in idxs]
+            fetch_args = [(t, i, daily) for i in minute_indices]
             workers = min(20, max(n_keys * 2, 12))
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 futs = {pool.submit(_prefetch_minute, a): a for a in fetch_args}
@@ -390,8 +405,32 @@ def run_job(job, t, refresh):
                 for fut in as_completed(futs):
                     done += 1
                     _, day, ok = fut.result()
-                    job["msg"] = (f"Cached {done}/{n_events} minute files… "
+                    job["msg"] = (f"Cached {done}/{n_minute_days} minute files… "
                                   f"({day}{'  ✓' if ok else '  ✗ skipped'})")
+
+        premarket_surge_days = []
+        for i in surge_candidate_idxs:
+            day = daily[i]["date"]
+            prior_close = float(daily[i - 1].get("c") or 0)
+            try:
+                df = minute_df(t, day)
+                if df is None or df.empty or prior_close <= 0:
+                    continue
+                minutes = df.index.hour * 60 + df.index.minute
+                pm = df[(minutes >= 240) & (minutes < 570)]
+                if pm.empty:
+                    continue
+                pm_high = float(pm["h"].max())
+                typical_price = (pm["h"] + pm["l"] + pm["c"]) / 3
+                pm_dollar_volume = float((typical_price * pm["v"]).sum())
+                if pm_high / prior_close - 1 >= 0.50 and pm_dollar_volume >= 10_000_000:
+                    premarket_surge_days.append({"date": day,
+                        "pm_high_pct": round((pm_high / prior_close - 1) * 100, 2),
+                        "pm_dollar_volume": round(pm_dollar_volume, 2),
+                        "pm_volume": round(float(pm["v"].sum()))})
+            except Exception:
+                continue
+        premarket_surge_days.sort(key=lambda item: item["date"], reverse=True)
 
         # ------------------------------------------------------------------ STAGE 3
         # analyze_event is now fully CPU-bound (all 1-min data is in cache).
@@ -486,6 +525,12 @@ def run_job(job, t, refresh):
                      "which makes fades look weaker than reality (survivorship bias).")
 
         report = clean(build_report(t, live, lm, lpath, lctx, events, S, notes, daily))
+        report["premarket_surge_days"] = premarket_surge_days
+        report["text"] += "\n\nPremarket high ≥ +50% and dollar volume ≥ $10M\n"
+        report["text"] += ("\n".join(f"{fdate(item['date'])} · PM high +{item['pm_high_pct']:.2f}% · "
+                                     f"PM $ vol ${item['pm_dollar_volume']:,.0f} · PM vol {item['pm_volume']:,.0f} shares"
+                                     for item in premarket_surge_days)
+                            if premarket_surge_days else "No sessions met both thresholds in the last year.")
         reverse_splits = []
         for split in splits or []:
             try:
