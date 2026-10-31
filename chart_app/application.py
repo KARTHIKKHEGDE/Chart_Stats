@@ -15,7 +15,7 @@ Optional env
     STOP_PCT=0.20        stop distance (above entry) used for R-multiples + chart stop-outs
 
 Data
-    Live day ............ Yahoo (1-min incl. premarket) + Yahoo info for float
+    Live day ............ Yahoo (1-min incl. premarket) + latest available Polygon float/shares metadata
     Daily + 1-min history Polygon (UNADJUSTED, so volume/rotation are point-in-time; split days excluded)
     Historical float .... SEC EDGAR shares outstanding (latest filing before each event)
                           x today's float/shares-out ratio, split-adjusted. Marked * when stale.
@@ -215,6 +215,7 @@ from chart_app.market_data import (
     load_daily,
     load_shares_out,
     load_splits,
+    latest_security_stats,
     mdl,
     med,
     metrics,
@@ -307,6 +308,7 @@ def run_job(job, t, refresh):
         _splits_res = [None]
         _type_res   = [None]
         _sec_res    = [None]
+        _security_res = [None]
         _err        = [None]
 
         def _get_live():
@@ -339,12 +341,21 @@ def run_job(job, t, refresh):
             except Exception:
                 _sec_res[0] = []
 
+        def _get_security_stats():
+            try:
+                _security_res[0] = latest_security_stats(t, force=refresh)
+            except Exception as ex:
+                _security_res[0] = {
+                    "errors": [f"Polygon security metadata: {type(ex).__name__}: {ex}"]
+                }
+
         stage1_threads = [
             threading.Thread(target=_get_live,      daemon=True),
             threading.Thread(target=_get_daily,     daemon=True),
             threading.Thread(target=_get_splits,    daemon=True),
             threading.Thread(target=_get_type,      daemon=True),
             threading.Thread(target=_get_sec,       daemon=True),
+            threading.Thread(target=_get_security_stats, daemon=True),
         ]
         for th in stage1_threads:
             th.start()
@@ -361,6 +372,37 @@ def run_job(job, t, refresh):
         splits = _splits_res[0]
         typ    = _type_res[0]
         sec    = _sec_res[0]
+        security_stats = _security_res[0] or {}
+        polygon_float = security_stats.get("float_shares")
+        polygon_shares = security_stats.get("shares_outstanding")
+        if polygon_float:
+            live["float"] = polygon_float
+            live["float_source"] = f"Polygon · {security_stats.get('float_asof') or 'date unavailable'}"
+        elif live.get("float"):
+            live["float_source"] = "Yahoo Finance fallback · date unavailable"
+        elif polygon_shares or live.get("so"):
+            live["float_source"] = "Shares outstanding fallback · float unavailable"
+        else:
+            live["float_source"] = "Unavailable"
+        if polygon_shares:
+            live["so"] = polygon_shares
+        live["float_asof"] = security_stats.get("float_asof")
+        live["security_stats_errors"] = security_stats.get("errors", [])
+
+        cap_shares = polygon_shares or live.get("so")
+        if cap_shares and live.get("cur"):
+            live["mcap"] = cap_shares * live["cur"]
+            live["market_cap_source"] = (
+                "Latest price × Polygon shares" if polygon_shares
+                else "Latest price × Yahoo shares"
+            )
+        elif security_stats.get("market_cap"):
+            live["mcap"] = security_stats["market_cap"]
+            live["market_cap_source"] = "Polygon reference value"
+        elif live.get("mcap"):
+            live["market_cap_source"] = "Yahoo Finance fallback · date unavailable"
+        else:
+            live["market_cap_source"] = "Unavailable"
         daily  = [r for r in _daily_res[0] if r["date"] < str(live["date"])]
 
         fl_now = live["float"] or live["so"]
@@ -482,6 +524,8 @@ def run_job(job, t, refresh):
             notes.append("No qualifying gap-ups found in the last 365 days.")
         if not sec:
             notes.append("No SEC shares-outstanding history found; rotation uses today's float (split-adjusted).")
+        for error in live.get("security_stats_errors", []):
+            notes.append(f"Latest security metadata lookup issue: {error}")
         notes.append("Historical data is point-in-time for tickers still listed; delisted names are missing, "
                      "which makes fades look weaker than reality (survivorship bias).")
 

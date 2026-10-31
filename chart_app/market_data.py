@@ -1,6 +1,7 @@
 """Market Data calculations and formatting."""
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from chart_app.application import (
@@ -296,6 +297,51 @@ def live_snapshot(t):
             "session_vol": session_vol, "volume_source": volume_source,
             "sector": info.get("industry") or info.get("sector") or "—", "mcap": info.get("marketCap"),
             "latest_time_ist": df.index[-1].astimezone(IST).strftime("%H:%M IST")}
+
+
+def latest_security_stats(t, force=False):
+    """Fetch recent float and shares-outstanding metadata for the current report.
+
+    Polygon's live ticker details supply current shares outstanding and market cap;
+    its float endpoint supplies effective-dated free float. Normal scans reuse a
+    one-minute cache; explicit refreshes bypass it.
+    """
+    key = f"{t}_latest_security_stats"
+    cached = None if force else cget(key, 60)
+    if cached is not None:
+        return cached
+
+    def fetch_details():
+        try:
+            return (poly_get(f"/v3/reference/tickers/{t}").get("results") or {}), None
+        except Exception as exc:
+            return {}, f"Polygon ticker details: {type(exc).__name__}: {exc}"
+
+    def fetch_float():
+        try:
+            rows = (poly_get("/stocks/vX/float", {"ticker": t}).get("results") or [])
+            latest = max(rows, key=lambda row: row.get("effective_date") or "") if rows else {}
+            return latest, None
+        except Exception as exc:
+            return {}, f"Polygon float data: {type(exc).__name__}: {exc}"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        details_future = pool.submit(fetch_details)
+        float_future = pool.submit(fetch_float)
+        details, details_error = details_future.result()
+        float_row, float_error = float_future.result()
+
+    result = {
+        "shares_outstanding": details.get("share_class_shares_outstanding") or details.get("weighted_shares_outstanding"),
+        "market_cap": details.get("market_cap"),
+        "float_shares": float_row.get("free_float"),
+        "float_asof": float_row.get("effective_date"),
+        "errors": [error for error in (details_error, float_error) if error],
+    }
+    if not result["errors"] and any(result[key] is not None for key in
+                                    ("shares_outstanding", "market_cap", "float_shares")):
+        cput(key, result)
+    return result
 
 
 def pbucket(p):
@@ -749,4 +795,3 @@ def float_at(day, ctx):
                 f *= s["from"] / s["to"]
         return f, True
     return None, True
-

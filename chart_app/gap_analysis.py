@@ -445,7 +445,9 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
         ["Intraday volume source (VWAP)", live.get("volume_source", "Yahoo 1-minute volume"), "b"],
         ["Sector", live["sector"], "b"],
         ["Float", f"{big(fl_now)} shares" if fl_now else "—", "b"],
-        ["Market Cap", "$" + big(mcap) if mcap else "—", "b"],
+        ["Float source / as of", live.get("float_source", "Unavailable"), "b"],
+        ["Market Cap (latest price)", "$" + big(mcap) if mcap else "—", "b"],
+        ["Market cap basis", live.get("market_cap_source", "Unavailable"), "b"],
     ]
 
     # ---- [2] [3] [4] [5] per-event tables (all share the same row order / dim flags)
