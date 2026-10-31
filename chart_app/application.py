@@ -494,11 +494,24 @@ def run_job(job, t, refresh):
             except (TypeError, ValueError):
                 continue
             if split_from > split_to > 0 and split.get("date"):
-                reverse_splits.append({"date": str(split["date"]), "ratio": f"{split_from:g}:1"})
+                split_date = str(split["date"])
+                prior_close = next((row.get("c") for row in reversed(daily)
+                                    if row.get("date", "") < split_date and row.get("c")), None)
+                ratio_factor = split_from / split_to
+                price_conversion = None
+                if prior_close is not None:
+                    old_price = float(prior_close)
+                    adjusted_price = old_price * ratio_factor
+                    price_conversion = (f"old ${old_price:,.4f}".rstrip("0").rstrip(".") +
+                                        f" → split adjusted ${adjusted_price:,.4f}".rstrip("0").rstrip("."))
+                reverse_splits.append({"date": split_date, "ratio": f"{split_from:g}:1",
+                                       "price_conversion": price_conversion})
         reverse_splits.sort(key=lambda item: item["date"], reverse=True)
         report["reverse_splits"] = reverse_splits
         report["text"] += "\n\nReverse Splits\n"
-        report["text"] += ("\n".join(f"{fdate(item['date'])} · {item['ratio']}" for item in reverse_splits)
+        report["text"] += ("\n".join(f"{fdate(item['date'])} · {item['ratio']}"+
+                                     (f" ({item['price_conversion']})" if item.get("price_conversion") else "")
+                                     for item in reverse_splits)
                             if reverse_splits else "No reverse splits found in Polygon's available split history.")
         recent_news = _get_scanner_news(t)
         report["news"] = recent_news
