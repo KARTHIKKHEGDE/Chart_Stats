@@ -1148,7 +1148,7 @@ function drawGapDeepDiveRangeOverlay(cv){
   if(overlay.width!==cv.width)overlay.width=cv.width;if(overlay.height!==cv.height)overlay.height=cv.height;if(overlay.style.width!==W+'px')overlay.style.width=W+'px';if(overlay.style.height!==H+'px')overlay.style.height=H+'px';
   const x=overlay.getContext('2d');x.setTransform(overlay.width/W,0,0,overlay.height/H,0,0);x.clearRect(0,0,W,H);
   drawGapDeepDiveRanges(cv,x,g);
-  const z=cv._zoomDrag;if(z){const left=Math.min(z.x0,z.x1),top=Math.min(z.y0,z.y1),width=Math.abs(z.x1-z.x0),height=Math.abs(z.y1-z.y0);x.save();x.fillStyle='rgba(98,200,255,.14)';x.fillRect(left,top,width,height);x.strokeStyle='#62c8ff';x.lineWidth=1.5;x.setLineDash([5,4]);x.strokeRect(left,top,width,height);x.restore();}
+  const z=cv._zoomDrag;if(z){const left=Math.min(z.x0,z.x1),width=Math.abs(z.x1-z.x0),top=g.T,height=g.plotH;x.save();x.fillStyle='rgba(98,200,255,.14)';x.fillRect(left,top,width,height);x.strokeStyle='#62c8ff';x.lineWidth=1.5;x.setLineDash([5,4]);x.strokeRect(left,top,width,height);x.restore();}
 }
 function scheduleGapDeepDiveRangeOverlay(cv){if(cv._rangeOverlayFrame)return;cv._rangeOverlayFrame=requestAnimationFrame(()=>{cv._rangeOverlayFrame=0;drawGapDeepDiveRangeOverlay(cv);});}
 function gapDeepDiveRangePoint(cv,x){return cv._rangePointAtX?.(x)||null;}
@@ -1156,7 +1156,7 @@ function bindGapDeepDiveRangeInput(cv){
   if(cv._rangeInputBound)return;cv._rangeInputBound=true;
   const stop=e=>{e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();};
   cv.addEventListener('pointerdown',e=>{
-    if(cv._zoomSelectMode&&e.button===0&&cv._rangeGeometry){const g=cv._rangeGeometry;if(e.offsetX<g.L||e.offsetX>g.L+g.plotW||e.offsetY<g.T||e.offsetY>g.T+g.plotH)return;cv._zoomDrag={x0:e.offsetX,y0:e.offsetY,x1:e.offsetX,y1:e.offsetY};cv.setPointerCapture(e.pointerId);stop(e);drawGapDeepDiveRangeOverlay(cv);return;}
+    if(cv._zoomSelectMode&&e.button===0&&cv._rangeGeometry){const g=cv._rangeGeometry;if(e.offsetX<g.L||e.offsetX>g.L+g.plotW||e.offsetY<g.T||e.offsetY>g.T+g.plotH)return;cv._zoomDrag={x0:e.offsetX,y0:g.T,x1:e.offsetX,y1:g.T+g.plotH};cv.setPointerCapture(e.pointerId);stop(e);drawGapDeepDiveRangeOverlay(cv);return;}
     if(!cv._rangeMeasureMode||e.button!==0||!cv._rangeGeometry)return;
     const g=cv._rangeGeometry;if(e.offsetX<g.L||e.offsetX>g.L+g.plotW||e.offsetY<g.T||e.offsetY>g.T+g.plotH)return;
     const hit=(cv._rangeScreenMeasures||[]).map(m=>({m,which:['a','b'].sort((u,v)=>Math.hypot(m[u].x-e.offsetX,m[u].y-e.offsetY)-Math.hypot(m[v].x-e.offsetX,m[v].y-e.offsetY))[0]})).find(({m,which})=>Math.hypot(m[which].x-e.offsetX,m[which].y-e.offsetY)<12);
@@ -1171,7 +1171,7 @@ function bindGapDeepDiveRangeInput(cv){
     cv._rangeDrag=drag;cv.setPointerCapture(e.pointerId);cv.style.cursor='crosshair';stop(e);drawGapDeepDiveRangeOverlay(cv);
   },true);
   cv.addEventListener('pointermove',e=>{
-    if(cv._zoomDrag){cv._zoomDrag.x1=e.offsetX;cv._zoomDrag.y1=e.offsetY;stop(e);scheduleGapDeepDiveRangeOverlay(cv);return;}
+    if(cv._zoomDrag){cv._zoomDrag.x1=e.offsetX;cv._zoomDrag.y1=cv._rangeGeometry.T+cv._rangeGeometry.plotH;stop(e);scheduleGapDeepDiveRangeOverlay(cv);return;}
     const drag=cv._rangeDrag,g=cv._rangeGeometry;if(!drag||!g)return;
     const measure=cv._rangeMeasures.find(m=>m.id===drag.id),p=gapDeepDiveRangePoint(cv,e.offsetX);if(!measure||!p)return;
     if(drag.kind==='move'){
@@ -1182,7 +1182,7 @@ function bindGapDeepDiveRangeInput(cv){
     cv._selectedRangeId=measure.id;stop(e);scheduleGapDeepDiveRangeOverlay(cv);
   },true);
   const finish=e=>{
-    if(cv._zoomDrag){const z=cv._zoomDrag;cv._zoomDrag=null;const g=cv._rangeGeometry,dx=Math.abs(z.x1-z.x0),dy=Math.abs(z.y1-z.y0);if(dx>=12&&g){const left=Math.max(g.L,Math.min(z.x0,z.x1)),right=Math.min(g.L+g.plotW,Math.max(z.x0,z.x1)),top=Math.max(g.T,Math.min(z.y0,z.y1)),bottom=Math.min(g.T+g.plotH,Math.max(z.y0,z.y1)),ratio=(left-g.L)/g.plotW,newSpan=Math.max(1,(right-left)*g.viewSpan/g.plotW),minZoom=g.baseViewSpan/g.span;cv._rangeZoom=Math.max(minZoom,Math.min(24,g.baseViewSpan/newSpan));cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,g.viewStart+ratio*g.viewSpan-g.viewBase));const priceSpan=(bottom-top)/g.plotH*(g.yMax-g.yMin);if(dy>=12&&priceSpan>0)cv._yZoom=Math.max(.5,Math.min(20,(cv._yZoom||1)*(g.yMax-g.yMin)/priceSpan));cv._gapDeepDiveRedraw?.();}else drawGapDeepDiveRangeOverlay(cv);cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode)?'crosshair':'grab';stop(e);return;}
+    if(cv._zoomDrag){const z=cv._zoomDrag;cv._zoomDrag=null;const g=cv._rangeGeometry,dx=Math.abs(z.x1-z.x0);if(dx>=12&&g){const left=Math.max(g.L,Math.min(z.x0,z.x1)),right=Math.min(g.L+g.plotW,Math.max(z.x0,z.x1)),ratio=(left-g.L)/g.plotW,newSpan=Math.max(1,(right-left)*g.viewSpan/g.plotW),minZoom=g.baseViewSpan/g.span;cv._rangeZoom=Math.max(minZoom,Math.min(24,g.baseViewSpan/newSpan));cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,g.viewStart+ratio*g.viewSpan-g.viewBase));cv._yZoom=1;cv._gapDeepDiveRedraw?.();}else drawGapDeepDiveRangeOverlay(cv);cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode)?'crosshair':'grab';stop(e);return;}
     if(!cv._rangeDrag)return;cv._rangeDrag=null;cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode)?'crosshair':'grab';stop(e);drawGapDeepDiveRangeOverlay(cv);
   };
   cv.addEventListener('pointerup',finish,true);cv.addEventListener('pointercancel',finish,true);
