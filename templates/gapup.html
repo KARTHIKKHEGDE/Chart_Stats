@@ -123,7 +123,8 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
   <section id="gap_deepdive_view" style="display:none;padding:22px 30px;background:#050607;min-height:80vh">
     <header style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:16px">
       <strong style="font-size:20px;color:#ffe17d">Gap Up Deepdive</strong>
-      <span style="color:#9ba3ad;font-size:13px">This year · Premarket high ≥ +70% vs prior close · Premarket dollar volume ≥ $10M · 1-minute charts</span>
+      <span style="color:#9ba3ad;font-size:13px">This year · Premarket high ≥ +70% vs prior close · Premarket dollar volume ≥ $10M</span>
+      <label style="display:flex;align-items:center;gap:6px;color:#ddd;font-size:13px">All charts interval <select id="gap_deepdive_tf" style="height:30px;margin:0"><option selected>1m</option><option>2m</option><option>5m</option><option>15m</option></select></label>
       <span id="gap_deepdive_status" style="margin-left:auto;color:#aeb6c0;font-size:13px">Opening the saved scan…</span>
     </header>
     <div id="gap_deepdive_grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px"></div>
@@ -1755,19 +1756,30 @@ function renderGapDeepDiveModal(){
   cv._showHODAVWAP=false;cv._showCrosshair=true;cv._showOhlcTip=true;cv._showVWAP=$('#gap_chart_vwap').checked;cv._showTWAP=$('#gap_chart_twap').checked;cv._avwapOnChange=message=>{$('#gap_chart_avwap_status').textContent=message;};
   drawEv(cv,gapDeepDiveCurrent.chart,'none',$('#gap_chart_bz').checked,Math.max(500,body.clientHeight-12),$('#gap_chart_tf').value,1);
 }
+function setGapDeepDiveTimeframe(timeframe){
+  const globalSelect=$('#gap_deepdive_tf'),modalSelect=$('#gap_chart_tf');
+  if(globalSelect&&globalSelect.value!==timeframe)globalSelect.value=timeframe;
+  if(modalSelect&&modalSelect.value!==timeframe)modalSelect.value=timeframe;
+  $('#gap_deepdive_grid').querySelectorAll('canvas[data-index][data-chart-loaded="1"]').forEach(cv=>{
+    const chart=gapDeepDiveCharts.get(cv.dataset.key);
+    if(chart)drawEv(cv,chart,'none',true,540,timeframe,1);
+  });
+  if(gapDeepDiveCurrent)renderGapDeepDiveModal();
+}
 async function openGapDeepDiveChart(item,jobId){
   try{
     const chart=await loadGapDeepDiveChart(item,jobId);gapDeepDiveCurrent={item,jobId,chart};
     $('#gap_chart_title').textContent=item.ticker;$('#gap_chart_date').textContent=item.date;$('#gap_chart_stats').textContent=`PM high +${(item.move*100).toFixed(1)}% · $${(item.pm_dollar_volume/1e6).toFixed(1)}M premarket`;
     $('#gap_chart_player_tag').hidden=true;$('#gap_chart_player_tag').removeAttribute('href');loadGapDeepDivePlayer(item,jobId);
-    $('#gap_chart_tf').value='1m';$('#gap_chart_bz').checked=true;$('#gap_chart_vwap').checked=true;$('#gap_chart_twap').checked=true;
+    $('#gap_chart_tf').value=$('#gap_deepdive_tf').value||'1m';$('#gap_chart_bz').checked=true;$('#gap_chart_vwap').checked=true;$('#gap_chart_twap').checked=true;
     const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Bone Zone (9/21 EMA), VWAP and TWAP are on. Select AVWAP, then click anchor A and anchor B on the chart.';
     $('#gap_deepdive_chart_modal').style.display='flex';setTimeout(renderGapDeepDiveModal,30);
   }catch(error){$('#gap_deepdive_status').textContent=`Could not load ${item.ticker} ${item.date}: ${error.message}`;}
 }
 function closeGapDeepDiveChart(){ $('#gap_deepdive_chart_modal').style.display='none';const cv=$('#gap_chart_modal_canvas');cv._avwapSelectMode=false;gapDeepDiveCurrent=null; }
 ['gap_chart_bz','gap_chart_vwap','gap_chart_twap'].forEach(id=>$('#'+id).onchange=renderGapDeepDiveModal);
-$('#gap_chart_tf').onchange=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Interval changed. Select AVWAP again to choose new anchor points.';renderGapDeepDiveModal();};
+$('#gap_deepdive_tf').onchange=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Interval changed. Select AVWAP again to choose new anchor points.';setGapDeepDiveTimeframe($('#gap_deepdive_tf').value);};
+$('#gap_chart_tf').onchange=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Interval changed. Select AVWAP again to choose new anchor points.';setGapDeepDiveTimeframe($('#gap_chart_tf').value);};
 $('#gap_chart_avwap').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=true;cv.style.cursor='crosshair';$('#gap_chart_avwap_status').textContent='AVWAP tool active · click point A, then click a later point B.';renderGapDeepDiveModal();cv.style.cursor='crosshair';};
 $('#gap_chart_clear_avwap').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;cv.style.cursor='grab';$('#gap_chart_avwap_status').textContent='AVWAP cleared. VWAP, TWAP and Bone Zone remain on.';renderGapDeepDiveModal();};
 $('#gap_chart_copy').onclick=async()=>{const cv=$('#gap_chart_modal_canvas');try{const blob=await new Promise(resolve=>cv.toBlob(resolve,'image/png'));if(!blob)throw new Error('Could not render PNG');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);$('#gap_chart_copy').textContent='Copied ✓';setTimeout(()=>$('#gap_chart_copy').textContent='Copy PNG',1200);}catch(error){$('#gap_chart_avwap_status').textContent='PNG copy unavailable: '+error.message;}};
@@ -1782,7 +1794,7 @@ async function loadGapDeepDive(){
     if(runId!==gapDeepDiveRequest)return;if(result.status==='error')throw new Error(result.message);const items=result.results||[];if(!items.length){status.textContent=(result.message||'Complete')+' · No qualifying sessions found.';gapDeepDiveLoaded=true;return;}
     status.textContent=`Saved scan as of ${result.scanned_on||'latest saved date'} · ${items.length} qualifying sessions at ≥70% PM high · click a chart to expand.`+(result.errors?.length?` · Could not load full daily history for ${result.errors.length} ticker(s).`:'');
     grid.innerHTML=items.map((item,i)=>`<article style="min-width:0;background:#090c10;border:1px solid #29313a;border-radius:5px;padding:10px"><header style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:8px"><strong style="color:#e8edf3;font-size:16px">${esc(item.ticker)}</strong><span style="padding:3px 8px;border-radius:3px;background:#211b05;border:1px solid #655516;color:#ffe17d;font-size:13px">${esc(item.date)}</span><span style="color:#64d99b;font-size:13px">PM high +${(item.move*100).toFixed(1)}%</span><span style="color:#b6c0ca;font-size:13px">PM $vol $${(item.pm_dollar_volume/1e6).toFixed(1)}M</span><button class="gap-copy-png" data-index="${i}" disabled style="margin-left:auto;height:32px;font-size:12px;border-color:#555">Copy PNG</button></header><div style="position:relative"><canvas id="gap_deepdive_chart_${i}" data-index="${i}" style="width:100%;height:540px;display:block;cursor:zoom-in"></canvas><span class="gap-chart-loading" style="position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);color:#89939e;font-size:14px">Scroll here to load this chart</span></div><div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#aab4bf;padding:7px 2px"><span style="color:#29a8ff">━ VWAP</span><span style="color:#c084fc">━ TWAP</span><span style="color:#ffe45c">AVWAP · set A/B in expanded chart</span><span style="color:#b0b0b0">░ Premarket</span><span>1-minute OHLCV · X-axis IST · click to expand</span></div></article>`).join('');
-    const lazyCharts=new IntersectionObserver(entries=>entries.forEach(async entry=>{if(!entry.isIntersecting)return;const canvas=entry.target;lazyCharts.unobserve(canvas);const i=Number(canvas.dataset.index),item=items[i];try{const chart=await loadGapDeepDiveChart(item,started.job);canvas._showHODAVWAP=false;drawEv(canvas,chart,'none',true,540,'1m',1);canvas.dataset.chartLoaded='1';grid.querySelector(`.gap-copy-png[data-index="${i}"]`).disabled=false;canvas.parentElement.querySelector('.gap-chart-loading').remove();canvas.onclick=()=>openGapDeepDiveChart(item,started.job);}catch(error){canvas.parentElement.querySelector('.gap-chart-loading').textContent=error.message;}}),{rootMargin:'500px 0px'});
+    const lazyCharts=new IntersectionObserver(entries=>entries.forEach(async entry=>{if(!entry.isIntersecting)return;const canvas=entry.target;lazyCharts.unobserve(canvas);const i=Number(canvas.dataset.index),item=items[i],key=gapDeepDiveKey(item);canvas.dataset.key=key;try{const chart=await loadGapDeepDiveChart(item,started.job);canvas._showHODAVWAP=false;drawEv(canvas,chart,'none',true,540,$('#gap_deepdive_tf').value||'1m',1);canvas.dataset.chartLoaded='1';grid.querySelector(`.gap-copy-png[data-index="${i}"]`).disabled=false;canvas.parentElement.querySelector('.gap-chart-loading').remove();canvas.onclick=()=>openGapDeepDiveChart(item,started.job);}catch(error){canvas.parentElement.querySelector('.gap-chart-loading').textContent=error.message;}}),{rootMargin:'500px 0px'});
     grid.querySelectorAll('canvas[data-index]').forEach(canvas=>{const item=items[Number(canvas.dataset.index)];canvas.onclick=()=>openGapDeepDiveChart(item,started.job);lazyCharts.observe(canvas);});
     grid.querySelectorAll('.gap-copy-png').forEach(btn=>btn.onclick=async()=>{const canvas=$('#gap_deepdive_chart_'+btn.dataset.index);try{const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw new Error('Could not render PNG');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);btn.textContent='Copied ✓';setTimeout(()=>btn.textContent='Copy PNG',1300);}catch(error){status.textContent='PNG copy unavailable: '+error.message;}});
     gapDeepDiveLoaded=true;
