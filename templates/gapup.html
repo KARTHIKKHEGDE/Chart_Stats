@@ -311,8 +311,9 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
         <select id="cm_tf" title="Chart timeframe" style="height:32px;font-size:12px;padding:0 8px;background:#181818;border:1px solid #444;color:#fff;margin:0">
           <option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option>
         </select>
-        <select id="cm_days" title="Sessions shown" style="height:32px;font-size:12px;padding:0 8px;background:#181818;border:1px solid #444;color:#fff;margin:0"><option>1</option><option>3</option><option selected>5</option><option>10</option><option>20</option><option>60</option></select>
+        <select id="cm_days" title="Sessions shown" style="height:32px;font-size:12px;padding:0 8px;background:#181818;border:1px solid #444;color:#fff;margin:0"><option selected>1</option><option>3</option><option>5</option><option>10</option><option>20</option><option>60</option></select>
         <button id="cm_zoom_out" style="height:32px;width:32px;background:#1a1a1a;border:1px solid #444;color:#ddd;cursor:pointer">−</button><button id="cm_zoom_in" style="height:32px;width:32px;background:#1a1a1a;border:1px solid #444;color:#ddd;cursor:pointer">+</button>
+        <button id="cm_zoom_reset" style="height:32px;padding:0 9px">Reset</button>
 
         <div style="width:1px;height:20px;background:#333;margin:0 4px"></div>
 
@@ -321,8 +322,10 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
           <option value="all">All entry models</option>
         </select>
         <label style="font-size:12px;color:#ddd;display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none">
-          <input type="checkbox" id="cm_bz" style="width:14px;height:14px;margin:0"> Bone zone
+          <input type="checkbox" id="cm_bz" checked style="width:14px;height:14px;margin:0"> Bone zone
         </label>
+        <label style="font-size:12px;color:#ddd"><input type="checkbox" id="cm_vwap" checked> VWAP</label><label style="font-size:12px;color:#c084fc"><input type="checkbox" id="cm_twap" checked> TWAP</label>
+        <button id="cm_avwap">AVWAP · Select A → B</button><button id="cm_clear_avwap">Clear AVWAP</button><button id="cm_measure">Measure range</button><button id="cm_pan">Pan</button><button id="cm_delete_measure">Delete range</button><button id="cm_clear_measures">Clear ranges</button><button id="cm_copy">Copy PNG</button>
 
         <div style="width:1px;height:20px;background:#333;margin:0 4px"></div>
 
@@ -331,8 +334,8 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
     </div>
 
     <!-- Canvas Body -->
-    <div id="cm_body" style="flex:1;padding:8px 10px;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#050505">
-      <canvas id="cm_canvas" style="display:block;width:100%;height:100%"></canvas>
+    <div id="cm_body" style="flex:1;padding:8px 10px;position:relative;display:flex;flex-direction:column;overflow:hidden;background:#050505">
+      <div id="cm_plot_wrap" style="position:relative;flex:1;min-height:0"><canvas id="cm_canvas" style="display:block;width:100%;height:100%"></canvas><canvas id="cm_overlay" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas><div id="cm_crosshair_v" hidden style="position:absolute;z-index:4;top:0;width:0;border-left:1px dashed rgba(220,232,244,.75);pointer-events:none"></div><div id="cm_crosshair_h" hidden style="position:absolute;z-index:4;left:0;height:0;border-top:1px dashed rgba(220,232,244,.75);pointer-events:none"></div><div id="cm_measure_box" hidden style="position:absolute;z-index:5;max-width:300px;padding:8px 10px;background:rgba(6,13,21,.96);border:1px solid #62c8ff;border-radius:4px;color:#edf6ff;font:13px/1.55 Consolas,monospace;white-space:pre-wrap;pointer-events:none"></div></div><div id="cm_navigator_wrap" style="height:76px;flex:0 0 76px;margin-top:5px;border:1px solid #242b33;background:#090c10"><canvas id="cm_navigator" style="display:block;width:100%;height:100%;touch-action:none;cursor:grab"></canvas></div>
     </div>
 
     <!-- Footer with Legend -->
@@ -348,7 +351,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
         <span data-tip="SELL signal — short entry triggered by an entry model (e.g. short at open, PM high rejection, VWAP loss). Triangle points down at the entry price.">▼ SELL (entry)</span> &nbsp;
         <span data-tip="BUY signal — cover the short position. Either hit the stop loss or target. Percentage shown is the P&amp;L of that trade.">▲ BUY (cover)</span>. <span data-tip="Shaded (lighter) background area = pre-market session (before 9:30 ET / 19:00 IST). Price action here happens before regular market hours.">Shaded = premarket</span>. Times in IST.
       </div>
-      <div style="color:#666;font-size:11px">Drag chart to pan · drag or scroll the price axis to scale · <b>Esc</b> to close</div>
+      <div id="cm_quote_line" style="color:#dce6ef;font-size:12px;font-family:Consolas,monospace"></div><div id="cm_status" style="color:#666;font-size:11px">Hold and drag on the chart to zoom. Escape cancels the active tool.</div>
     </div>
   </div>
 </div>
@@ -925,7 +928,7 @@ function renderTab(tab, r, isRefresh){
   });
   o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">`+
      `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:7px">${esc(T.p6)}<label style="font-size:11px;color:#aaa">All charts <select id="ev_all_tf" class="evtf"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label><select id="ev_all_days" class="evtf" title="Days for all charts"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="60">60 days</option></select><select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
-     (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/21 EMA cloud + BB)</label></div>`+
+     (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" checked style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/21 EMA cloud + BB)</label></div>`+
      `<span style="font-size:12px;color:#29a8ff;font-weight:normal">🔍 Click any chart to enlarge</span></div>`+
   `<div class="evgrid">`+tab.EV.map((c,i)=>`<div class="evc" data-ev-slot="${i}" onclick="openChartModal(${i})"><div class="evhead"><div class="evt" id="evtitle${i}"></div><span class="eventDateTag" data-event-date></span><div class="evcontrols"><select class="evtf" title="Timeframe"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select><select class="evdays" title="Sessions shown"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="60">60 days</option></select><button class="evzoom" data-zoom="out" title="Zoom out">−</button><button class="evzoom" data-zoom="in" title="Zoom in">+</button><button class="evmeasure" type="button" title="Drag across bars to measure volume, dollar volume, and float rotation">Measure</button><button class="evtoday" type="button" title="Return to today's live chart">Today</button></div></div><canvas id="ev${i}"></canvas></div>`).join('')+
      `<\/div><div class="foot"><span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance.">━ VWAP<\/span> &nbsp; <span style="color:#c084fc">━ TWAP</span> &nbsp; <span style="color:#e879f9">┅ active-minute TWAP</span> &nbsp; <span style="color:#ffd23f">┅ HOD-anchored AVWAP</span>  <span class="y" data-tip="Pre-market High — highest price before the US market open. Common fade target.">┅ PM high<\/span>  <span class="d" data-tip="Previous Close — yesterday’s close. Gap % is measured from here.">┅ prev close<\/span> &nbsp; <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period EMA on 2-min closes. Fast trend line.">━ EMA9<\/span> <span style="color:#ffa500" data-tip="EMA 21 — 20-period EMA on 2-min closes. Slower trend line. Bearish when EMA9 drops below it.">━ EMA21<\/span> <span class="g" data-tip="Bone Zone cloud — shaded between EMA9 &amp; EMA21. Green = bullish. Red = bearish.">▒<\/span><span class="r">▒<\/span> cloud <span class="d" data-tip="Bollinger Bands (20-period, 2 std dev). Shows expected volatility range on the 2-min chart.">━ BB(20,2)<\/span> &nbsp; <span data-tip="SELL signal — short entry triggered by an entry model.">▼ SELL<\/span> &nbsp; <span data-tip="BUY / Cover signal — close the short here. P&amp;L % shown next to it.">▲ BUY<\/span>. <span data-tip="Lighter shaded background = pre-market session (before 9:30 ET / 19:00 IST).">Shaded = premarket<\/span>. X axis = IST. Measure: activate Measure, then drag across bars for volume, estimated dollar volume, and float rotation.<\/div><\/div>`;
@@ -1020,7 +1023,7 @@ function drawEvAll(evList, containerEl){
     if(tf){tf.value=card._chartTf;tf.onclick=e=>e.stopPropagation();tf.onchange=e=>{e.stopPropagation();const previousTf=card._chartTf;card._chartTf=tf.value;card._panOffset=0;card._yZoom=1;if(tf.value==='1d')card._chartDays=60;else if(previousTf==='1d')card._chartDays=1;const daysSelect=card.querySelector('.evdays');if(daysSelect)daysSelect.value=String(card._chartDays);if(card._chartDays===1&&tf.value!=='1d')loadChartContext(card,tabForCharts);else if((tf.value==='1d')!==!!card._contextDaily||!card._contextChart)loadChartContext(card,tabForCharts);else drawEvAll(tabForCharts.EV,tabForCharts.container);};}
     const days=card.querySelector('.evdays');if(days){days.value=String(card._chartDays);days.onclick=e=>e.stopPropagation();days.onchange=e=>{e.stopPropagation();card._chartDays=Number(days.value);card._panOffset=0;loadChartContext(card,tabForCharts);};}
     card.querySelectorAll('.evzoom').forEach(btn=>btn.onclick=e=>{e.stopPropagation();card._zoom=Math.max(.5,Math.min(8,(card._zoom||1)*(btn.dataset.zoom==='in'?1.25:.8)));drawEvAll(list,cEl);});
-    const measureBtn=card.querySelector('.evmeasure');if(measureBtn){measureBtn.onclick=e=>{e.stopPropagation();cv._measureMode=!cv._measureMode;measureBtn.classList.toggle('active',cv._measureMode);measureBtn.textContent=cv._measureMode?'Cancel measure':'Measure';cv.style.cursor=cv._measureMode?'crosshair':'grab';};}
+    const measureBtn=card.querySelector('.evmeasure');if(measureBtn){measureBtn.onclick=e=>{e.stopPropagation();openChartModal(i);setTimeout(()=>{const modalCv=$('#cm_canvas');if(modalCv._featureUi){setGapDeepDiveMouseMode('measure',modalCv,modalCv._featureUi);modalCv._featureUi.status.textContent='Drag between any two points to measure.';}},45);};}
     const todayBtn=card.querySelector('.evtoday');if(todayBtn){todayBtn.onclick=e=>{e.stopPropagation();const liveItem=(tabForCharts?.EV||[]).find(x=>String(x.title||'').startsWith('TODAY '));if(!liveItem)return;card._chartItem=liveItem;card._eventDate=liveItem.date;card._sessionDate=liveItem.date;card._contextChart=null;card._contextDates=[];card._panOffset=0;card._zoom=1;card._yZoom=1;cv._measureStartKey=cv._measureEndKey=null;drawEvAll(tabForCharts.EV,tabForCharts.container);if($('#chart_modal').style.display==='flex'&&currentModalSlot===i)renderModalChart();};}
     card._onPanEdge=side=>{
       if(card._contextLoading||!tabForCharts)return;
@@ -1034,7 +1037,7 @@ function drawEvAll(evList, containerEl){
       card._panOffset=0;loadChartContext(card,tabForCharts,edge);
     };
     const renderItem=card._contextChart?{...item,chart:{...item.chart,bars:card._contextChart}}:item;
-    cv._anchorDate=card._sessionDate;cv._panOffset=card._panOffset||0;cv._onPanChange=value=>card._panOffset=value;cv._onPanEdge=card._onPanEdge;
+    cv._anchorDate=card._sessionDate;cv._panOffset=card._panOffset||0;cv._onPanChange=value=>card._panOffset=value;cv._onPanEdge=card._onPanEdge;cv._showVWAP=card._showVWAP!==false;cv._showTWAP=card._showTWAP!==false;cv._avwapAnchors=card._avwapAnchors||null;
     if(!card._chartVisible&&$('#chart_modal').style.display!=='flex'){window.evLazyObserver.observe(card);return;}
     if((card._chartDays>1||card._chartTf==='1d')&&!card._contextChart&&!card._contextLoading&&!card._contextError)loadChartContext(card,tabForCharts);
     drawEv(cv,renderItem.chart,sel,bzChecked,undefined,card._chartTf,card._zoom||1);
@@ -1146,7 +1149,7 @@ function drawGapDeepDiveRanges(cv,x,g){
   }else if(box){box.hidden=true;box.textContent='';}
 }
 function drawGapDeepDiveRangeOverlay(cv){
-  const overlay=$('#gap_chart_range_overlay'),g=cv._rangeGeometry;if(!overlay||!g)return;
+  const overlay=cv._rangeOverlay||$('#gap_chart_range_overlay'),g=cv._rangeGeometry;if(!overlay||!g)return;
   const W=cv.clientWidth,H=cv.clientHeight;if(W<2||H<2)return;
   if(overlay.width!==cv.width)overlay.width=cv.width;if(overlay.height!==cv.height)overlay.height=cv.height;if(overlay.style.width!==W+'px')overlay.style.width=W+'px';if(overlay.style.height!==H+'px')overlay.style.height=H+'px';
   const x=overlay.getContext('2d');x.setTransform(overlay.width/W,0,0,overlay.height/H,0,0);x.clearRect(0,0,W,H);
@@ -1154,7 +1157,7 @@ function drawGapDeepDiveRangeOverlay(cv){
   const z=cv._zoomDrag;if(z){const left=Math.min(z.x0,z.x1),width=Math.abs(z.x1-z.x0),top=g.T,height=g.plotH;x.save();x.fillStyle='rgba(98,200,255,.14)';x.fillRect(left,top,width,height);x.strokeStyle='#62c8ff';x.lineWidth=1.5;x.setLineDash([5,4]);x.strokeRect(left,top,width,height);x.restore();}
 }
 function scheduleGapDeepDiveRangeOverlay(cv){if(cv._rangeOverlayFrame)return;cv._rangeOverlayFrame=requestAnimationFrame(()=>{cv._rangeOverlayFrame=0;drawGapDeepDiveRangeOverlay(cv);});}
-function drawGapDeepDiveCrosshair(cv){const g=cv._rangeGeometry,p=cv._crosshair,v=$('#gap_chart_crosshair_v'),h=$('#gap_chart_crosshair_h');if(!v||!h)return;if(!cv._showCrosshair||!g||!p||p.x<g.L||p.x>g.L+g.plotW||p.y<g.T||p.y>g.T+g.plotH){v.hidden=true;h.hidden=true;return;}v.hidden=false;h.hidden=false;v.style.left=p.x+'px';v.style.top=g.T+'px';v.style.height=((g.crosshairBottom||g.T+g.plotH)-g.T)+'px';h.style.left=g.L+'px';h.style.top=p.y+'px';h.style.width=g.plotW+'px';}
+function drawGapDeepDiveCrosshair(cv){const g=cv._rangeGeometry,p=cv._crosshair,v=cv._crosshairV||$('#gap_chart_crosshair_v'),h=cv._crosshairH||$('#gap_chart_crosshair_h');if(!v||!h)return;if(!cv._showCrosshair||!g||!p||p.x<g.L||p.x>g.L+g.plotW||p.y<g.T||p.y>g.T+g.plotH){v.hidden=true;h.hidden=true;return;}v.hidden=false;h.hidden=false;v.style.left=p.x+'px';v.style.top=g.T+'px';v.style.height=((g.crosshairBottom||g.T+g.plotH)-g.T)+'px';h.style.left=g.L+'px';h.style.top=p.y+'px';h.style.width=g.plotW+'px';}
 function scheduleGapDeepDiveHover(cv,x,y){cv._pendingHover={x,y};if(cv._hoverUpdateTimer)return;cv._hoverUpdateTimer=setTimeout(()=>{cv._hoverUpdateTimer=0;const p=cv._pendingHover;if(p)cv._showChartHover?.(p.x,p.y);},16);}
 function gapDeepDiveRangePoint(cv,x,y){return cv._rangePointAt?.(x,y)||cv._rangePointAtX?.(x)||null;}
 function bindGapDeepDiveRangeInput(cv){
@@ -1191,9 +1194,9 @@ function bindGapDeepDiveRangeInput(cv){
     if(!cv._rangeDrag)return;cv._rangeDrag=null;cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode)?'crosshair':'grab';stop(e);drawGapDeepDiveRangeOverlay(cv);
   };
   cv.addEventListener('pointerup',finish,true);cv.addEventListener('pointercancel',finish,true);
-  cv.addEventListener('dblclick',e=>{if(cv.id!=='gap_chart_modal_canvas')return;cv._rangeZoom=1;cv._panOffset=0;cv._yZoom=1;cv._gapDeepDiveRedraw?.();},true);
+  cv.addEventListener('dblclick',e=>{if(!cv._fullFeatures)return;cv._rangeZoom=1;cv._panOffset=0;cv._yZoom=1;cv._gapDeepDiveRedraw?.();},true);
   cv.addEventListener('wheel',e=>{
-  if(cv.id!=='gap_chart_modal_canvas'||!cv._wheelZoomEnabled||!cv._rangeGeometry)return;
+  if(!cv._fullFeatures||!cv._wheelZoomEnabled||!cv._rangeGeometry)return;
     const g=cv._rangeGeometry;if(e.offsetX<g.L||e.offsetX>g.L+g.plotW)return;
     const ratio=(e.offsetX-g.L)/g.plotW,anchor=g.viewStart+ratio*g.viewSpan,zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,(cv._rangeZoom||1)*Math.exp(-Math.sign(e.deltaY)*.18)));
     cv._rangeZoom=zoom;const nextSpan=Math.min(g.span,g.baseViewSpan/zoom),viewBase=g.viewBase;
@@ -1202,7 +1205,7 @@ function bindGapDeepDiveRangeInput(cv){
   },{capture:true,passive:false});
 }
 function drawGapDeepDiveNavigator(mainCv,baseChart,timeframe){
-  const nav=$('#gap_chart_navigator');if(!nav||!mainCv._rangeGeometry)return;const g=mainCv._rangeGeometry,b=g.bars,parent=nav.parentElement,W=parent.clientWidth,H=parent.clientHeight,dpr=Math.min(2,window.devicePixelRatio||1);
+  const nav=mainCv._navigator||$('#gap_chart_navigator');if(!nav||!mainCv._rangeGeometry)return;const g=mainCv._rangeGeometry,b=g.bars,parent=nav.parentElement,W=parent.clientWidth,H=parent.clientHeight,dpr=Math.min(2,window.devicePixelRatio||1);
   if(W<2||H<2)return;nav.width=Math.round(W*dpr);nav.height=Math.round(H*dpr);nav.style.width=W+'px';nav.style.height=H+'px';const x=nav.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);x.fillStyle='#090c10';x.fillRect(0,0,W,H);
   const pad=8,plotW=W-pad*2,lo=Math.min(...b.l),hi=Math.max(...b.h),range=hi-lo||1,at=t=>pad+plotW*(t-g.fullStart)/g.span;
   x.strokeStyle='#5c788e';x.lineWidth=1;x.beginPath();let started=false;for(let i=0;i<b.t.length;i++){const px=at(b.t[i]),py=H-7-(b.c[i]-lo)/(range)*(H-14);if(px<pad||px>W-pad)continue;if(!started){x.moveTo(px,py);started=true;}else x.lineTo(px,py);}x.stroke();
@@ -1211,6 +1214,26 @@ function drawGapDeepDiveNavigator(mainCv,baseChart,timeframe){
   x.fillStyle='#d9f2ff';x.fillRect(left-3,2,6,H-4);x.fillRect(right-3,2,6,H-4);
   if(!nav._gapNavBound){nav._gapNavBound=true;let drag=null;nav.addEventListener('pointerdown',e=>{const q=nav._gapNav;if(!q)return;const px=e.offsetX;drag={x:px,left:q.left,right:q.right,mode:px<q.left+9?'left':px>q.right-9?'right':px<q.right?'body':'jump'};nav.setPointerCapture(e.pointerId);nav.style.cursor=drag.mode==='body'?'grabbing':'ew-resize';e.preventDefault();});nav.addEventListener('pointermove',e=>{if(!drag||!nav._gapNav)return;const q=nav._gapNav,g=q.geometry,dx=e.offsetX-drag.x,unit=g.span/q.plotW;let left=drag.left,right=drag.right;if(drag.mode==='body'){left+=dx;right+=dx;}else if(drag.mode==='left')left+=dx;else if(drag.mode==='right')right+=dx;else{left=e.offsetX-(right-left)/2;right=e.offsetX+(right-left)/2;}left=Math.max(q.pad,Math.min(right-10,left));right=Math.min(nav.clientWidth-q.pad,Math.max(left+10,right));const newSpan=Math.max(1,(right-left)*g.span/q.plotW),zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,g.baseViewSpan/newSpan)),viewBase=g.viewBase,targetStart=g.fullStart+(left-q.pad)*g.span/q.plotW;mainCv._rangeZoom=zoom;mainCv._panOffset=targetStart-viewBase;mainCv._gapDeepDiveRedraw?.();e.preventDefault();});const end=()=>{drag=null;nav.style.cursor='grab';};nav.addEventListener('pointerup',end);nav.addEventListener('pointercancel',end);}
 }
+function bindUnifiedChartFeatures(cv,ui,persist,redraw){
+  cv._fullFeatures=true;cv._featureUi=ui;cv._featurePersist=persist;cv._featureRedraw=redraw;cv._rangeOverlay=ui.overlay;cv._crosshairV=ui.crosshairV;cv._crosshairH=ui.crosshairH;cv._rangeMeasureBox=ui.measureBox;cv._navigator=ui.navigator;cv._quoteLine=ui.quoteLine;cv._showCrosshair=true;cv._showOhlcTip=true;cv._wheelZoomEnabled=true;
+  cv._afterDraw=()=>{drawGapDeepDiveRangeOverlay(cv);drawGapDeepDiveCrosshair(cv);drawGapDeepDiveNavigator(cv,cv._chart,cv._timeframe);};
+  cv._gapDeepDiveRedraw=()=>{cv._zoom=cv._rangeZoom||cv._zoom||1;cv._featurePersist?.();cv._featureRedraw?.();};
+  cv._avwapOnChange=message=>{ui.status.textContent=message;cv._featurePersist?.();if(message.startsWith('AVWAP drawn'))setGapDeepDiveMouseMode('zoom',cv,ui);};
+  bindGapDeepDiveRangeInput(cv);
+  if(cv._featureControlsBound)return;cv._featureControlsBound=true;
+  ui.measure.onclick=()=>{const mode=cv._rangeMeasureMode?'zoom':'measure';setGapDeepDiveMouseMode(mode,cv,ui);ui.status.textContent=mode==='measure'?'Drag between any two chart points to measure.':'Hold and drag across the chart to zoom.';drawGapDeepDiveRangeOverlay(cv);};
+  ui.pan.onclick=()=>{const mode=cv._panToolMode?'zoom':'pan';setGapDeepDiveMouseMode(mode,cv,ui);ui.status.textContent=mode==='pan'?'Pan active · drag to move the chart.':'Pointer active · drag across the chart to zoom.';};
+  ui.avwap.onclick=()=>{setGapDeepDiveMouseMode('avwap',cv,ui);cv._avwapAnchors=null;cv._avwapSelectMode=true;ui.status.textContent='AVWAP tool active · click anchor A, then a later point B.';cv._featurePersist?.();cv._featureRedraw?.();};
+  ui.clearAvwap.onclick=()=>{cv._avwapAnchors=null;cv._avwapSelectMode=false;setGapDeepDiveMouseMode('zoom',cv,ui);ui.status.textContent='AVWAP cleared.';cv._featurePersist?.();cv._featureRedraw?.();};
+  ui.deleteMeasure.onclick=()=>{cv._rangeMeasures=(cv._rangeMeasures||[]).filter(m=>m.id!==cv._selectedRangeId);cv._selectedRangeId=cv._rangeMeasures.at(-1)?.id||null;cv._featurePersist?.();cv._featureRedraw?.();};
+  ui.clearMeasures.onclick=()=>{cv._rangeMeasures=[];cv._selectedRangeId=null;cv._featurePersist?.();cv._featureRedraw?.();};
+  const zoomBy=factor=>{const g=cv._rangeGeometry;if(!g)return;const zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,(cv._rangeZoom||1)*factor)),anchor=g.viewStart+g.viewSpan/2,nextSpan=Math.min(g.span,g.baseViewSpan/zoom);cv._rangeZoom=zoom;cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,anchor-nextSpan/2-g.viewBase));cv._gapDeepDiveRedraw?.();};ui.zoomIn.onclick=()=>zoomBy(1.25);ui.zoomOut.onclick=()=>zoomBy(.8);
+  ui.reset.onclick=()=>{cv._rangeZoom=1;cv._zoom=1;cv._panOffset=0;cv._yZoom=1;cv._featurePersist?.();cv._featureRedraw?.();};
+  ui.copy.onclick=async()=>{try{const out=document.createElement('canvas');out.width=cv.width;out.height=cv.height;const x=out.getContext('2d');x.drawImage(cv,0,0);if(ui.overlay)x.drawImage(ui.overlay,0,0);const blob=await new Promise(resolve=>out.toBlob(resolve,'image/png'));if(!blob)throw Error('Could not render PNG');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);ui.copy.textContent='Copied ✓';setTimeout(()=>ui.copy.textContent='Copy PNG',1200);}catch(error){ui.status.textContent='PNG copy unavailable: '+error.message;}};
+  [ui.vwap,ui.twap].forEach((toggle,index)=>toggle.onchange=()=>{if(index===0)cv._showVWAP=toggle.checked;else cv._showTWAP=toggle.checked;cv._featurePersist?.();cv._featureRedraw?.();});
+}
+function chartFeatureUi(prefix){const by=name=>document.getElementById(prefix+name);return {overlay:by('_overlay'),crosshairV:by('_crosshair_v'),crosshairH:by('_crosshair_h'),measureBox:by('_measure_box'),navigator:by('_navigator'),quoteLine:by('_quote_line'),status:by('_status'),measure:by('_measure'),pan:by('_pan'),avwap:by('_avwap'),clearAvwap:by('_clear_avwap'),deleteMeasure:by('_delete_measure'),clearMeasures:by('_clear_measures'),zoomIn:by('_zoom_in'),zoomOut:by('_zoom_out'),reset:by('_zoom_reset'),copy:by('_copy'),vwap:by('_vwap'),twap:by('_twap')};}
+function cancelUnifiedChartSelection(cv,ui){const drag=cv._rangeDrag,cancelAvwap=cv._avwapSelectMode,wasPanning=!!cv._panActive;if(!cv._selectedRangeId&&!cv._rangeMeasureMode&&!cv._panToolMode&&!cancelAvwap&&!cv._zoomDrag&&!drag&&!wasPanning)return false;if(drag){const measure=cv._rangeMeasures.find(item=>item.id===drag.id);if(drag.kind==='create')cv._rangeMeasures=cv._rangeMeasures.filter(item=>item.id!==drag.id);else if(measure&&drag.kind==='endpoint')measure[drag.which]=drag.original;else if(measure&&drag.kind==='move'){measure.a=drag.a;measure.b=drag.b;}}if(wasPanning){cv._panOffset=cv._panStartOffset||0;cv._yZoom=cv._panStartYZoom||1;cv._onPanChange?.(cv._panOffset);cv._onYZoomChange?.(cv._yZoom);}cv._panActive=false;cv._selectedRangeId=null;cv._rangeDrag=null;cv._zoomDrag=null;cv._avwapSelectMode=false;if(cancelAvwap)cv._avwapAnchors=null;if(cv._rangeMeasureMode||cv._panToolMode)setGapDeepDiveMouseMode('zoom',cv,ui);cv._featurePersist?.();ui.measureBox.hidden=true;ui.status.textContent=drag?'In-progress measurement cancelled.':cancelAvwap?'AVWAP selection cancelled.':'Selection cleared. Hold and drag on the chart to zoom.';cv._featureRedraw?.();drawGapDeepDiveRangeOverlay(cv);drawGapDeepDiveCrosshair(cv);return true;}
 function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   const parentW = (cv.parentElement && cv.parentElement.clientWidth) ? cv.parentElement.clientWidth : 0;
   const dpr = Math.min(3,Math.max(window.devicePixelRatio||1,Number(cv._renderDpr)||2));
@@ -1471,6 +1494,7 @@ window.openChartModal = function(i){
   currentModalSlot = i;
   const card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${i}"]`);
   currentModalIndex = card && Number.isInteger(card._sessionPos) ? card._sessionPos : i;
+  const featureCanvas=$('#cm_canvas');featureCanvas._rangeMeasureMode=false;featureCanvas._zoomSelectMode=true;featureCanvas._panToolMode=false;featureCanvas._zoomDrag=null;featureCanvas._rangeDrag=null;$('#cm_status').textContent='Hold and drag on the chart to zoom. Escape cancels the active tool.';
 
   const mainSig = openTabs[activeTab].container.querySelector('#sig');
   const mainBz = openTabs[activeTab].container.querySelector('#bz');
@@ -1484,6 +1508,7 @@ window.openChartModal = function(i){
   if(mainBz) $('#cm_bz').checked = mainBz.checked;
   $('#cm_tf').value = card && card._chartTf ? card._chartTf : '2m';
   $('#cm_days').value=String(card?card._chartDays||1:1);
+  $('#cm_vwap').checked=card?._showVWAP!==false;$('#cm_twap').checked=card?._showTWAP!==false;
 
   $('#chart_modal').style.display = 'flex';
   setTimeout(renderModalChart, 30);
@@ -1503,14 +1528,16 @@ window.renderModalChart = function(){
     : '<span style="color:#777;font-size:11px">(not in similar set)</span>';
   const sessionCount=(tab.sessionDates||[]).length, sessionPos=card?card._sessionPos:-1;
   const cv = $('#cm_canvas');
-  const body = $('#cm_body');
-  const targetH = Math.max(380, (body.clientHeight || 600) - 10);
+  const body = $('#cm_plot_wrap');
+  const targetH = Math.max(300, body.clientHeight || 600);
   const sel = $('#cm_sig').value;
   const bzChecked = $('#cm_bz').checked;
 
   const chart=card?._contextChart?{...item.chart,bars:card._contextChart}:item.chart;
-  cv._anchorDate=card?._sessionDate||item.date;cv._panOffset=card?._panOffset||0;cv._yZoom=card?._yZoom||1;cv._onPanChange=value=>{if(card)card._panOffset=value;};cv._onYZoomChange=value=>{if(card)card._yZoom=value;};cv._onPanEdge=card?._onPanEdge?side=>{card._panOffset=cv._panOffset;card._onPanEdge(side);}:null;
-  drawEv(cv, chart, sel, bzChecked, targetH, $('#cm_tf').value || (card?card._chartTf:'2m'),card?._zoom||1);
+  cv._chart=chart;cv._event=item;cv._timeframe=$('#cm_tf').value||(card?card._chartTf:'2m');cv._anchorDate=card?._sessionDate||item.date;cv._activeDate=cv._anchorDate;cv._chartDays=card?._chartDays||1;cv._panOffset=card?._panOffset||0;cv._yZoom=card?._yZoom||1;cv._zoom=card?._zoom||1;cv._rangeZoom=cv._zoom;cv._rangeMeasures=card?._rangeMeasures||(card._rangeMeasures=[]);cv._selectedRangeId=card?._selectedRangeId||null;cv._avwapAnchors=card?._avwapAnchors||null;cv._showVWAP=card?._showVWAP!==false;cv._showTWAP=card?._showTWAP!==false;cv._floatShares=Number(item.float_shares??chart.float_shares)||null;
+  cv._onPanChange=value=>{if(card)card._panOffset=value;};cv._onYZoomChange=value=>{if(card)card._yZoom=value;};cv._onPanEdge=card?._onPanEdge?side=>{card._panOffset=cv._panOffset;card._onPanEdge(side);}:null;
+  const ui=chartFeatureUi('cm');bindUnifiedChartFeatures(cv,ui,()=>{if(!card)return;card._panOffset=cv._panOffset||0;card._yZoom=cv._yZoom||1;card._zoom=cv._rangeZoom||1;card._avwapAnchors=cv._avwapAnchors;card._rangeMeasures=cv._rangeMeasures||[];card._selectedRangeId=cv._selectedRangeId;card._showVWAP=cv._showVWAP;card._showTWAP=cv._showTWAP;},renderModalChart);
+  drawEv(cv, chart, sel, bzChecked, targetH, cv._timeframe,cv._zoom);
 };
 
 window.nextModalChart = function(){
@@ -1530,6 +1557,7 @@ window.prevModalChart = function(){
 window.closeChartModal = function(){
   $('#chart_modal').style.display = 'none';
 };
+window.addEventListener('keydown',e=>{if(e.key!=='Escape'||$('#chart_modal').style.display!=='flex')return;const cv=$('#cm_canvas');if(cancelUnifiedChartSelection(cv,cv._featureUi)){e.preventDefault();e.stopImmediatePropagation();return;}closeChartModal();},true);
 
 $('#cm_sig').onchange = () => {
   renderModalChart();
@@ -1909,7 +1937,7 @@ function drawGapDeepDiveCanvas(cv,baseChart,timeframe,targetH){
   const state=cv._gapDeepDiveState,chart=state?.bars?{...baseChart,bars:state.bars,after_hours:true}:baseChart;
   cv._renderDpr=cv.id==='gap_chart_modal_canvas'?3:2;
   if(state){cv._anchorDate=baseChart.date;if(cv.id!=='gap_chart_modal_canvas'||!cv._modalPanInitialized){cv._panOffset=state.panOffset||0;if(cv.id==='gap_chart_modal_canvas')cv._modalPanInitialized=true;}if(cv.id==='gap_chart_modal_canvas')state.panOffset=cv._panOffset||0;cv._onPanChange=value=>{state.panOffset=value;};cv._onPanEdge=side=>loadGapDeepDiveAdjacent(cv,baseChart,side);}
-  if(cv.id==='gap_chart_modal_canvas'){cv._quoteLine=$('#gap_chart_quote_line');cv._floatShares=gapDeepDiveCurrent?.float_shares??baseChart.float_shares??null;cv._rangeMeasureBox=$('#gap_chart_measure_box');cv._rangeMeasures||=[];cv._rangeZoom||=1;cv._wheelZoomEnabled=true;cv._afterDraw=()=>{drawGapDeepDiveRangeOverlay(cv);drawGapDeepDiveCrosshair(cv);drawGapDeepDiveNavigator(cv,chart,timeframe);};cv._gapDeepDiveRedraw=()=>{if(gapDeepDiveCurrent){if(cv._gapDeepDiveState)cv._gapDeepDiveState.panOffset=cv._panOffset||0;renderGapDeepDiveModal();}};bindGapDeepDiveRangeInput(cv);}
+  if(cv.id==='gap_chart_modal_canvas'){cv._fullFeatures=true;cv._quoteLine=$('#gap_chart_quote_line');cv._floatShares=gapDeepDiveCurrent?.float_shares??baseChart.float_shares??null;cv._rangeMeasureBox=$('#gap_chart_measure_box');cv._rangeOverlay=$('#gap_chart_range_overlay');cv._crosshairV=$('#gap_chart_crosshair_v');cv._crosshairH=$('#gap_chart_crosshair_h');cv._navigator=$('#gap_chart_navigator');cv._rangeMeasures||=[];cv._rangeZoom||=1;cv._wheelZoomEnabled=true;cv._afterDraw=()=>{drawGapDeepDiveRangeOverlay(cv);drawGapDeepDiveCrosshair(cv);drawGapDeepDiveNavigator(cv,chart,timeframe);};cv._gapDeepDiveRedraw=()=>{if(gapDeepDiveCurrent){if(cv._gapDeepDiveState)cv._gapDeepDiveState.panOffset=cv._panOffset||0;renderGapDeepDiveModal();}};bindGapDeepDiveRangeInput(cv);}
   drawEv(cv,chart,'none',cv.id==='gap_chart_modal_canvas'?$('#gap_chart_bz').checked:true,targetH,timeframe,cv.id==='gap_chart_modal_canvas'?(cv._rangeZoom||1):1);
 }
 async function loadGapDeepDiveAdjacent(cv,baseChart,side){
@@ -1961,12 +1989,12 @@ $('#gap_deepdive_tf').onchange=()=>{const cv=$('#gap_chart_modal_canvas');cv._av
 $('#gap_chart_tf').onchange=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Interval changed. Select AVWAP again to choose new anchor points.';setGapDeepDiveTimeframe($('#gap_chart_tf').value);};
 $('#gap_chart_avwap').onclick=()=>{const cv=$('#gap_chart_modal_canvas');setGapDeepDiveMouseMode('avwap');cv._avwapAnchors=null;cv._avwapSelectMode=true;cv.style.cursor='crosshair';$('#gap_chart_avwap_status').textContent='AVWAP tool active · click point A, then click a later point B.';renderGapDeepDiveModal();cv.style.cursor='crosshair';};
 $('#gap_chart_clear_avwap').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;setGapDeepDiveMouseMode('zoom');cv.style.cursor='crosshair';$('#gap_chart_avwap_status').textContent='AVWAP cleared. VWAP, TWAP and Bone Zone remain on.';renderGapDeepDiveModal();};
-function setGapDeepDiveMouseMode(mode){const cv=$('#gap_chart_modal_canvas'),measure=$('#gap_chart_measure'),pan=$('#gap_chart_pan');cv._rangeMeasureMode=mode==='measure';cv._zoomSelectMode=mode!=='measure'&&mode!=='pan'&&mode!=='avwap';cv._panToolMode=mode==='pan';if(mode!=='avwap')cv._avwapSelectMode=false;measure.dataset.active=cv._rangeMeasureMode?'1':'';measure.style.borderColor=cv._rangeMeasureMode?'#62c8ff':'';measure.textContent=cv._rangeMeasureMode?'Measure active':'Measure range';pan.dataset.active=cv._panToolMode?'1':'';pan.style.borderColor=cv._panToolMode?'#62c8ff':'';cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode||mode==='avwap')?'crosshair':'grab';}
+function setGapDeepDiveMouseMode(mode,cv=$('#gap_chart_modal_canvas'),ui={}){const measure=ui.measure||$('#gap_chart_measure'),pan=ui.pan||$('#gap_chart_pan');cv._rangeMeasureMode=mode==='measure';cv._zoomSelectMode=mode!=='measure'&&mode!=='pan'&&mode!=='avwap';cv._panToolMode=mode==='pan';if(mode!=='avwap')cv._avwapSelectMode=false;if(measure){measure.dataset.active=cv._rangeMeasureMode?'1':'';measure.style.borderColor=cv._rangeMeasureMode?'#62c8ff':'';measure.textContent=cv._rangeMeasureMode?'Measure active':'Measure range';}if(pan){pan.dataset.active=cv._panToolMode?'1':'';pan.style.borderColor=cv._panToolMode?'#62c8ff':'';}cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode||mode==='avwap')?'crosshair':'grab';}
 $('#gap_chart_measure').onclick=()=>{const cv=$('#gap_chart_modal_canvas'),next=cv._rangeMeasureMode?'zoom':'measure';setGapDeepDiveMouseMode(next);$('#gap_chart_avwap_status').textContent=next==='measure'?'Hold the left mouse button and drag between candles; release to keep the measurement.':'Hold and drag on the chart to select an area and zoom.';drawGapDeepDiveRangeOverlay(cv);};
 $('#gap_chart_pan').onclick=()=>{const cv=$('#gap_chart_modal_canvas'),next=cv._panToolMode?'zoom':'pan';setGapDeepDiveMouseMode(next);$('#gap_chart_avwap_status').textContent=next==='pan'?'Pan active · hold and drag to move the chart.':'Pointer active · hold and drag over the chart to zoom.';};
 $('#gap_chart_delete_measure').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._rangeMeasures=(cv._rangeMeasures||[]).filter(m=>m.id!==cv._selectedRangeId);cv._selectedRangeId=cv._rangeMeasures.at(-1)?.id||null;renderGapDeepDiveModal();};
 $('#gap_chart_clear_measures').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._rangeMeasures=[];cv._selectedRangeId=null;renderGapDeepDiveModal();};
-function gapDeepDiveZoom(factor){const cv=$('#gap_chart_modal_canvas'),g=cv._rangeGeometry;if(!g)return;const zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,(cv._rangeZoom||1)*factor)),anchor=g.viewStart+g.viewSpan/2,nextSpan=Math.min(g.span,g.baseViewSpan/zoom);cv._rangeZoom=zoom;cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,anchor-nextSpan/2-g.viewBase));renderGapDeepDiveModal();}
+function gapDeepDiveZoom(factor,cv=$('#gap_chart_modal_canvas')){const g=cv._rangeGeometry;if(!g)return;const zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,(cv._rangeZoom||1)*factor)),anchor=g.viewStart+g.viewSpan/2,nextSpan=Math.min(g.span,g.baseViewSpan/zoom);cv._rangeZoom=zoom;cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,anchor-nextSpan/2-g.viewBase));if(cv._gapDeepDiveRedraw)cv._gapDeepDiveRedraw();else renderGapDeepDiveModal();}
 $('#gap_chart_zoom_in').onclick=()=>gapDeepDiveZoom(1.25);
 $('#gap_chart_zoom_out').onclick=()=>gapDeepDiveZoom(.8);
 $('#gap_chart_zoom_reset').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._rangeZoom=1;cv._panOffset=0;cv._yZoom=1;renderGapDeepDiveModal();};

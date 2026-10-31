@@ -1364,6 +1364,9 @@ def keyword_search_page():
     shared_renderer = ("<script>(function(){\n" + HTML[helper_start:helper_end] +
                        HTML[renderer_start:renderer_end] +
                        "\nwindow.drawKeywordGapEv=drawEv;\n"
-                       "window.aggregateKeywordBars=aggregateEvBars;\n})();</script>")
+                       "window.aggregateKeywordBars=aggregateEvBars;\n"
+                       "window.bindUnifiedChartFeatures=bindUnifiedChartFeatures;\n"
+                       "window.chartFeatureUi=chartFeatureUi;\n"
+                       "window.cancelUnifiedChartSelection=cancelUnifiedChartSelection;\n})();</script>")
     page = KEYWORD_HTML.replace("<script>", shared_renderer + "<script>", 1)
     return Response(page, mimetype="text/html")
