@@ -16,6 +16,31 @@ input[type=text]{width:min(420px,70vw)}input[type=date]{width:140px}select{min-w
 .compareMatch .compareCharts{display:none}.compareEventGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}.compareEventCard{cursor:pointer}.compareEventCard .evhead{align-items:flex-start}.compareEventCard .evtags{gap:4px}.compareEventCard canvas{height:390px}.compareEventCard .evtag{font-size:10px}.qualifiedMatchList{display:grid;gap:5px;margin-top:10px}.qualifiedMatch{display:grid;grid-template-columns:minmax(170px,1fr) repeat(3,minmax(110px,auto));gap:8px;align-items:center;background:#0a0c0f;border:1px solid #252c34;padding:8px 10px;color:#adb6c0;font-size:11px}.qualifiedMatch b{font-size:12px}@media(max-width:760px){.qualifiedMatch{grid-template-columns:1fr 1fr}.compareEventGrid{grid-template-columns:1fr}}
 @media(max-width:720px){main{padding:10px}.stockhead{top:45px}.toolbar{align-items:stretch}input[type=text]{width:100%}}
 .kwEventHeading{display:flex;align-items:center;gap:7px;flex-wrap:wrap;min-width:0;flex:1}.evhead .evt{flex:0 1 auto}.evtags{display:flex;align-items:center;gap:4px;flex-wrap:wrap}.evtag{display:inline-flex;align-items:center;border:1px solid #303b46;background:#10151b;color:#b9c7d5;border-radius:3px;padding:1px 5px;font-size:10px;line-height:16px;white-space:nowrap}.evtag.gap{color:#8fd0ff;border-color:#245474}.evtag.dvol{color:#75dfa9;border-color:#286447}.evtag.rule{color:#ffd66b;border-color:#786128}.kwModalTags{display:flex;gap:5px;align-items:center;margin-right:auto}.kwModalTags .evtag{font-size:11px;padding:3px 7px}.kwModalTitle{margin-right:0}
+
+.chartModalBox{width:min(98vw,2200px);height:97vh;max-height:100vh;overflow:hidden;border-radius:6px}
+.chartModalHead{display:block;flex:0 0 auto;padding:10px 14px;background:#101419}
+.kwModalIdentity{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.kwModalTitle{flex:0 0 auto;margin:0;color:#e7eef5;font-size:17px}
+.kwModalTags{flex:0 0 auto;gap:5px;margin:0}
+.kwModalQuote{flex:1 1 440px;min-width:min(100%,320px);padding:4px 8px;border:1px solid #29313a;border-radius:3px;color:#e8edf3;font:12px/1.45 Consolas,monospace;overflow-wrap:anywhere}
+.kwModalControls{display:flex;width:100%;min-width:0;align-items:center;justify-content:flex-start;gap:8px;flex-wrap:wrap;padding-top:8px;margin-top:8px;border-top:1px solid #29313a}
+.kwModalControls>*{flex:0 0 auto;min-width:0}
+.kwControlLabel{display:flex;align-items:center;gap:6px;color:#ddd;font-size:12px;white-space:nowrap}
+.kwModalSelect{height:32px;min-width:70px;margin:0;padding:0 8px;background:#181818;border:1px solid #444;color:#fff;font-size:12px}
+.kwControlGroup{display:flex;align-items:center;gap:4px;flex:0 0 auto}
+.kwToolBtn{width:auto;min-width:34px;height:32px;padding:0 10px;border:1px solid #444;background:#181818;color:#ddd;font-size:12px;line-height:1;white-space:nowrap;cursor:pointer}
+.kwToolBtn:hover{border-color:#62c8ff;color:#fff}
+.kwToolBtn.kwAvwap{border-color:#655516;color:#ffe17d}
+.kwBoneLabel{white-space:nowrap}
+.kwClose{width:34px;min-width:34px;height:32px;border:1px solid #444;background:#181818;color:#ddd;cursor:pointer}
+.kwModalBody{min-height:0;padding:8px 10px;display:block}
+#kwModalCanvas{position:relative;z-index:1;width:100%;height:100%}
+#kwf_overlay{position:absolute;inset:8px 10px;z-index:2;width:calc(100% - 20px);height:calc(100% - 16px);pointer-events:none}
+#kwf_crosshair_v,#kwf_crosshair_h{position:absolute;z-index:3;pointer-events:none}#kwf_crosshair_v{top:0;width:0;border-left:1px dashed rgba(220,232,244,.75)}#kwf_crosshair_h{left:0;height:0;border-top:1px dashed rgba(220,232,244,.75)}
+#kwf_measure_box{position:absolute;z-index:4;max-width:300px;padding:8px 10px;background:rgba(6,13,21,.96);border:1px solid #62c8ff;border-radius:4px;color:#edf6ff;font:13px/1.55 Consolas,monospace;white-space:pre-wrap;pointer-events:none}
+#kwf_navigator_wrap{height:76px;flex:0 0 76px;border:1px solid #242b33;background:#090c10}
+#kwf_navigator{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
+@media(max-width:850px){.kwModalQuote{flex-basis:100%}.kwModalControls{gap:6px}.kwModalSelect{min-width:64px}}
 </style></head><body>
 <header><a href="/">← Gap-Up Fade</a><strong>⌕ Search Keyword</strong><a href="#comparePanel">Jump to Compare</a><span style="margin-left:auto;color:#78838e">SEC EDGAR · financing-player research</span></header>
 <main>
@@ -30,7 +55,39 @@ input[type=text]{width:min(420px,70vw)}input[type=date]{width:140px}select{min-w
 <div id="resultSummary"></div><div class="kwChartTools"><label>All charts · timeframe <select class="kwAllTf"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label></div><div id="tableRoot"></div><div id="stocksRoot"></div>
  <section id="comparePanel"><h2>Compare historical event patterns</h2><div id="compareCriteria" class="compareNote">Compare your ticker with matching-keyword events whose event-day open was $10 or less and session dollar volume was above $50M.</div><form id="compareForm" class="compareToolbar"><label>Target ticker<input id="compareTicker" type="text" maxlength="10" placeholder="TICKER" required></label><label>Target date<input id="compareDate" type="date" required></label><button class="primary" type="submit">Compare</button></form><div id="compareStatus" class="status">Search for a keyword to populate historical candidate events.</div><div class="kwChartTools"><label>All charts · timeframe <select class="kwAllTf"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label></div><div id="unifiedProjectionRoot"></div><div id="forecast2mRoot"></div><div id="compareResults"></div></section>
 </main>
-<div id="chartModal" class="chartModal" onclick="if(event.target===this)closeKWModal()"><div class="chartModalBox"><div class="chartModalHead"><div class="kwModalTitle" id="kwModalTitle"></div><div class="kwModalTags" id="kwModalTags"></div><div id="kwf_quote_line" class="kwModalTags"></div><div class="kwModalControls"><select id="kwModalTf" class="evtf"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select><select id="kwModalDays" class="evtf"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="60">60 days</option></select><button id="kwf_zoom_out" class="evnav" title="Zoom out">−</button><button id="kwf_zoom_in" class="evnav" title="Zoom in">+</button><button id="kwf_reset" class="evnav" title="Reset zoom and pan">Reset</button><select id="kwModalSig" class="evtf"><option value="none">No signals</option><option value="all">All entry models</option></select><label class="kwBoneLabel"><input id="kwModalBone" type="checkbox" checked> Bone zone</label><label class="kwBoneLabel"><input id="kwf_vwap" type="checkbox" checked> VWAP</label><label class="kwBoneLabel"><input id="kwf_twap" type="checkbox" checked> TWAP</label><button id="kwf_avwap" class="evnav" title="Set AVWAP anchor points">AVWAP</button><button id="kwf_clear_avwap" class="evnav" title="Clear AVWAP">Clear AVWAP</button><button id="kwf_measure" class="evnav">Measure</button><button id="kwf_pan" class="evnav">Pan</button><button id="kwf_delete_measure" class="evnav">Delete range</button><button id="kwf_clear_measures" class="evnav">Clear ranges</button><button id="kwf_copy" class="evnav">Copy PNG</button><button onclick="closeKWModal()" class="kwClose" title="Close">✕</button></div></div><div class="kwModalBody" style="position:relative;flex:1;min-height:250px"><canvas id="kwModalCanvas" height="720" style="position:relative;z-index:1;width:100%;height:100%"></canvas><canvas id="kwf_overlay" style="position:absolute;inset:0;z-index:2;width:100%;height:100%;pointer-events:none"></canvas><div id="kwf_crosshair_v" hidden style="position:absolute;z-index:3;top:0;width:0;border-left:1px dashed rgba(220,232,244,.75);pointer-events:none"></div><div id="kwf_crosshair_h" hidden style="position:absolute;z-index:3;left:0;height:0;border-top:1px dashed rgba(220,232,244,.75);pointer-events:none"></div><div id="kwf_measure_box" hidden style="position:absolute;z-index:4;max-width:300px;padding:8px 10px;background:rgba(6,13,21,.96);border:1px solid #62c8ff;border-radius:4px;color:#edf6ff;font:13px/1.55 Consolas,monospace;white-space:pre-wrap;pointer-events:none"></div></div><div id="kwf_navigator_wrap" style="height:76px;flex:0 0 76px;border:1px solid #242b33;background:#090c10"><canvas id="kwf_navigator" style="display:block;width:100%;height:100%;touch-action:none;cursor:grab"></canvas></div><div class="kwModalLegend kwLegend"><span class="c">━ VWAP</span> &nbsp; <span style="color:#c084fc">━ TWAP</span> &nbsp; <span style="color:#ffd23f">┅ AVWAP</span> &nbsp; <span class="y">┅ PM high</span> &nbsp; <span class="d">┅ prev close</span> &nbsp; <span style="color:#d7ff6e">━ EMA9</span> &nbsp; <span style="color:#ffa500">━ EMA20</span> &nbsp; <span class="g">▒</span><span class="r">▒</span> cloud &nbsp; <span class="d">━ BB(20,2)</span> &nbsp; <span id="kwf_status">Drag to zoom · choose Pan to move · Escape cancels the active tool.</span></div></div></div>
+<div id="chartModal" class="chartModal" onclick="if(event.target===this)closeKWModal()">
+  <div class="chartModalBox">
+    <div class="chartModalHead">
+      <div class="kwModalIdentity">
+        <div class="kwModalTitle" id="kwModalTitle"></div>
+        <div class="kwModalTags" id="kwModalTags"></div>
+        <div id="kwf_quote_line" class="kwModalQuote"></div>
+      </div>
+      <div class="kwModalControls">
+        <label class="kwControlLabel">Interval<select id="kwModalTf" class="kwModalSelect"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label>
+        <label class="kwControlLabel">Sessions<select id="kwModalDays" class="kwModalSelect"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="60">60 days</option></select></label>
+        <div class="kwControlGroup"><button id="kwf_zoom_out" class="kwToolBtn" title="Zoom out">−</button><button id="kwf_zoom_in" class="kwToolBtn" title="Zoom in">+</button><button id="kwf_reset" class="kwToolBtn">Reset</button></div>
+        <label class="kwControlLabel">Signals<select id="kwModalSig" class="kwModalSelect"><option value="none">No signals</option><option value="all">All entry models</option></select></label>
+        <label class="kwBoneLabel"><input id="kwModalBone" type="checkbox" checked> Bone zone</label>
+        <label class="kwBoneLabel"><input id="kwf_vwap" type="checkbox" checked> VWAP</label>
+        <label class="kwBoneLabel"><input id="kwf_twap" type="checkbox" checked> TWAP</label>
+        <div class="kwControlGroup"><button id="kwf_avwap" class="kwToolBtn kwAvwap">AVWAP · Select A → B</button><button id="kwf_clear_avwap" class="kwToolBtn">Clear AVWAP</button></div>
+        <div class="kwControlGroup"><button id="kwf_measure" class="kwToolBtn">Measure range</button><button id="kwf_pan" class="kwToolBtn">Pan</button><button id="kwf_delete_measure" class="kwToolBtn">Delete range</button><button id="kwf_clear_measures" class="kwToolBtn">Clear ranges</button></div>
+        <button id="kwf_copy" class="kwToolBtn">Copy PNG</button>
+        <button onclick="closeKWModal()" class="kwClose" title="Close">×</button>
+      </div>
+    </div>
+    <div class="kwModalBody">
+      <canvas id="kwModalCanvas" height="720"></canvas>
+      <canvas id="kwf_overlay"></canvas>
+      <div id="kwf_crosshair_v" hidden></div><div id="kwf_crosshair_h" hidden></div>
+      <div id="kwf_measure_box" hidden></div>
+    </div>
+    <div id="kwf_navigator_wrap"><canvas id="kwf_navigator"></canvas></div>
+    <div class="kwModalLegend kwLegend"><span class="c">━ VWAP</span> &nbsp; <span style="color:#c084fc">━ TWAP</span> &nbsp; <span style="color:#ffd23f">┅ AVWAP</span> &nbsp; <span class="y">┅ PM high</span> &nbsp; <span class="d">┅ prev close</span> &nbsp; <span style="color:#d7ff6e">━ EMA9</span> &nbsp; <span style="color:#ffa500">━ EMA20</span> &nbsp; <span class="g">▒</span><span class="r">▒</span> cloud &nbsp; <span class="d">━ BB(20,2)</span> &nbsp; <span id="kwf_status">Drag to zoom · choose Pan to move · Escape cancels the active tool.</span></div>
+  </div>
+</div>
+
 <script>
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const user=localStorage.getItem('gap_user')||'', token=localStorage.getItem('gap_token')||'';
