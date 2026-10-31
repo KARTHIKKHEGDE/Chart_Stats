@@ -272,7 +272,6 @@ def _gap_deepdive_chart_payload(ticker,day,scan_item):
     # derived chart fields on every open still costs time. Persist this ready-
     # to-render payload as well so repeat chart visits are disk-cache hits.
     from chart_app.application import cget, cput
-    from chart_app.market_data import _deepdive_candle_rows
     import hashlib
     chart_key=f'{ticker.upper()}|{day}'
     with _GAP_DEEPDIVE_CHART_PAYLOAD_LOCK:
@@ -291,14 +290,10 @@ def _gap_deepdive_chart_payload(ticker,day,scan_item):
         saved_item=next((item for item in (saved or {}).get('results',[]) if item.get('ticker')==ticker and item.get('date')==day),None)
         pc=(saved_item or {}).get('previous_close')
     if not pc: raise ValueError('Cached previous close is unavailable for this session.')
-    # Deepdive candles are bundled in the versioned JSON file and mirrored in
-    # .gapcache. Read those sources directly; chart rendering must not fall
-    # through to the Polygon fetch path in minute_df().
-    from chart_app.application import cget
-    from chart_app.market_data import poly_frame
-    rows=cget(f'{ticker}_{day}_1m') or _deepdive_candle_rows(ticker,day)
-    if not rows: raise ValueError('Cached intraday candles are unavailable for this session.')
-    frame=poly_frame(rows)
+    # minute_df checks the per-session JSON cache, then the bundled JSON cache,
+    # and only fetches Polygon when neither contains this session. It persists
+    # newly fetched raw candles back to the per-session JSON cache.
+    frame=minute_df(ticker,day)
     if frame is None or frame.empty: raise ValueError('Cached intraday candles are unavailable.')
     mm=frame.index.hour*60+frame.index.minute
     pm=frame[(mm>=PM_START)&(mm<RG_START)]
