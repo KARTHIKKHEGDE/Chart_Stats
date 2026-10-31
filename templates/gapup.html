@@ -1110,6 +1110,7 @@ function gapRangePointAtIndex(g,index){
   const minute=b.t[index]-(dayIndex>=0?dayIndex*g.sessionSpan:0),hh=String(Math.floor(minute/60)).padStart(2,'0'),mm=String(minute%60).padStart(2,'0');
   return {date:day,minute,price:b.c[index],label:`${day} ${hh}:${mm} ET`};
 }
+function gapRangeX(point,g){if(Number.isFinite(point.plotTime))return g.X(point.plotTime);const dayIndex=g.multi?g.dates.indexOf(point.date):-1;return g.X(point.minute+(dayIndex>=0?dayIndex*g.sessionSpan:0));}
 function gapRangeTimestamp(point,offsetForDay){
   const [y,m,d]=point.date.split('-').map(Number),etOffset=330-offsetForDay(point.date);
   return Date.UTC(y,m-1,d,0,point.minute-etOffset);
@@ -1130,7 +1131,7 @@ function drawGapDeepDiveRanges(cv,x,g){
   x.save();x.beginPath();x.rect(g.L,g.T,g.plotW,g.plotH);x.clip();
   for(let n=0;n<measures.length;n++){
     const measure=measures[n],stats=gapRangeStats(measure,g);if(!stats)continue;
-    const iA=gapRangeResolve(measure.a,g),iB=gapRangeResolve(measure.b,g),a={x:g.X(g.bars.t[iA]+g.tf/2),y:g.Y(measure.a.price)},b={x:g.X(g.bars.t[iB]+g.tf/2),y:g.Y(measure.b.price)},color=palette[n%palette.length];
+    const a={x:gapRangeX(measure.a,g),y:g.Y(measure.a.price)},b={x:gapRangeX(measure.b,g),y:g.Y(measure.b.price)},color=palette[n%palette.length];
     x.strokeStyle=color;x.lineWidth=cv._selectedRangeId===measure.id?2.8:1.8;x.beginPath();x.moveTo(a.x,a.y);x.lineTo(b.x,b.y);x.stroke();
     [a,b].forEach(pt=>{x.fillStyle='#090c10';x.strokeStyle=color;x.lineWidth=2;x.beginPath();x.arc(pt.x,pt.y,5,0,Math.PI*2);x.fill();x.stroke();});
     cv._rangeScreenMeasures.push({id:measure.id,a,b,color});
@@ -1151,7 +1152,7 @@ function drawGapDeepDiveRangeOverlay(cv){
   const z=cv._zoomDrag;if(z){const left=Math.min(z.x0,z.x1),width=Math.abs(z.x1-z.x0),top=g.T,height=g.plotH;x.save();x.fillStyle='rgba(98,200,255,.14)';x.fillRect(left,top,width,height);x.strokeStyle='#62c8ff';x.lineWidth=1.5;x.setLineDash([5,4]);x.strokeRect(left,top,width,height);x.restore();}
 }
 function scheduleGapDeepDiveRangeOverlay(cv){if(cv._rangeOverlayFrame)return;cv._rangeOverlayFrame=requestAnimationFrame(()=>{cv._rangeOverlayFrame=0;drawGapDeepDiveRangeOverlay(cv);});}
-function gapDeepDiveRangePoint(cv,x){return cv._rangePointAtX?.(x)||null;}
+function gapDeepDiveRangePoint(cv,x,y){return cv._rangePointAt?.(x,y)||cv._rangePointAtX?.(x)||null;}
 function bindGapDeepDiveRangeInput(cv){
   if(cv._rangeInputBound)return;cv._rangeInputBound=true;
   const stop=e=>{e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();};
@@ -1163,7 +1164,7 @@ function bindGapDeepDiveRangeInput(cv){
     let drag;
     if(hit){cv._selectedRangeId=hit.m.id;drag={kind:'endpoint',id:hit.m.id,which:hit.which};}
     else{
-      const p=gapDeepDiveRangePoint(cv,e.offsetX);if(!p)return;
+      const p=gapDeepDiveRangePoint(cv,e.offsetX,e.offsetY);if(!p)return;
       const lineHit=(cv._rangeScreenMeasures||[]).find(m=>{const dx=m.b.x-m.a.x,dy=m.b.y-m.a.y,t=Math.max(0,Math.min(1,((e.offsetX-m.a.x)*dx+(e.offsetY-m.a.y)*dy)/(dx*dx+dy*dy||1)));return Math.hypot(e.offsetX-(m.a.x+t*dx),e.offsetY-(m.a.y+t*dy))<8;});
       if(lineHit){const measure=cv._rangeMeasures.find(m=>m.id===lineHit.id),i=gapRangeResolve(p,g);cv._selectedRangeId=lineHit.id;drag={kind:'move',id:lineHit.id,index:i,price:p.price,a:{...measure.a},b:{...measure.b}};}
       else{const measure={id:crypto.randomUUID(),a:p,b:p};cv._rangeMeasures||=[];cv._rangeMeasures.push(measure);cv._selectedRangeId=measure.id;drag={kind:'create',id:measure.id,which:'b'};}
@@ -1173,7 +1174,7 @@ function bindGapDeepDiveRangeInput(cv){
   cv.addEventListener('pointermove',e=>{
     if(cv._zoomDrag){cv._zoomDrag.x1=e.offsetX;cv._zoomDrag.y1=cv._rangeGeometry.T+cv._rangeGeometry.plotH;stop(e);scheduleGapDeepDiveRangeOverlay(cv);return;}
     const drag=cv._rangeDrag,g=cv._rangeGeometry;if(!drag||!g)return;
-    const measure=cv._rangeMeasures.find(m=>m.id===drag.id),p=gapDeepDiveRangePoint(cv,e.offsetX);if(!measure||!p)return;
+    const measure=cv._rangeMeasures.find(m=>m.id===drag.id),p=gapDeepDiveRangePoint(cv,e.offsetX,e.offsetY);if(!measure||!p)return;
     if(drag.kind==='move'){
       const idx=gapRangeResolve(p,g),delta=idx-drag.index,priceDelta=p.price-drag.price;
       const movePoint=original=>{const old=gapRangeResolve(original,g),next=gapRangePointAtIndex(g,Math.max(0,Math.min(g.bars.t.length-1,old+delta)));return {...next,price:original.price+priceDelta};};
@@ -1260,6 +1261,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   const hoverStamp=(day,minute)=>{const [yy,mm,dd]=String(day||'').split('-').map(Number);if(!yy||!mm||!dd)return 'time unavailable';const at=new Date(Date.UTC(yy,mm-1,dd,0,Math.round(minute+hoverOffset(day)))),parts=istClock.formatToParts(at),v=Object.fromEntries(parts.map(p=>[p.type,p.value]));return `${v.month}/${v.day}/${v.year} ${v.hour}:${v.minute} IST`;};
   cv._rangeGeometry={bars:b,chart:c,dates,multi,sessionSpan,tf,X,Y,L,T,plotW:pw,plotH:ph,yMin:lo,yMax:hi,offsetForDay:hoverOffset,span,fullStart,viewStart,viewSpan,baseViewSpan,viewBase};
   cv._hoverItems=visible.map(i=>{const day=b.d?.[i]||c.date||'',dayIndex=multi?dates.indexOf(day):-1,minute=daily?0:b.t[i]-(dayIndex>=0?dayIndex*sessionSpan:0);return {key:`${day}|${b.t[i]}`,index:i,date:day,minute,x:X(b.t[i]+(daily?.5:tf/2)),label:daily?`${hoverStamp(day,0).split(' ').slice(0,1)[0]} · Daily IST`:hoverStamp(day,minute),o:b.o[i],h:b.h[i],l:b.l[i],c:b.c[i],prevC:i>0?b.c[i-1]:c.pc,v:b.v[i]||0};});
+  cv._rangePointAt=(px,py)=>{if(px<L||px>W-R||py<T||py>T+ph)return null;const plotTime=viewStart+(px-L)/pw*viewSpan,price=hi-(py-T)/ph*(hi-lo);let date=c.date||'',minute=plotTime;if(daily){const index=Math.max(0,Math.min(b.d.length-1,Math.round(plotTime)));date=b.d?.[index]||date;minute=0;}else if(multi){const index=Math.max(0,Math.min(dates.length-1,Math.floor((plotTime-240)/sessionSpan)));date=dates[index]||date;minute=plotTime-index*sessionSpan;}return {date,minute,plotTime,price,label:`${date} ${String(Math.floor(minute/60)).padStart(2,'0')}:${String(Math.floor(minute%60)).padStart(2,'0')} ET`};};
   cv._rangePointAtX=px=>{const p=cv._hoverItems?.reduce((best,item)=>Math.abs(item.x-px)<Math.abs(best.x-px)?item:best,cv._hoverItems?.[0]);return p?{date:p.date,minute:p.minute,price:p.c,label:p.label}:null;};
   cv._showChartHover=(px,py)=>{if(px<L||px>W-R||!cv._hoverItems?.length){if(cv._hoverTip)cv._hoverTip.style.display='none';return}let item=cv._hoverItems.reduce((best,p)=>Math.abs(p.x-px)<Math.abs(best.x-px)?p:best,cv._hoverItems[0]);const tip=cv._hoverTip;if(!tip)return;const fmt=n=>Number.isFinite(Number(n))?Number(n).toFixed(Number(n)<1?4:2):'—';tip.textContent=cv._showOhlcTip?`${item.label}\nO ${fmt(item.o)}  H ${fmt(item.h)}\nL ${fmt(item.l)}  C ${fmt(item.c)}  V ${Number(item.v||0).toLocaleString('en-US')}`:item.label;tip.style.whiteSpace=cv._showOhlcTip?'pre-line':'nowrap';tip.style.display='block';if(cv._quoteLine){const change=item.c-Number(item.prevC||0),pct=item.prevC?change/Number(item.prevC)*100:0,tp=(item.h+item.l+item.c)/3,dv=tp*item.v,float=Number(cv._floatShares),compact=n=>Number.isFinite(n)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(n):'—',money=n=>Number.isFinite(n)?(Math.abs(n)>=1000?'$'+compact(Math.abs(n)):Math.abs(n)<1?'$'+Math.abs(n).toFixed(4):'$'+Math.abs(n).toFixed(2)):'—',signedMoney=n=>`${n>=0?'+':'-'}${money(change)}`;cv._quoteLine.textContent=`${item.label} · %Chg ${pct>=0?'+':''}${pct.toFixed(2)}% · $Chg ${signedMoney(change)} · Vol ${Number(item.v).toLocaleString('en-US')} · $Vol ${money(dv)} · Float ${Number.isFinite(float)?compact(float)+' sh':'unavailable'}`;cv._quoteLine.style.color=change>=0?'#64d99b':'#ff7777';}if(cv.id==='kwModalCanvas'){tip.style.left='' ;tip.style.top='' ;}else if(cv._showOhlcTip){tip.style.left=Math.min(W-210,Math.max(L,px+14))+'px';tip.style.top=(cv.offsetTop+8)+'px';}else{tip.style.left=Math.max(4,cv.offsetLeft+8)+'px';tip.style.top=(cv.offsetTop+cv.offsetHeight+2)+'px';}cv.title=item.label;};
   cv._viewSpan=viewSpan;cv._panSpan=span;cv._plotWidth=pw;cv._drawEvArgs=[c,sel,bzChecked,targetH,timeframe,zoom];
