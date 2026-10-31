@@ -423,7 +423,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     day_obj = live["date"]
     day_str = str(day_obj)
     day_name = day_obj.strftime("%A") if hasattr(day_obj, "strftime") else ""
-    day_display = f"{day_str} ({day_name})" if day_name else day_str
+    day_display = f"{fdate(day_str)} ({day_name})" if day_name else fdate(day_str)
     next_session = day_obj + dt.timedelta(days=1)
     while next_session.weekday() >= 5:
         next_session += dt.timedelta(days=1)
@@ -718,7 +718,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
              f"Last 90 sessions  {stat_line(open_hod['last90'])}",
              f"Gap-up days ≥5%  {stat_line(open_hod['gapup5'])}",
              f"High-volume days  {stat_line(open_hod['highvol'])}",
-             f"HOD time (15m bars, {hod_times['date_from']} to {hod_times['date_to']})",
+             f"HOD time (15m bars, {fdate(hod_times['date_from'])} to {fdate(hod_times['date_to'])})",
              f"All sessions  median {hod_times['median_time'] or '—'} IST ({len(hod_times['rows'])} days)",
              "", T["p7"], kv_text(ptext, 40), "",
              T["pc"], kv_text(p5)]

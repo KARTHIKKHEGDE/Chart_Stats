@@ -718,6 +718,8 @@ async function initAuth(){
 
 let lastText="", timer=null, lastChart=null, EV=[];
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const formatDateMDY=value=>{const raw=String(value??'');const m=raw.slice(0,10).match(/^(\d{4})-(\d{2})-(\d{2})$/);return m?`${m[2]}/${m[3]}/${m[1]}`:raw;};
+const formatDateTimeMDY=value=>{const raw=String(value??'');return formatDateMDY(raw)+(raw.length>10?raw.slice(10).replace('T',' '):'');};
 const kv=rows=>'<div class="kv">'+rows.map(([l,v,c])=>`<span>${esc(l)}:</span><span class="${c}">${esc(v)}</span>`).join('')+'</div>';
 const table=(cols,rows,dim,sortable)=>`<div class="scroll"><table class="${sortable?'sort':''}"><thead><tr>`+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr></thead><tbody>'+
   rows.map((r,i)=>`<tr class="${dim&&dim[i]?'dim':''}">`+r.map(([x,c,s])=>`<td class="${c}" data-s="${esc(s)}">${esc(x)}</td>`).join('')+'</tr>').join('')+'</tbody></table></div>';
@@ -750,7 +752,7 @@ function renderRecentFilingsFeed(target,items,error=''){
   if(!target)return;
   if(error){target.innerHTML=`<div style="padding:18px 0;color:#ff7777;font:12px Consolas,monospace">${esc(error)}</div>`;return;}
   if(!items?.length){target.innerHTML='<div style="padding:18px 0;color:#8da6bd;font:12px Consolas,monospace">No recent public company filings found.</div>';return;}
-  target.innerHTML=items.map(item=>`<div class="recent-filing-row"><div class="recent-filing-head">${item.ticker?`<strong class="recent-filing-ticker">${esc(item.ticker)}</strong>`:''}<span class="recent-filing-form">${esc(item.form)}</span><span class="recent-filing-company">${esc(item.company)}</span><a class="recent-filing-open" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open filing ↗</a></div><div class="recent-filing-foot"><span>${esc(item.description||item.title||item.form)}</span><time class="recent-filing-age" datetime="${esc(item.filed_at||'')}">${esc(recentFilingAge(item.filed_at))}</time></div></div>`).join('');
+  target.innerHTML=items.map(item=>`<div class="recent-filing-row"><div class="recent-filing-head">${item.ticker?`<strong class="recent-filing-ticker">${esc(item.ticker)}</strong>`:''}<span class="recent-filing-form">${esc(item.form)}</span><span class="recent-filing-company">${esc(item.company)}</span><a class="recent-filing-open" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open filing ↗</a></div><div class="recent-filing-foot"><span>${esc(item.description||item.title||item.form)}</span><time class="recent-filing-age" datetime="${esc(item.filed_at||'')}">${esc(formatDateMDY(item.filed_at))} · ${esc(recentFilingAge(item.filed_at))}</time></div></div>`).join('');
 }
 async function loadRecentFilingsFeed(target){
   if(!target)return;
@@ -968,13 +970,13 @@ function renderTab(tab, r, isRefresh){
     o += `<div class="panel"><div class="ttl">Open → HOD (daily bars; 12 mo for gap-up / volume rows)</div>`+
       `<div class="kv"><span>Last 30 sessions</span><span>${line(s.last30)}</span><span>Last 90 sessions</span><span>${line(s.last90)}</span>`+
       `<span>Gap-up days ≥5%</span><span>${line(s.gapup5)}</span><span data-tip="High-volume days have daily volume at least 10× the average of the prior 20 sessions.">High-volume days</span><span>${line(s.highvol)}</span></div>`+
-      `<div class="foot">${esc(s.date_from||'')} to ${esc(s.date_to||'')} · high volume = ≥${s.volume_multiple}× prior 20-session average</div></div>`;
+      `<div class="foot">${esc(formatDateMDY(s.date_from||''))} to ${esc(formatDateMDY(s.date_to||''))} · high volume = ≥${s.volume_multiple}× prior 20-session average</div></div>`;
   }
   if(r.hod_times){
     const h=r.hod_times;
-    o += `<div class="panel"><div class="ttl">HOD time (from chart, 15m bars, ${esc(h.date_from||'')} to ${esc(h.date_to||'')})</div>`+
+    o += `<div class="panel"><div class="ttl">HOD time (from chart, 15m bars, ${esc(formatDateMDY(h.date_from||''))} to ${esc(formatDateMDY(h.date_to||''))})</div>`+
       `<div class="kv"><span>All sessions</span><span>median ${esc(h.median_time||'—')} IST (${(h.rows||[]).length} days)</span>`+
-      `${(h.rows||[]).length?`<span>Daily HOD times</span><span>${h.rows.map(x=>`${esc(x.date)} ${esc(x.time)}`).join(' · ')}</span>`:''}</div>`+
+      `${(h.rows||[]).length?`<span>Daily HOD times</span><span>${h.rows.map(x=>`${esc(formatDateMDY(x.date))} ${esc(x.time)}`).join(' · ')}</span>`:''}</div>`+
       `${(h.rows||[]).length?'<div class="foot">Approximate HOD time is the timestamp of the 15-minute bar containing the session high.</div>':'<div class="foot">15-minute HOD bars are unavailable for this range.</div>'}</div>`;
   }
   (r.tables||[]).forEach(t=>{
@@ -1073,7 +1075,7 @@ function drawEvAll(evList, containerEl){
     card._sessionPos=dateList.indexOf(card._sessionDate);
     const title=card.querySelector(`#evtitle${i}`), tf=card.querySelector('.evtf');
     if(title) title.innerHTML=esc(item.title)+(item.sim?'':'<span class="d"> (not in similar set)</span>');
-    const eventDateTag=card.querySelector('[data-event-date]');if(eventDateTag){const parts=String(card._eventDate||'').slice(0,10).split('-');eventDateTag.textContent=parts.length===3?`Event ${parts[1]}/${parts[2]}/${parts[0]}`:'Event date';}
+    const eventDateTag=card.querySelector('[data-event-date]');if(eventDateTag){eventDateTag.textContent=`Event ${formatDateMDY(card._eventDate)||'date'}`;}
     if(tf){tf.value=card._chartTf;tf.onclick=e=>e.stopPropagation();tf.onchange=e=>{e.stopPropagation();const previousTf=card._chartTf;card._chartTf=tf.value;card._panOffset=0;card._yZoom=1;if(tf.value==='1d')card._chartDays=60;else if(previousTf==='1d')card._chartDays=1;const daysSelect=card.querySelector('.evdays');if(daysSelect)daysSelect.value=String(card._chartDays);if(card._chartDays===1&&tf.value!=='1d')loadChartContext(card,tabForCharts);else if((tf.value==='1d')!==!!card._contextDaily||!card._contextChart)loadChartContext(card,tabForCharts);else drawEvAll(tabForCharts.EV,tabForCharts.container);};}
     const days=card.querySelector('.evdays');if(days){days.value=String(card._chartDays);days.onclick=e=>e.stopPropagation();days.onchange=e=>{e.stopPropagation();card._chartDays=Number(days.value);card._panOffset=0;loadChartContext(card,tabForCharts);};}
     card.querySelectorAll('.evzoom').forEach(btn=>btn.onclick=e=>{e.stopPropagation();card._zoom=Math.max(.5,Math.min(8,(card._zoom||1)*(btn.dataset.zoom==='in'?1.25:.8)));drawEvAll(list,cEl);});
@@ -1166,7 +1168,7 @@ function gapRangeResolve(point,g){
 function gapRangePointAtIndex(g,index){
   const b=g.bars,day=b.d?.[index]||g.chart.date,dayIndex=g.multi?g.dates.indexOf(day):-1;
   const minute=b.t[index]-(dayIndex>=0?dayIndex*g.sessionSpan:0),hh=String(Math.floor(minute/60)).padStart(2,'0'),mm=String(minute%60).padStart(2,'0');
-  return {date:day,minute,price:b.c[index],label:`${day} ${hh}:${mm} ET`};
+  return {date:day,minute,price:b.c[index],label:`${formatDateMDY(day)} ${hh}:${mm} ET`};
 }
 function gapRangeX(point,g){if(Number.isFinite(point.plotTime))return g.X(point.plotTime);const dayIndex=g.multi?g.dates.indexOf(point.date):-1;return g.X(point.minute+(dayIndex>=0?dayIndex*g.sessionSpan:0));}
 function gapRangeTimestamp(point,offsetForDay){
@@ -1232,7 +1234,7 @@ function drawGapDeepDiveEventMarkers(cv,x,g){
     const w=18,h=16,px=Math.max(g.L,Math.min(g.L+g.plotW-w,centerX-w/2+stack*20)),py=Math.max(g.T,baseY-stack*17),isNews=event.kind==='news'||String(event.kind||'').toLowerCase().includes('news'),color=isNews?'#ffd23f':'#62c8ff',label=isNews?'N':'S';
     x.fillStyle='rgba(7,12,18,.97)';x.strokeStyle=color;x.lineWidth=1.2;x.beginPath();x.roundRect(px,py,w,h,3);x.fill();x.stroke();x.fillStyle=color;x.fillText(label,px+w/2,py+h/2+.5);
     const time=event.time_exact?`${String(Math.floor(event.minute_et/60)).padStart(2,'0')}:${String(event.minute_et%60).padStart(2,'0')} ET`:'time unavailable · marker placed at session open';
-    placed.push({x:px,y:py,w,h,url:event.url,title:`${isNews?'Yahoo Finance news':'SEC '+(event.form||'filing')} · ${event.chart_date} ${time}\n${event.title}`});
+    placed.push({x:px,y:py,w,h,url:event.url,title:`${isNews?'Yahoo Finance news':'SEC '+(event.form||'filing')} · ${formatDateMDY(event.chart_date)} ${time}\n${event.title}`});
   }
   x.restore();cv._eventMarkersScreen=placed;
 }
@@ -1382,7 +1384,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   const hoverStamp=(day,minute)=>{const [yy,mm,dd]=String(day||'').split('-').map(Number);if(!yy||!mm||!dd)return 'time unavailable';const at=new Date(Date.UTC(yy,mm-1,dd,0,Math.round(minute+hoverOffset(day)))),parts=istClock.formatToParts(at),v=Object.fromEntries(parts.map(p=>[p.type,p.value]));return `${v.month}/${v.day}/${v.year} ${v.hour}:${v.minute} IST`;};
   cv._rangeGeometry={bars:b,chart:c,dates,multi,daily,sessionSpan,tf,X,Y,L,T,plotW:pw,plotH:ph,crosshairBottom:vy1,yMin:lo,yMax:hi,offsetForDay:hoverOffset,span,fullStart,viewStart,viewSpan,baseViewSpan,viewBase};
   cv._hoverItems=visible.map(i=>{const day=b.d?.[i]||c.date||'',dayIndex=multi?dates.indexOf(day):-1,minute=daily?0:b.t[i]-(dayIndex>=0?dayIndex*sessionSpan:0);return {key:`${day}|${b.t[i]}`,index:i,date:day,minute,x:X(b.t[i]+(daily?.5:tf/2)),label:daily?`${hoverStamp(day,0).split(' ').slice(0,1)[0]} · Daily IST`:hoverStamp(day,minute),o:b.o[i],h:b.h[i],l:b.l[i],c:b.c[i],prevC:i>0?b.c[i-1]:c.pc,v:b.v[i]||0};});
-  cv._rangePointAt=(px,py)=>{if(px<L||px>W-R||py<T||py>T+ph)return null;const plotTime=viewStart+(px-L)/pw*viewSpan,price=hi-(py-T)/ph*(hi-lo);let date=c.date||'',minute=plotTime;if(daily){const index=Math.max(0,Math.min(b.d.length-1,Math.round(plotTime)));date=b.d?.[index]||date;minute=0;}else if(multi){const index=Math.max(0,Math.min(dates.length-1,Math.floor((plotTime-240)/sessionSpan)));date=dates[index]||date;minute=plotTime-index*sessionSpan;}return {date,minute,plotTime,price,label:`${date} ${String(Math.floor(minute/60)).padStart(2,'0')}:${String(Math.floor(minute%60)).padStart(2,'0')} ET`};};
+  cv._rangePointAt=(px,py)=>{if(px<L||px>W-R||py<T||py>T+ph)return null;const plotTime=viewStart+(px-L)/pw*viewSpan,price=hi-(py-T)/ph*(hi-lo);let date=c.date||'',minute=plotTime;if(daily){const index=Math.max(0,Math.min(b.d.length-1,Math.round(plotTime)));date=b.d?.[index]||date;minute=0;}else if(multi){const index=Math.max(0,Math.min(dates.length-1,Math.floor((plotTime-240)/sessionSpan)));date=dates[index]||date;minute=plotTime-index*sessionSpan;}return {date,minute,plotTime,price,label:`${formatDateMDY(date)} ${String(Math.floor(minute/60)).padStart(2,'0')}:${String(Math.floor(minute%60)).padStart(2,'0')} ET`};};
   cv._rangePointAtX=px=>{const p=cv._hoverItems?.reduce((best,item)=>Math.abs(item.x-px)<Math.abs(best.x-px)?item:best,cv._hoverItems?.[0]);return p?{date:p.date,minute:p.minute,price:p.c,label:p.label}:null;};
   cv._showChartHover=(px,py)=>{if(px<L||px>W-R||!cv._hoverItems?.length){if(cv._hoverTip)cv._hoverTip.style.display='none';return}let item=cv._hoverItems.reduce((best,p)=>Math.abs(p.x-px)<Math.abs(best.x-px)?p:best,cv._hoverItems[0]);const tip=cv._hoverTip;if(!tip)return;const fmt=n=>Number.isFinite(Number(n))?Number(n).toFixed(Number(n)<1?4:2):'—';tip.textContent=cv._showOhlcTip?`O ${fmt(item.o)}  H ${fmt(item.h)}\nL ${fmt(item.l)}  C ${fmt(item.c)}  V ${Number(item.v||0).toLocaleString('en-US')}`:'';tip.style.whiteSpace=cv._showOhlcTip?'pre-line':'nowrap';tip.style.display=cv._showOhlcTip?'block':'none';if(cv._quoteLine){const change=item.c-Number(item.prevC||0),pct=item.prevC?change/Number(item.prevC)*100:0,tp=(item.h+item.l+item.c)/3,dv=tp*item.v,float=Number(cv._floatShares),compact=n=>Number.isFinite(n)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(n):'—',money=n=>Number.isFinite(n)?(Math.abs(n)>=1000?'$'+compact(Math.abs(n)):Math.abs(n)<1?'$'+Math.abs(n).toFixed(4):'$'+Math.abs(n).toFixed(2)):'—',signedMoney=n=>`${n>=0?'+':'-'}${money(change)}`;cv._quoteLine.textContent=`${item.label} · %Chg ${pct>=0?'+':''}${pct.toFixed(2)}% · $Chg ${signedMoney(change)} · Vol ${Number(item.v).toLocaleString('en-US')} · $Vol ${money(dv)} · Float ${Number.isFinite(float)?compact(float)+' sh':'unavailable'}`;cv._quoteLine.style.color=change>=0?'#64d99b':'#ff7777';}if(cv.id==='kwModalCanvas'){tip.style.left='' ;tip.style.top='' ;}else if(cv._showOhlcTip){tip.style.left=Math.min(W-210,Math.max(L,px+14))+'px';tip.style.top=(cv.offsetTop+8)+'px';}else{tip.style.left=Math.max(4,cv.offsetLeft+8)+'px';tip.style.top=(cv.offsetTop+cv.offsetHeight+2)+'px';}cv.removeAttribute('title');};
   cv._viewSpan=viewSpan;cv._panSpan=span;cv._plotWidth=pw;cv._drawEvArgs=[c,sel,bzChecked,targetH,timeframe,zoom];
@@ -1414,14 +1416,14 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
     x.stroke();
     x.fillText(v >= 1 ? v.toFixed(2) : v.toFixed(3), 2, y + 4);
   }
-  const tickStep=daily?(b.t.length>12?Math.ceil(b.t.length/10):1):multi?180:(c.after_hours?120:60);
+  const tickStep=daily?(b.t.length>12?Math.ceil(b.t.length/6):1):multi?180:(c.after_hours?120:60);
   for(let m = daily?0:240; m <= (daily?b.t.length-1:240+span); m += tickStep){
     const xx = X(daily?m+.5:m);
     x.beginPath();
     x.moveTo(xx, T);
     x.lineTo(xx, vy1);
     x.stroke();
-    x.fillText(daily?(b.d?.[m]||'').slice(5):multi?((m-240)%sessionSpan===0?(dates[Math.min(dates.length-1,Math.floor((m-240)/sessionSpan))]||'').slice(5):''):hm(m,c.off), xx - 14, H - 5);
+    x.fillText(daily?formatDateMDY(b.d?.[m]||''):multi?((m-240)%sessionSpan===0?formatDateMDY(dates[Math.min(dates.length-1,Math.floor((m-240)/sessionSpan))]||''):''):hm(m,c.off), xx - 14, H - 5);
   }
   x.strokeStyle = '#777';
   x.setLineDash([2, 3]);
@@ -1617,7 +1619,7 @@ window.renderModalChart = function(){
   if(!item) return;
 
   $('#cm_title').textContent = item.title;
-  const eventDate=card?._eventDate||item.date;const eventParts=String(eventDate||'').slice(0,10).split('-');$('#cm_event_date').textContent=eventParts.length===3?`Event ${eventParts[1]}/${eventParts[2]}/${eventParts[0]}`:'';
+  const eventDate=card?._eventDate||item.date;$('#cm_event_date').textContent=eventDate?`Event ${formatDateMDY(eventDate)}`:'';
   $('#cm_badge').innerHTML = item.sim 
     ? '<span style="color:#3ddc84;background:#141414;border:1px solid #333;padding:2px 8px;border-radius:2px;font-size:11px">SIMILAR SETUP</span>' 
     : '<span style="color:#777;font-size:11px">(not in similar set)</span>';
@@ -2018,7 +2020,7 @@ function loadGapDeepDiveChart(item,jobId){
 }
 async function loadGapDeepDivePlayer(item,jobId){
   const key=gapDeepDiveKey(item);
-  const showTag=data=>{if(data?.verified&&gapDeepDiveCurrent&&gapDeepDiveKey(gapDeepDiveCurrent.item)===key){const tag=$('#gap_chart_player_tag'),players=data.players?.length?data.players:[data];tag.textContent=players.length===1?`${players[0].role} · ${players[0].name}`:`${players.length} SEC financing parties`;tag.href=players[0].filing_url;tag.title=players.map(player=>`${player.role} · ${player.name} · filed ${player.filing_date||item.date}`).join('\n')+'\nClick to open a filing.';tag.hidden=false;}};
+  const showTag=data=>{if(data?.verified&&gapDeepDiveCurrent&&gapDeepDiveKey(gapDeepDiveCurrent.item)===key){const tag=$('#gap_chart_player_tag'),players=data.players?.length?data.players:[data];tag.textContent=players.length===1?`${players[0].role} · ${players[0].name}`:`${players.length} SEC financing parties`;tag.href=players[0].filing_url;tag.title=players.map(player=>`${player.role} · ${player.name} · filed ${formatDateMDY(player.filing_date||item.date)}`).join('\n')+'\nClick to open a filing.';tag.hidden=false;}};
   if(gapDeepDivePlayers.has(key)){const cached=await gapDeepDivePlayers.get(key);showTag(cached);return cached;}
   const url='/api/gap-deepdive/'+encodeURIComponent(jobId)+'/player?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken)+'&ticker='+encodeURIComponent(item.ticker)+'&date='+encodeURIComponent(item.date);
   const pending=(async()=>{try{const response=await fetch(url);return await gapDeepDiveJson(response);}catch(error){return {verified:false,players:[],error:true};}})();gapDeepDivePlayers.set(key,pending);const data=await pending;gapDeepDivePlayers.set(key,data);showTag(data);return data;
@@ -2033,9 +2035,9 @@ function renderGapDeepDivePlayerSummary(group,sessions,done){
   if(!done){target.textContent='Checking SEC offering disclosures around these gap-up dates…';return;}
   const parties=new Map(),unmatched=[],failed=[];
   sessions.forEach(session=>{const data=session._playerData;if(data?.error){failed.push(session.item.date);return;}const players=data?.players?.length?data.players:(data?.verified&&data.name?[data]:[]);if(!players.length){unmatched.push(session.item.date);return;}players.forEach(player=>{const key=`${player.role}|${player.name}|${player.filing_url}`;if(!parties.has(key))parties.set(key,{...player,dates:[]});parties.get(key).dates.push(session.item.date);});});
-  const entries=[...parties.values()].map(player=>`<div class="gap-player-entry"><a href="${esc(player.filing_url)}" target="_blank" rel="noopener noreferrer" title="${esc(player.evidence||'SEC filing explicitly identifies this financing role.')}">${esc(player.role)} · ${esc(player.name)}</a><span class="gap-player-date">Gap date${player.dates.length===1?'':'s'}: ${player.dates.map(esc).join(', ')} · filed ${esc(player.filing_date||'date unavailable')}</span></div>`);
-  if(unmatched.length)entries.push(`<span>No unambiguous underwriter or placement-agent disclosure found for: ${unmatched.map(esc).join(', ')}.</span>`);
-  if(failed.length)entries.push(`<span>SEC lookup unavailable for: ${failed.map(esc).join(', ')}.</span>`);
+  const entries=[...parties.values()].map(player=>`<div class="gap-player-entry"><a href="${esc(player.filing_url)}" target="_blank" rel="noopener noreferrer" title="${esc(player.evidence||'SEC filing explicitly identifies this financing role.')}">${esc(player.role)} · ${esc(player.name)}</a><span class="gap-player-date">Gap date${player.dates.length===1?'':'s'}: ${player.dates.map(d=>esc(formatDateMDY(d))).join(', ')} · filed ${esc(formatDateMDY(player.filing_date||'date unavailable'))}</span></div>`);
+  if(unmatched.length)entries.push(`<span>No unambiguous underwriter or placement-agent disclosure found for: ${unmatched.map(d=>esc(formatDateMDY(d))).join(', ')}.</span>`);
+  if(failed.length)entries.push(`<span>SEC lookup unavailable for: ${failed.map(d=>esc(formatDateMDY(d))).join(', ')}.</span>`);
   target.innerHTML=`<strong style="color:#c8baff">SEC financing players around gap-up disclosures:</strong>${entries.length?entries.join(''):'No matching SEC financing-party records found.'}`;
 }
 function renderGapDeepDiveGroups(items,jobId,mode=gapDeepDiveGroupBy){
@@ -2057,11 +2059,11 @@ function renderGapDeepDiveGroups(items,jobId,mode=gapDeepDiveGroupBy){
     if(unmatched.length)groups.push({title:'No verified financing player',kind:'unmatched',entries:unmatched});
     if(failed.length)groups.push({title:'SEC lookup unavailable',kind:'failed',entries:failed});
   }else groups=[...tickerGroups].map(([ticker,entries])=>({title:ticker,kind:'ticker',entries}));
-  const sessionMarkup=(entry,groupIndex)=>{const {item,index}=entry;return `<article class="gap-session-card"><header class="gap-session-head"><strong>${mode==='player'?`${esc(item.ticker)} · `:''}${esc(item.date)}</strong><span style="color:#64d99b;font-size:13px">PM high +${(item.move*100).toFixed(1)}%</span><span style="color:#b6c0ca;font-size:13px">PM $vol $${(item.pm_dollar_volume/1e6).toFixed(1)}M</span><button class="gap-copy-png" data-index="${index}" disabled style="margin-left:auto;height:32px;font-size:12px;border-color:#555">Copy PNG</button></header><div class="gap-session-canvas-wrap"><canvas id="gap_deepdive_chart_${index}_${groupIndex}" data-index="${index}"></canvas><span class="gap-chart-loading" style="position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);color:#89939e;font-size:14px">Scroll here to load this chart</span></div><div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#aab4bf;padding:7px 2px"><span style="color:#fff">━ VWAP</span><span style="color:#c084fc">━ TWAP</span><span style="color:#ffe45c">AVWAP · set A/B in expanded chart</span><span style="color:#b0b0b0">░ Premarket</span><span>1-minute OHLCV · Postmarket to 20:00 ET · X-axis IST · click to expand</span></div></article>`;};
+  const sessionMarkup=(entry,groupIndex)=>{const {item,index}=entry;return `<article class="gap-session-card"><header class="gap-session-head"><strong>${mode==='player'?`${esc(item.ticker)} · `:''}${esc(formatDateMDY(item.date))}</strong><span style="color:#64d99b;font-size:13px">PM high +${(item.move*100).toFixed(1)}%</span><span style="color:#b6c0ca;font-size:13px">PM $vol $${(item.pm_dollar_volume/1e6).toFixed(1)}M</span><button class="gap-copy-png" data-index="${index}" disabled style="margin-left:auto;height:32px;font-size:12px;border-color:#555">Copy PNG</button></header><div class="gap-session-canvas-wrap"><canvas id="gap_deepdive_chart_${index}_${groupIndex}" data-index="${index}"></canvas><span class="gap-chart-loading" style="position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);color:#89939e;font-size:14px">Scroll here to load this chart</span></div><div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#aab4bf;padding:7px 2px"><span style="color:#fff">━ VWAP</span><span style="color:#c084fc">━ TWAP</span><span style="color:#ffe45c">AVWAP · set A/B in expanded chart</span><span style="color:#b0b0b0">░ Premarket</span><span>1-minute OHLCV · Postmarket to 20:00 ET · X-axis IST · click to expand</span></div></article>`;};
   grid.innerHTML=groups.map((group,groupIndex)=>{
     const entries=mode==='player'?group.entries.slice().sort((a,b)=>String(a.item.date).localeCompare(String(b.item.date))||String(a.item.ticker).localeCompare(String(b.item.ticker))):group.entries;
     const heading=mode==='player'&&group.player?`<strong>${esc(group.player.role)} · ${esc(group.player.name)}</strong><a href="${esc(group.player.filing_url)}" target="_blank" rel="noopener noreferrer" title="Open the SEC filing">SEC filing</a>`:`<strong>${esc(group.title)}</strong>`;
-    const summary=mode==='player'?group.kind==='unmatched'?'No unambiguous underwriter or placement-agent disclosure was found for these sessions.':group.kind==='failed'?'SEC financing-player lookup failed for these sessions.':`Qualifying gap-up sessions · oldest to newest · ${group.player?.filing_date?`SEC filing date ${esc(group.player.filing_date)}`:''}`:'Checking SEC offering disclosures around these gap-up dates…';
+    const summary=mode==='player'?group.kind==='unmatched'?'No unambiguous underwriter or placement-agent disclosure was found for these sessions.':group.kind==='failed'?'SEC financing-player lookup failed for these sessions.':`Qualifying gap-up sessions · oldest to newest · ${group.player?.filing_date?`SEC filing date ${esc(formatDateMDY(group.player.filing_date))}`:''}`:'Checking SEC offering disclosures around these gap-up dates…';
     return `<section class="gap-ticker-group ${mode==='player'?'gap-player-group':''}" data-group-index="${groupIndex}"><header class="gap-ticker-head">${heading}<span class="gap-ticker-count">${entries.length} qualifying gap-up session${entries.length===1?'':'s'}</span></header><div class="gap-player-summary">${summary}</div><div class="gap-session-grid">${entries.map(entry=>sessionMarkup(entry,groupIndex)).join('')}</div></section>`;
   }).join('');
   if(mode==='ticker'){
@@ -2130,13 +2132,13 @@ function setGapDeepDiveTimeframe(timeframe){
 async function openGapDeepDiveChart(item,jobId){
   try{
     const chart=await loadGapDeepDiveChart(item,jobId);gapDeepDiveCurrent={item,jobId,chart,float_shares:null};
-    $('#gap_chart_title').textContent=item.ticker;$('#gap_chart_date').textContent=item.date;$('#gap_chart_stats').textContent=`PM high +${(item.move*100).toFixed(1)}% · $${(item.pm_dollar_volume/1e6).toFixed(1)}M premarket`;
+    $('#gap_chart_title').textContent=item.ticker;$('#gap_chart_date').textContent=formatDateMDY(item.date);$('#gap_chart_stats').textContent=`PM high +${(item.move*100).toFixed(1)}% · $${(item.pm_dollar_volume/1e6).toFixed(1)}M premarket`;
     $('#gap_chart_player_tag').hidden=true;$('#gap_chart_player_tag').removeAttribute('href');loadGapDeepDivePlayer(item,jobId);
     $('#gap_chart_tf').value=$('#gap_deepdive_tf').value||'2m';$('#gap_chart_bz').checked=true;$('#gap_chart_vwap').checked=true;$('#gap_chart_twap').checked=true;
     const cv=$('#gap_chart_modal_canvas'),gridCv=[...$('#gap_deepdive_grid').querySelectorAll('canvas[data-key]')].find(node=>node.dataset.key===gapDeepDiveKey(item));cv.dataset.key=gapDeepDiveKey(item);cv._gapDeepDiveState=gridCv?._gapDeepDiveState||{days:1,dates:[],bars:null,panOffset:0,loading:false};cv._avwapAnchors=null;cv._avwapSelectMode=false;cv._rangeMeasures=[];cv._selectedRangeId=null;cv._rangeZoom=1;cv._panOffset=cv._gapDeepDiveState.panOffset||0;cv._modalPanInitialized=true;cv._yZoom=1;cv._rangeMeasureMode=false;cv._zoomSelectMode=true;cv._panToolMode=false;cv._zoomDrag=null;cv.style.cursor='crosshair';$('#gap_chart_measure_box').hidden=true;$('#gap_chart_measure').dataset.active='';$('#gap_chart_measure').style.borderColor='';$('#gap_chart_measure').textContent='Measure range';$('#gap_chart_pan').dataset.active='';$('#gap_chart_pan').style.borderColor='';$('#gap_chart_avwap_status').textContent='Hold and drag on the chart to zoom. Choose Pan to drag the chart.';
     $('#gap_chart_quote_line').textContent='Float loading · move the cursor over a candle for change and volume';$('#gap_deepdive_chart_modal').style.display='flex';setTimeout(renderGapDeepDiveModal,30);
     loadGapDeepDiveFloat(item,jobId).then(data=>{if(!gapDeepDiveCurrent||gapDeepDiveKey(gapDeepDiveCurrent.item)!==gapDeepDiveKey(item))return;gapDeepDiveCurrent.float_shares=data.float_shares;$('#gap_chart_modal_canvas')._floatShares=data.float_shares;const value=Number(data.float_shares);$('#gap_chart_quote_line').textContent=`Float ${Number.isFinite(value)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(value)+' shares':'unavailable'} · move the cursor over a candle for change and volume`;});
-  }catch(error){$('#gap_deepdive_status').textContent=`Could not load ${item.ticker} ${item.date}: ${error.message}`;}
+  }catch(error){$('#gap_deepdive_status').textContent=`Could not load ${item.ticker} ${formatDateMDY(item.date)}: ${error.message}`;}
 }
 function closeGapDeepDiveChart(){ $('#gap_deepdive_chart_modal').style.display='none';const cv=$('#gap_chart_modal_canvas');cv._avwapSelectMode=false;gapDeepDiveCurrent=null; }
 ['gap_chart_bz','gap_chart_vwap','gap_chart_twap'].forEach(id=>$('#'+id).onchange=renderGapDeepDiveModal);
@@ -2188,7 +2190,7 @@ async function loadGapDeepDive(){
     const start=await fetch('/api/gap-deepdive/start?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken),{method:'POST'}),started=await gapDeepDiveJson(start);let result;
     while(runId===gapDeepDiveRequest){const response=await fetch('/api/gap-deepdive/'+encodeURIComponent(started.job)+'?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken));result=await gapDeepDiveJson(response);status.textContent=result.message||'Scanning…';if(result.status==='complete'||result.status==='error')break;await new Promise(resolve=>setTimeout(resolve,2000));}
     if(runId!==gapDeepDiveRequest)return;if(result.status==='error')throw new Error(result.message);const items=result.results||[];if(!items.length){status.textContent=(result.message||'Complete')+' · No qualifying sessions found.';gapDeepDiveLoaded=true;return;}
-    status.textContent=`Saved scan as of ${result.scanned_on||'latest saved date'} · ${new Set(items.map(item=>String(item.ticker||'').toUpperCase())).size} tickers · ${items.length} qualifying sessions at ≥70% PM high · click a chart to expand.`+(result.errors?.length?` · Could not load full daily history for ${result.errors.length} ticker(s).`:'');
+    status.textContent=`Saved scan as of ${formatDateMDY(result.scanned_on||'latest saved date')} · ${new Set(items.map(item=>String(item.ticker||'').toUpperCase())).size} tickers · ${items.length} qualifying sessions at ≥70% PM high · click a chart to expand.`+(result.errors?.length?` · Could not load full daily history for ${result.errors.length} ticker(s).`:'');
     gapDeepDiveItems=items;gapDeepDiveJobId=started.job;gapDeepDiveStatusBase=status.textContent;
     if(gapDeepDiveGroupBy==='player')await ensureGapDeepDivePlayers(items,started.job);
     renderGapDeepDiveGroups(items,started.job,gapDeepDiveGroupBy);
@@ -2372,8 +2374,8 @@ function renderAdminView(){
       `<div class="scroll"><table><thead><tr><th style="width:50px">#</th><th style="width:190px">Time (IST)</th><th style="width:140px">User</th><th>Search</th><th>Details</th></tr></thead><tbody>`+
       adminRows.map((s, idx)=>{
         const isKeyword=s.type==='keyword';
-        const details=isKeyword?`${esc(s.start_date||'')} → ${esc(s.end_date||'')}${s.forms?` · ${esc(s.forms)}`:''}`:'';
-        return `<tr><td class="d">${idx+1}</td><td class="w">${esc(s.time)}</td><td style="color:#ddd;font-weight:bold">${esc(s.user)}</td><td class="big ${isKeyword?'':'c'}">${isKeyword?'⌕ ':''}${esc(s.keyword||s.ticker)}</td><td class="d">${details}</td></tr>`;
+        const details=isKeyword?`${esc(formatDateMDY(s.start_date||''))} → ${esc(formatDateMDY(s.end_date||''))}${s.forms?` · ${esc(s.forms)}`:''}`:'';
+        return `<tr><td class="d">${idx+1}</td><td class="w">${esc(formatDateTimeMDY(s.time))}</td><td style="color:#ddd;font-weight:bold">${esc(s.user)}</td><td class="big ${isKeyword?'':'c'}">${isKeyword?'⌕ ':''}${esc(s.keyword||s.ticker)}</td><td class="d">${details}</td></tr>`;
       }).join('')+
       `</tbody></table></div></div>`;
 
@@ -2616,7 +2618,7 @@ window.viewUserDetails = async function(name){
     const p = data.profile || {};
     const yesNo = v => v ? 'Yes' : 'No';
     const row = (label, value) => `<div style="display:flex;gap:10px;padding:5px 0;border-bottom:1px solid #1c1c1c"><span style="color:#888;min-width:190px">${esc(label)}</span><strong style="color:#ddd;overflow-wrap:anywhere">${esc(value === undefined || value === null || value === '' ? '—' : String(value))}</strong></div>`;
-    const searches = (data.recent_searches || []).map(item=>`<div style="padding:5px 0;border-bottom:1px solid #1c1c1c"><strong style="color:#6cc4ff">${esc(item.ticker || '—')}</strong><span style="color:#888;margin-left:12px">${esc([item.date_ist,item.time_ist].filter(Boolean).join(' '))}</span></div>`).join('') || '<div style="color:#777;padding:6px 0">No recent searches found.</div>';
+    const searches = (data.recent_searches || []).map(item=>`<div style="padding:5px 0;border-bottom:1px solid #1c1c1c"><strong style="color:#6cc4ff">${esc(item.ticker || '—')}</strong><span style="color:#888;margin-left:12px">${esc([formatDateMDY(item.date_ist),item.time_ist].filter(Boolean).join(' '))}</span></div>`).join('') || '<div style="color:#777;padding:6px 0">No recent searches found.</div>';
     const visibility = data.ui_visibility || {scanner:false,runner_stats:true};
     panel.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><strong style="color:#6cc4ff;font-size:15px">${esc((p.username || name).toUpperCase())} · Account details</strong></div>`+
       `<div style="font-weight:bold;color:#ffd23f;margin:10px 0 4px">Tool access for this user</div>`+
@@ -2625,7 +2627,7 @@ window.viewUserDetails = async function(name){
       row('Role', p.is_admin ? 'Admin' : p.can_rename ? 'Account manager' : 'User')+
       row('Password configured', yesNo(p.has_password))+
       row('Active session', yesNo(p.active_session))+
-      row('Created', p.created_at)+row('Updated', p.updated_at)+row('Last session update', p.session_updated_at)+
+      row('Created', formatDateTimeMDY(p.created_at))+row('Updated', formatDateTimeMDY(p.updated_at))+row('Last session update', formatDateTimeMDY(p.session_updated_at))+
       `<div style="font-weight:bold;color:#ffd23f;margin:14px 0 4px">Recent searches</div>${searches}`+
       (data.search_error ? `<div style="color:#888;font-size:11px;margin-top:7px">${esc(data.search_error)}</div>` : '');
   } catch(error){ panel.innerHTML = `<span style="color:#ff7373">${esc(error.message)}</span>`; }
