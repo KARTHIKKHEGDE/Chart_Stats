@@ -1213,9 +1213,9 @@ function drawGapDeepDiveNavigator(mainCv,baseChart,timeframe){
 }
 function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   const parentW = (cv.parentElement && cv.parentElement.clientWidth) ? cv.parentElement.clientWidth : 0;
-  const dpr = Math.min(3,Math.max(window.devicePixelRatio||1,Number(cv._renderDpr)||1));
+  const dpr = Math.min(3,Math.max(window.devicePixelRatio||1,Number(cv._renderDpr)||2));
   const W = Math.max(300, parentW - (targetH ? 0 : 16));
-  const H = targetH || 390;
+  const H = targetH || 540;
   cv.style.width = W + 'px';
   cv.style.height = H + 'px';
   cv.width = Math.round(W * dpr);
