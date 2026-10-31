@@ -331,38 +331,40 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
 </div><!-- end #user_popup -->
 
 <!-- Big Chart Zoom Modal -->
+<style>
+#chart_modal .cmHeader{display:flex;align-items:center;gap:12px;flex-wrap:nowrap;min-width:0;padding:10px 14px;background:#101419;border-bottom:1px solid #29313a}
+#chart_modal .cmIdentity{display:flex;align-items:center;gap:8px;flex:0 0 auto;min-width:0}
+#chart_modal #cm_toolbar{display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:thin;scrollbar-color:#39434d #101419}
+#chart_modal #cm_toolbar>*{flex:0 0 auto}
+#chart_modal #cm_toolbar label{display:inline-flex;flex-direction:row;align-items:center;gap:5px;margin:0;color:#ddd;font-size:12px;white-space:nowrap}
+#chart_modal #cm_toolbar select{height:32px;min-width:60px;margin:0;padding:0 8px;background:#181818;border:1px solid #444;color:#fff;font-size:12px}
+#chart_modal #cm_toolbar input[type=checkbox]{appearance:auto!important;-webkit-appearance:checkbox!important;width:14px!important;min-width:14px!important;height:14px!important;min-height:14px!important;padding:0!important;margin:0!important;flex:none!important;accent-color:#1685ff}
+#chart_modal #cm_toolbar button{height:32px;padding:0 10px;background:#181818;border:1px solid #444;color:#ddd;font:12px Consolas,monospace;white-space:nowrap;cursor:pointer}
+#chart_modal #cm_toolbar #cm_avwap{border-color:#655516;color:#ffe17d}
+#chart_modal #cm_toolbar #cm_close{width:34px;padding:0;font-size:18px}
+@media(max-width:760px){#chart_modal .cmHeader{align-items:flex-start;flex-direction:column}#chart_modal #cm_toolbar{width:100%;flex:0 0 auto}}
+</style>
 <div id="chart_modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:99999;display:none;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px)" onclick="if(event.target===this)closeChartModal()">
   <div style="background:#0c0c0c;border:1px solid #333;width:98vw;max-width:1900px;height:96vh;max-height:1000px;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.95);border-radius:6px;overflow:hidden">
     <!-- Header -->
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 18px;border-bottom:1px solid #222;background:#131313;flex-wrap:wrap;gap:10px">
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <div class="cmHeader">
+      <div class="cmIdentity">
         <span id="cm_title" style="font-size:16px;font-weight:bold;color:#29a8ff"></span>
         <span id="cm_event_date" class="eventDateTag"></span>
         <span id="cm_badge" style="font-size:12px"></span>
       </div>
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <select id="cm_tf" title="Chart timeframe" style="height:32px;font-size:12px;padding:0 8px;background:#181818;border:1px solid #444;color:#fff;margin:0">
-          <option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option>
+      <div id="cm_toolbar">
+        <label>Interval<select id="cm_tf" title="Chart timeframe">
+          <option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option>
         </select>
-        <select id="cm_days" title="Sessions shown" style="height:32px;font-size:12px;padding:0 8px;background:#181818;border:1px solid #444;color:#fff;margin:0"><option selected>1</option><option>3</option><option>5</option><option>10</option><option>20</option><option>60</option></select>
-        <button id="cm_zoom_out" style="height:32px;width:32px;background:#1a1a1a;border:1px solid #444;color:#ddd;cursor:pointer">−</button><button id="cm_zoom_in" style="height:32px;width:32px;background:#1a1a1a;border:1px solid #444;color:#ddd;cursor:pointer">+</button>
-        <button id="cm_zoom_reset" style="height:32px;padding:0 9px">Reset</button>
-
-        <div style="width:1px;height:20px;background:#333;margin:0 4px"></div>
-
-        <select id="cm_sig" style="height:32px;font-size:12px;padding:0 8px;background:#181818;border:1px solid #444;color:#fff;margin:0">
-          <option value="none">No signals</option>
-          <option value="all">All entry models</option>
-        </select>
-        <label style="font-size:12px;color:#ddd;display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none">
-          <input type="checkbox" id="cm_bz" checked style="width:14px;height:14px;margin:0"> Bone zone
-        </label>
-        <label style="font-size:12px;color:#ddd"><input type="checkbox" id="cm_vwap" checked> VWAP</label><label style="font-size:12px;color:#c084fc"><input type="checkbox" id="cm_twap" checked> TWAP</label>
+        <select id="cm_days" title="Sessions shown" hidden><option selected>1</option><option>3</option><option>5</option><option>10</option><option>20</option><option>60</option></select>
+        <select id="cm_sig" hidden><option value="none" selected>No signals</option><option value="all">All entry models</option></select>
+        <button id="cm_zoom_out" title="Zoom out">−</button><button id="cm_zoom_in" title="Zoom in">+</button>
+        <button id="cm_zoom_reset" title="Reset zoom and pan">Reset</button>
+        <label style="color:#d7ff6e"><input type="checkbox" id="cm_bz" checked> Bone Zone (9/21 EMA)</label>
+        <label><input type="checkbox" id="cm_vwap" checked> VWAP</label><label style="color:#c084fc"><input type="checkbox" id="cm_twap" checked> TWAP</label>
         <button id="cm_avwap">AVWAP · Select A → B</button><button id="cm_clear_avwap">Clear AVWAP</button><button id="cm_measure">Measure range</button><button id="cm_pan">Pan</button><button id="cm_delete_measure">Delete range</button><button id="cm_clear_measures">Clear ranges</button><button id="cm_copy">Copy PNG</button>
-
-        <div style="width:1px;height:20px;background:#333;margin:0 4px"></div>
-
-        <button onclick="closeChartModal()" style="height:32px;width:34px;display:flex;align-items:center;justify-content:center;font-size:18px;background:#202020;border:1px solid #444;color:#aaa;cursor:pointer;border-radius:3px;padding:0" title="Close (Esc)">✕</button>
+        <button id="cm_close" onclick="closeChartModal()" title="Close">×</button>
       </div>
     </div>
 
@@ -373,16 +375,8 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
 
     <!-- Footer with Legend -->
     <div style="padding:10px 18px;border-top:1px solid #222;background:#0d0d0d;font-size:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-      <div class="foot" style="margin:0">
-        <span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance level. Price above VWAP = bullish bias; below = bearish.">━ VWAP</span> &nbsp;
-        <span class="y" data-tip="Pre-market High — the highest price reached before the US market open (9:30 ET / 19:00 IST). Often acts as the first major resistance target in gap-up fades.">┅ PM high</span> &nbsp;
-        <span class="d" data-tip="Previous Close — yesterday's closing price. The base from which the gap % is measured. Price returning here = full gap fill.">┅ prev close</span> &nbsp;
-        <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period Exponential Moving Average on 2-min closes. Fast-moving trend line. Breaks above/below signal short-term momentum shifts.">━ EMA9</span> &nbsp;
-        <span style="color:#ffa500" data-tip="EMA 21 — 21-period Exponential Moving Average on 2-min closes. Slower trend line. When EMA9 crosses below EMA21, bearish momentum is strengthening.">━ EMA21</span> &nbsp;
-        <span class="g" data-tip="Bone Zone cloud — shaded area between EMA9 and EMA21. Green = EMA9 above EMA21 (bullish). Red = EMA9 below EMA21 (bearish). Width shows momentum strength.">▒</span><span class="r">▒</span> cloud &nbsp;
-        <span class="d" data-tip="Bollinger Bands (20-period, 2 std deviations). Upper/lower bands show the expected price range. Price touching/breaking the lower band can signal exhaustion of a move.">━ BB(20,2)</span> &nbsp;
-        <span data-tip="SELL signal — short entry triggered by an entry model (e.g. short at open, PM high rejection, VWAP loss). Triangle points down at the entry price.">▼ SELL (entry)</span> &nbsp;
-        <span data-tip="BUY signal — cover the short position. Either hit the stop loss or target. Percentage shown is the P&amp;L of that trade.">▲ BUY (cover)</span>. <span data-tip="Shaded (lighter) background area = pre-market session (before 9:30 ET / 19:00 IST). Price action here happens before regular market hours.">Shaded = premarket</span>. Times in IST.
+      <div class="foot" style="margin:0;flex:1;min-width:320px">
+        <span class="c">━ VWAP</span> &nbsp; <span style="color:#c084fc">━ TWAP</span> &nbsp; <span style="color:#e879f9">┅ active-minute TWAP</span> &nbsp; <span style="color:#ffd23f">┅ running-HOD AVWAP</span> &nbsp; <span style="color:#ffd23f">N News</span> &nbsp; <span style="color:#62c8ff">S SEC filing</span> &nbsp; <span class="y">┅ PM high</span> &nbsp; <span class="d">┅ prev close</span> &nbsp; <span style="color:#d7ff6e">━ EMA9</span> &nbsp; <span style="color:#ffa500">━ EMA21</span> &nbsp; <span class="g">▒</span><span class="r">▒</span> cloud &nbsp; <span class="d">━ BB(20,2)</span> &nbsp; ▼ SELL · ▲ BUY · Shaded = premarket · Times in IST.
       </div>
       <div id="cm_quote_line" style="color:#dce6ef;font-size:12px;font-family:Consolas,monospace"></div><div id="cm_status" style="color:#666;font-size:11px">Hold and drag on the chart to zoom. Escape cancels the active tool.</div>
     </div>
@@ -1601,15 +1595,9 @@ window.openChartModal = function(i){
   currentModalIndex = card && Number.isInteger(card._sessionPos) ? card._sessionPos : i;
   const featureCanvas=$('#cm_canvas');featureCanvas._rangeMeasureMode=false;featureCanvas._zoomSelectMode=true;featureCanvas._panToolMode=false;featureCanvas._zoomDrag=null;featureCanvas._rangeDrag=null;$('#cm_status').textContent='Hold and drag on the chart to zoom. Escape cancels the active tool.';
 
-  const mainSig = openTabs[activeTab].container.querySelector('#sig');
   const mainBz = openTabs[activeTab].container.querySelector('#bz');
-
-  const modelNames = (openTabs[activeTab].result && openTabs[activeTab].result.model_names) || [];
-  let sigHtml = '<option value="none">No signals</option><option value="all">All entry models</option>' +
-    modelNames.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
-  $('#cm_sig').innerHTML = sigHtml;
-
-  if(mainSig) $('#cm_sig').value = mainSig.value;
+  $('#cm_sig').innerHTML = '<option value="none">No signals</option>';
+  $('#cm_sig').value = 'none';
   if(mainBz) $('#cm_bz').checked = mainBz.checked;
   $('#cm_tf').value = card && card._chartTf ? card._chartTf : '2m';
   $('#cm_days').value=String(card?card._chartDays||1:1);
@@ -1635,7 +1623,7 @@ window.renderModalChart = function(){
   const cv = $('#cm_canvas');
   const body = $('#cm_plot_wrap');
   const targetH = Math.max(300, body.clientHeight || 600);
-  const sel = $('#cm_sig').value;
+  const sel = 'none';
   const bzChecked = $('#cm_bz').checked;
 
   const chart=card?._contextChart?{...item.chart,bars:card._contextChart}:item.chart;
@@ -1677,23 +1665,8 @@ $('#cm_sig').onchange = () => {
 
 $('#cm_tf').onchange = () => {
   if(!activeTab || !openTabs[activeTab]) return;
-  const card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);
-  if(card){
-    card._chartTf=$('#cm_tf').value;
-    card._panOffset=0;
-    card._yZoom=1;
-    card._chartDays=card._chartTf==='1d'?60:1;
-    $('#cm_days').value=String(card._chartDays);
-    const cardSelect=card.querySelector('.evtf');
-    if(cardSelect) cardSelect.value=card._chartTf;
-    const item=card._chartItem;
-    if(item) drawEv(card.querySelector(`#ev${currentModalSlot}`),item.chart,
-      openTabs[activeTab].container.querySelector('#sig')?.value||'none',
-      openTabs[activeTab].container.querySelector('#bz')?.checked||false,undefined,card._chartTf);
-    if(card._chartDays===1&&card._chartTf!=='1d')loadChartContext(card,openTabs[activeTab]);
-    else if((card._chartTf==='1d')!==!!card._contextDaily||!card._contextChart)loadChartContext(card,openTabs[activeTab]);
-    else drawEvAll(openTabs[activeTab].EV,openTabs[activeTab].container);
-  }
+  const tab=openTabs[activeTab],allTf=tab.container.querySelector('#ev_all_tf');
+  if(allTf){allTf.value=$('#cm_tf').value;allTf.dispatchEvent(new Event('change'));}
   renderModalChart();
 };
 
