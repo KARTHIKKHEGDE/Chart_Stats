@@ -710,6 +710,7 @@ let lastText="", timer=null, lastChart=null, EV=[];
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const formatDateMDY=value=>{const raw=String(value??'');const m=raw.slice(0,10).match(/^(\d{4})-(\d{2})-(\d{2})$/);return m?`${m[2]}/${m[3]}/${m[1]}`:raw;};
 const formatDateTimeMDY=value=>{const raw=String(value??'');return formatDateMDY(raw)+(raw.length>10?raw.slice(10).replace('T',' '):'');};
+const formatChartTitleDates=value=>String(value??'').replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g,(_,year,month,day)=>`${month}/${day}/${year}`);
 const kv=rows=>'<div class="kv">'+rows.map(([l,v,c])=>`<span>${esc(l)}:</span><span class="${c}">${esc(v)}</span>`).join('')+'</div>';
 const table=(cols,rows,dim,sortable)=>`<div class="scroll"><table class="${sortable?'sort':''}"><thead><tr>`+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr></thead><tbody>'+
   rows.map((r,i)=>`<tr class="${dim&&dim[i]?'dim':''}">`+r.map(([x,c,s])=>`<td class="${c}" data-s="${esc(s)}">${esc(x)}</td>`).join('')+'</tr>').join('')+'</tbody></table></div>';
@@ -1088,7 +1089,7 @@ function drawEvAll(evList, containerEl){
     const dateList=tabForCharts?tabForCharts.sessionDates:[];
     card._sessionPos=dateList.indexOf(card._sessionDate);
     const title=card.querySelector(`#evtitle${i}`), tf=card.querySelector('.evtf');
-    if(title) title.innerHTML=esc(item.title)+(item.sim?'':'<span class="d"> (not in similar set)</span>');
+    if(title) title.innerHTML=esc(formatChartTitleDates(item.title))+(item.sim?'':'<span class="d"> (not in similar set)</span>');
     const eventDateTag=card.querySelector('[data-event-date]');if(eventDateTag){eventDateTag.textContent=`Event ${formatDateMDY(card._eventDate)||'date'}`;}
     if(tf){tf.value=card._chartTf;tf.onclick=e=>e.stopPropagation();tf.onchange=e=>{e.stopPropagation();const previousTf=card._chartTf;card._chartTf=tf.value;card._panOffset=0;card._yZoom=1;if(tf.value==='1d')card._chartDays=60;else if(previousTf==='1d')card._chartDays=1;const daysSelect=card.querySelector('.evdays');if(daysSelect)daysSelect.value=String(card._chartDays);if(card._chartDays===1&&tf.value!=='1d')loadChartContext(card,tabForCharts);else if((tf.value==='1d')!==!!card._contextDaily||!card._contextChart)loadChartContext(card,tabForCharts);else drawEvAll(tabForCharts.EV,tabForCharts.container);};}
     const days=card.querySelector('.evdays');if(days){days.value=String(card._chartDays);days.onclick=e=>e.stopPropagation();days.onchange=e=>{e.stopPropagation();card._chartDays=Number(days.value);card._panOffset=0;loadChartContext(card,tabForCharts);};}
@@ -1628,7 +1629,7 @@ window.renderModalChart = function(){
   const item=card&&card._chartItem;
   if(!item) return;
 
-  $('#cm_title').textContent = item.title;
+  $('#cm_title').textContent = formatChartTitleDates(item.title);
   const eventDate=card?._eventDate||item.date;$('#cm_event_date').textContent=eventDate?`Event ${formatDateMDY(eventDate)}`:'';
   $('#cm_badge').innerHTML = item.sim 
     ? '<span style="color:#3ddc84;background:#141414;border:1px solid #333;padding:2px 8px;border-radius:2px;font-size:11px">SIMILAR SETUP</span>' 
