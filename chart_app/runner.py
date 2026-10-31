@@ -531,6 +531,8 @@ def legs_15min(tkr, start_date, high_date, flt, chart_end_date=None):
     chart_bars = [
         {
             "t": b["_t"].strftime("%m/%d %H:%M"),
+            "date": b["_et"].date().isoformat(),
+            "minute_et": b["_et"].hour * 60 + b["_et"].minute,
             "o": round(b["o"], 4),
             "h": round(b["h"], 4),
             "l": round(b["l"], 4),
@@ -896,6 +898,7 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
     chart_15 = None
     if bars_15:
         chart_15 = {
+            "ticker": tkr,
             "bars": bars_15,
             "pivot_highs": ph_15,
             "pivot_lows": pl_15,

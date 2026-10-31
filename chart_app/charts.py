@@ -285,6 +285,15 @@ def _gap_deepdive_sec_filings(ticker):
     return filings
 
 
+def _gap_previous_session_date(ticker, first_day):
+    cache_key=f"gap_chart_previous_session_v1_{ticker}_{first_day}"
+    cached=cget(cache_key,30*86400)
+    if cached is not None: return cached or None
+    previous=max((row.get('date') for row in load_daily(ticker) if row.get('date') and row['date']<first_day),default=None)
+    cput(cache_key,previous or '')
+    return previous
+
+
 def _run_gap_deepdive(job_id):
     from chart_app.market_data import PM_START
     from chart_app.application import clean, cput
@@ -581,7 +590,7 @@ def gap_deepdive_events(job_id):
     include_previous=request.args.get('include_previous')=='1'
     if include_previous:
         first_day=min(dates)
-        prior=max((row.get('date') for row in load_daily(ticker) if row.get('date') and row['date']<first_day),default=None)
+        prior=_gap_previous_session_date(ticker,first_day)
         if prior and prior not in dates: dates.insert(0,prior)
     wanted=set(dates); events=[]; errors=[]
     try: events.extend(item for item in _gap_deepdive_yahoo_news(ticker) if item.get('chart_date') in wanted)
@@ -589,6 +598,34 @@ def gap_deepdive_events(job_id):
         app.logger.exception('Yahoo Finance chart-event lookup failed for %s',ticker);errors.append('Yahoo Finance news unavailable')
     try: events.extend(item for item in _gap_deepdive_sec_filings(ticker) if item.get('chart_date') in wanted)
     except Exception as exc:
+        app.logger.exception('SEC chart-event lookup failed for %s',ticker);errors.append('SEC filings unavailable')
+    events.sort(key=lambda item:(item.get('chart_date',''),item.get('minute_et',570),item.get('kind','')))
+    return jsonify({'ticker':ticker,'dates':dates,'events':events,'errors':errors})
+
+
+@app.route('/api/chart-events')
+def chart_events():
+    """Return cached news and SEC filing markers for any authenticated chart."""
+    user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()
+    ticker=(request.args.get('ticker') or '').strip().upper()
+    if user not in _auth.ALLOWED_USERS or not _db_validate_session(user,token): return jsonify({'error':'Unauthorized'}),401
+    if not re.fullmatch(r'[A-Z.\-]{1,10}',ticker): return jsonify({'error':'Invalid ticker'}),400
+    dates=[]
+    for raw in (request.args.get('dates') or '').split(','):
+        try: dates.append(dt.date.fromisoformat(raw.strip()).isoformat())
+        except ValueError: return jsonify({'error':'Invalid chart date'}),400
+    dates=list(dict.fromkeys(dates))
+    if not dates or len(dates)>120: return jsonify({'error':'Choose between 1 and 120 chart dates.'}),400
+    if request.args.get('include_previous')=='1':
+        first_day=min(dates)
+        previous=_gap_previous_session_date(ticker,first_day)
+        if previous and previous not in dates: dates.insert(0,previous)
+    wanted=set(dates); events=[]; errors=[]
+    try: events.extend(item for item in _gap_deepdive_yahoo_news(ticker) if item.get('chart_date') in wanted)
+    except Exception:
+        app.logger.exception('Yahoo Finance chart-event lookup failed for %s',ticker);errors.append('Yahoo Finance news unavailable')
+    try: events.extend(item for item in _gap_deepdive_sec_filings(ticker) if item.get('chart_date') in wanted)
+    except Exception:
         app.logger.exception('SEC chart-event lookup failed for %s',ticker);errors.append('SEC filings unavailable')
     events.sort(key=lambda item:(item.get('chart_date',''),item.get('minute_et',570),item.get('kind','')))
     return jsonify({'ticker':ticker,'dates':dates,'events':events,'errors':errors})

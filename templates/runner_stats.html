@@ -252,6 +252,7 @@ async function run(refresh){
 }
 
 function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+function formatDateMDY(value){const raw=String(value??'');const m=raw.slice(0,10).match(/^(\d{4})-(\d{2})-(\d{2})$/);return m?`${m[2]}/${m[3]}/${m[1]}`:raw}
 
 function render(j, restoredLegs){
   let h='<section class="copySection" id="keyStatsCopy"><div class="hdr">'+esc(j.header)+'</div>';
@@ -279,7 +280,7 @@ function render(j, restoredLegs){
       +'<button id="btnEnlarge" class="btn-tool" style="border-color:var(--c);color:var(--c);font-weight:bold" title="Enlarge Chart to Fullscreen (F)">⛶ Enlarge View</button>'
       +'<button id="btnCopyImg" class="btn-tool" style="border-color:#47d890;color:#47d890;font-weight:bold" title="Copy a high-resolution PNG of the chart">📋 Copy Image</button>'
       +'</div></div>';
-    h+='<div style="display:flex;gap:14px;flex-wrap:wrap;color:var(--d);font-size:11px;margin:4px 0 8px"><span style="color:#29a8ff">━ VWAP · volume-weighted</span><span style="color:#c084fc">━ TWAP · equal clock minutes</span><span style="color:#ffd23f">┅ HOD AVWAP · resets at each running high</span><span>Stats also report active-minute TWAP.</span></div>';
+    h+='<div style="display:flex;gap:14px;flex-wrap:wrap;color:var(--d);font-size:11px;margin:4px 0 8px"><span style="color:#29a8ff">━ VWAP · volume-weighted</span><span style="color:#c084fc">━ TWAP · equal clock minutes</span><span style="color:#ffd23f">┅ HOD AVWAP · resets at each running high</span><span style="color:#ffd23f">N News</span><span style="color:#62c8ff">S SEC filing</span><span>Stats also report active-minute TWAP.</span></div>';
     h+='<div id="drawStatus" style="color:#ffd23f;font-size:12px;font-family:Consolas,monospace;min-height:18px;margin:4px 0 4px"></div>';
     h+='<div id="legRibbon" style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap"></div>';
     h+='<div id="c15wrap"></div>';
@@ -547,6 +548,12 @@ function boneZone15(bars){
 }
 
 let _chartState = null;
+function runnerEventMarkerAt(s,x,y){return (s?.newsMarkers||[]).find(m=>x>=m.x&&x<=m.x+m.w&&y>=m.y&&y<=m.y+m.h)||null}
+async function loadRunnerChartEvents(data){
+  const dates=[...new Set((data.bars||[]).map(b=>b.date).filter(Boolean))].sort(),all=[];
+  for(let i=0;i<dates.length;i+=100){const q=new URLSearchParams({ticker:data.ticker||'',dates:dates.slice(i,i+100).join(','),include_previous:'1',user:CSV_USER||localStorage.getItem('gap_user')||'',token:CSV_TOKEN||localStorage.getItem('gap_token')||''});try{const response=await fetch('/api/chart-events?'+q),payload=await response.json();if(response.ok)all.push(...(payload.events||[]))}catch{}}
+  return all;
+}
 
 function _setStatus(msg){
   const el=document.getElementById('drawStatus');
@@ -648,6 +655,7 @@ function initChart15(data){
   };
 
   _setupAndMountCanvas();
+  loadRunnerChartEvents(data).then(events=>{if(_chartState?.data!==data)return;_chartState.newsEvents=events;_renderFrame()});
   _updateToolbarUI();
   _setStatus('✏ DRAW MODE ACTIVE: Click LOW bar of Leg 1 (or click & drag across to High)');
 
@@ -847,7 +855,9 @@ function _setupAndMountCanvas(){
     const b = bars[i];
     const chg = i > 0 ? ((b.c / bars[i - 1].c - 1) * 100).toFixed(2) + '%' : '-';
     const sessTag = (b.pm || b.sess === 'pm') ? ' [PRE-MARKET]' : '';
-    tipEl.innerHTML = b.t + sessTag + '\nO ' + fmtP(b.o) + '  H ' + fmtP(b.h) + '  L ' + fmtP(b.l) + '  C ' + fmtP(b.c) + '\nVWAP ' + fmtP(b.vwap) + '  TWAP ' + fmtP(b.twap) + '  HOD AVWAP ' + fmtP(b.avh) + '\nVol ' + fmtV(b.v) + '  Chg ' + chg;
+    const marker=runnerEventMarkerAt(s,mx,ev.offsetY);
+    tipEl.innerHTML = marker?`${String(marker.title||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}\nClick to open source`:(b.t + sessTag + '\nO ' + fmtP(b.o) + '  H ' + fmtP(b.h) + '  L ' + fmtP(b.l) + '  C ' + fmtP(b.c) + '\nVWAP ' + fmtP(b.vwap) + '  TWAP ' + fmtP(b.twap) + '  HOD AVWAP ' + fmtP(b.avh) + '\nVol ' + fmtV(b.v) + '  Chg ' + chg);
+    cv.style.cursor=marker?'pointer':'crosshair';
     const offX = Math.min(ev.offsetX + 14, wrap.offsetWidth - 230);
     tipEl.style.left = Math.max(10, offX) + 'px';
     tipEl.style.top = Math.max(8, ev.offsetY - 70) + 'px';
@@ -863,6 +873,7 @@ function _setupAndMountCanvas(){
   };
 
   cv.onmousedown = function(ev){
+    if(runnerEventMarkerAt(s,ev.offsetX,ev.offsetY))return;
     if(!s.drawMode) return;
     const rect = cv.getBoundingClientRect();
     const mx = (ev.clientX - rect.left);
@@ -895,6 +906,7 @@ function _setupAndMountCanvas(){
   };
 
   cv.onclick = function(ev){
+    const marker=runnerEventMarkerAt(s,ev.offsetX,ev.offsetY);if(marker?.url){window.open(marker.url,'_blank','noopener,noreferrer');return;}
     if(!s.drawMode) return;
     const rect = cv.getBoundingClientRect();
     const mx = (ev.clientX - rect.left);
@@ -1238,6 +1250,24 @@ function _renderFrame(){
     ctx.setLineDash([2, 2]);
     ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI * 2); ctx.stroke();
     ctx.setLineDash([]);
+  }
+
+  // Release markers use the same N (news) / S (SEC filing) cues as Gap Deepdive.
+  s.newsMarkers=[];const eventStacks=new Map();
+  for(const event of (s.newsEvents||[])){
+    const eventStamp=Date.parse(`${event.chart_date}T00:00:00Z`)+Number(event.minute_et??570)*60000;
+    let best=-1,bestDistance=Infinity;
+    for(let i=0;i<N;i++){
+      const bar=bars[i];if(!bar.date)continue;
+      const stamp=Date.parse(`${bar.date}T00:00:00Z`)+Number(bar.minute_et??570)*60000,distance=Math.abs(stamp-eventStamp);
+      if(distance<bestDistance){best=i;bestDistance=distance;}
+    }
+    if(best<0||bestDistance>72*60*60000)continue;
+    const eventX=xM(best);if(eventX<PL||eventX>TW-PR)continue;const stackKey=`${best}|${event.chart_date}`,stack=eventStacks.get(stackKey)||0;eventStacks.set(stackKey,stack+1);
+    const eventY=Math.max(PT+3,yP(bars[best].h)-21-stack*17),news=event.kind==='news'||String(event.kind||'').toLowerCase().includes('news'),color=news?'#ffd23f':'#62c8ff',w=18,h=16,x=Math.max(PL,Math.min(TW-PR-w,eventX-w/2+stack*20)),y=eventY;
+    ctx.fillStyle='rgba(7,12,18,.97)';ctx.strokeStyle=color;ctx.lineWidth=1.2;ctx.beginPath();ctx.roundRect(x,y,w,h,3);ctx.fill();ctx.stroke();ctx.fillStyle=color;ctx.font='bold 10px Consolas,monospace';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(news?'N':'S',x+w/2,y+h/2);
+    const time=event.time_exact?`${String(Math.floor(event.minute_et/60)).padStart(2,'0')}:${String(event.minute_et%60).padStart(2,'0')} ET`:'time unavailable';
+    s.newsMarkers.push({x,y,w,h,url:event.url,title:`${news?'Yahoo Finance news':'SEC '+(event.form||'filing')} · ${formatDateMDY(event.chart_date)} ${time}\n${event.title||''}`});
   }
 
   // X Axis Time Labels
