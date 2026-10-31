@@ -1195,7 +1195,7 @@ function drawGapDeepDiveEventMarkers(cv,x,g){
     const w=18,h=16,px=Math.max(g.L,Math.min(g.L+g.plotW-w,centerX-w/2+stack*20)),py=Math.max(g.T,baseY-stack*17),isNews=event.kind==='news'||String(event.kind||'').toLowerCase().includes('news'),color=isNews?'#ffd23f':'#62c8ff',label=isNews?'N':'S';
     x.fillStyle='rgba(7,12,18,.97)';x.strokeStyle=color;x.lineWidth=1.2;x.beginPath();x.roundRect(px,py,w,h,3);x.fill();x.stroke();x.fillStyle=color;x.fillText(label,px+w/2,py+h/2+.5);
     const time=event.time_exact?`${String(Math.floor(event.minute_et/60)).padStart(2,'0')}:${String(event.minute_et%60).padStart(2,'0')} ET`:'time unavailable · marker placed at session open';
-    placed.push({x:px,y:py,w,h,url:event.url,title:`${isNews?'Yahoo Finance news':'SEC '+(event.form||'filing')} · ${event.title} · ${event.chart_date} ${time}`});
+    placed.push({x:px,y:py,w,h,url:event.url,title:`${isNews?'Yahoo Finance news':'SEC '+(event.form||'filing')} · ${event.chart_date} ${time}\n${event.title}`});
   }
   x.restore();cv._eventMarkersScreen=placed;
 }
@@ -1203,6 +1203,7 @@ function scheduleGapDeepDiveHover(cv,x,y){cv._pendingHover={x,y};if(cv._hoverUpd
 function gapDeepDiveRangePoint(cv,x,y){return cv._rangePointAt?.(x,y)||cv._rangePointAtX?.(x)||null;}
 function bindGapDeepDiveRangeInput(cv){
   if(cv._rangeInputBound)return;cv._rangeInputBound=true;
+  if(!cv._eventHoverTip&&cv.parentElement){const tip=document.createElement('div');tip.style.cssText='display:none;position:absolute;z-index:20;pointer-events:none;max-width:min(360px,70vw);white-space:pre-line;background:rgba(8,12,16,.97);border:1px solid #ffd23f;color:#f1f5f9;padding:6px 8px;border-radius:3px;font:11px/1.45 Consolas,monospace;box-shadow:0 2px 8px #000';cv.parentElement.appendChild(tip);cv._eventHoverTip=tip;}
   const stop=e=>{e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();};
   cv.addEventListener('pointerdown',e=>{
     const eventMarker=gapDeepDiveEventMarkerAt(cv,e.offsetX,e.offsetY);if(eventMarker&&eventMarker.url){cv._eventMarkerPointer={marker:eventMarker,pointerId:e.pointerId};cv.setPointerCapture(e.pointerId);cv.style.cursor='pointer';stop(e);return;}
@@ -1220,7 +1221,7 @@ function bindGapDeepDiveRangeInput(cv){
     }
     cv._rangeDrag=drag;cv.setPointerCapture(e.pointerId);cv.style.cursor='crosshair';stop(e);drawGapDeepDiveRangeOverlay(cv);
   },true);
-  cv.addEventListener('pointermove',e=>{const marker=gapDeepDiveEventMarkerAt(cv,e.offsetX,e.offsetY);if(marker){cv.style.cursor='pointer';cv.title=marker.title;}else if(!cv._rangeDrag&&!cv._zoomDrag&&!cv._panActive)cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode)?'crosshair':'grab';},true);
+  cv.addEventListener('pointermove',e=>{const marker=gapDeepDiveEventMarkerAt(cv,e.offsetX,e.offsetY),tip=cv._eventHoverTip;if(marker){cv.style.cursor='pointer';cv.title=marker.title;if(tip){tip.textContent=marker.title;tip.style.display='block';const parent=cv.parentElement,w=tip.offsetWidth,h=tip.offsetHeight;tip.style.left=Math.max(4,Math.min(parent.clientWidth-w-4,cv.offsetLeft+e.offsetX+12))+'px';tip.style.top=Math.max(4,Math.min(parent.clientHeight-h-4,cv.offsetTop+e.offsetY+12))+'px';}}else{if(tip)tip.style.display='none';if(!cv._rangeDrag&&!cv._zoomDrag&&!cv._panActive)cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode)?'crosshair':'grab';}},true);
   cv.addEventListener('pointermove',e=>{
     if(cv._zoomDrag){cv._zoomDrag.x1=e.offsetX;cv._zoomDrag.y1=cv._rangeGeometry.T+cv._rangeGeometry.plotH;stop(e);scheduleGapDeepDiveRangeOverlay(cv);return;}
     const drag=cv._rangeDrag,g=cv._rangeGeometry;if(!drag||!g)return;
