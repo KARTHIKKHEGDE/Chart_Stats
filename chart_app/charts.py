@@ -433,7 +433,7 @@ def chart_context():
     if not re.fullmatch(r"[A-Z.\-]{1,10}",ticker): return jsonify({"error":"Invalid ticker"}),400
     try: dt.date.fromisoformat(day)
     except ValueError: return jsonify({"error":"Invalid session date"}),400
-    if tf not in ("1m","2m","5m","15m","30m","1h","1d"): return jsonify({"error":"Invalid timeframe"}),400
+    if tf not in ("1m","2m","3m","5m","15m","30m","1h","1d"): return jsonify({"error":"Invalid timeframe"}),400
     count=max(1,min(60,count))
     try:
         daily=load_daily(ticker); idx=next((i for i,r in enumerate(daily) if r["date"]==day),None)
