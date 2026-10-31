@@ -1138,9 +1138,9 @@ function drawGapDeepDiveRanges(cv,x,g){
   }
   x.restore();
   const selected=measures.find(m=>m.id===cv._selectedRangeId),stats=selected?gapRangeStats(selected,g):null,box=cv._rangeMeasureBox;
-  if(box&&stats){const sign=stats.change>=0?'+':'−',pctSign=stats.pct>=0?'+':'−',money=n=>'$'+Math.abs(n).toFixed(Math.abs(n)<1?4:2),num=n=>Number(n).toLocaleString('en-US',{maximumFractionDigits:0});
+  if(box&&stats){const sign=stats.change>=0?'+':'−',pctSign=stats.pct>=0?'+':'−',money=n=>'$'+Math.abs(n).toFixed(Math.abs(n)<1?4:2),millions=n=>(Number(n)/1e6).toFixed(2)+'M';
     box.hidden=false;box.style.borderColor=stats.change>=0?'#3ddc84':'#ff5a5a';box.style.color=stats.change>=0?'#d8ffe8':'#ffe1e1';
-    box.textContent=`% Change  ${pctSign}${Math.abs(stats.pct).toFixed(2)}%\n$ Change  ${sign}${money(stats.change)}\nVolume  ${num(stats.volume)} sh\n$ Volume  ${money(stats.dollarVolume)}`;
+    box.textContent=`% Change  ${pctSign}${Math.abs(stats.pct).toFixed(2)}%\n$ Change  ${sign}${money(stats.change)}\nVolume  ${millions(stats.volume)} sh\n$ Volume  $${millions(stats.dollarVolume)}`;
     const line=cv._rangeScreenMeasures.find(item=>item.id===selected.id),wrap=box.parentElement;if(line&&wrap){const W=wrap.clientWidth,H=wrap.clientHeight,bw=box.offsetWidth,bh=box.offsetHeight,mx=(line.a.x+line.b.x)/2,my=(line.a.y+line.b.y)/2;let left=mx+14,top=my+14;if(left+bw>W-8)left=mx-bw-14;if(top+bh>H-8)top=my-bh-14;box.style.left=Math.max(8,Math.min(W-bw-8,left))+'px';box.style.top=Math.max(8,Math.min(H-bh-8,top))+'px';box.style.right='auto';}
   }else if(box){box.hidden=true;box.textContent='';}
 }
