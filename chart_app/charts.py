@@ -266,6 +266,15 @@ def gap_deepdive_chart(job_id):
 
 
 def _gap_deepdive_chart_payload(ticker,day,scan_item):
+    # Raw one-minute candles are cached by minute_df, but packing candles and
+    # derived chart fields on every open still costs time. Persist this ready-
+    # to-render payload as well so repeat chart visits are disk-cache hits.
+    from chart_app.application import cget, cput
+    import hashlib
+    payload_key = 'gap_chart_payload_' + hashlib.sha1(f'{ticker.upper()}|{day}'.encode()).hexdigest()
+    cached = cget(payload_key)
+    if cached is not None:
+        return cached
     pc=scan_item.get('previous_close')
     if not pc:
         saved=_saved_gap_deepdive_manifest(dt.date.today().year)
@@ -283,6 +292,7 @@ def _gap_deepdive_chart_payload(ticker,day,scan_item):
     packed=chart_pack(frame,{'models':{},'pm_high':float(pm.h.max()) if not pm.empty else None},
                       float(pc),dt.date.fromisoformat(day),include_after_hours=True)
     packed['ticker']=ticker
+    cput(payload_key, packed)
     return packed
 
 
@@ -297,8 +307,8 @@ def gap_deepdive_charts(job_id):
         if manifest and manifest.get('job')==job_id: job=manifest
     if not job or job.get('status')!='complete': return jsonify({'error':'Scan is not complete or has expired.'}),404
     requested=(request.get_json(silent=True) or {}).get('charts') or []
-    if not isinstance(requested,list) or not requested or len(requested)>16: return jsonify({'error':'Request between 1 and 16 charts.'}),400
-    results={};errors={}
+    if not isinstance(requested,list) or not requested or len(requested)>64: return jsonify({'error':'Request between 1 and 64 charts.'}),400
+    results={};errors={};valid=[]
     for entry in requested:
         if not isinstance(entry,dict): continue
         ticker=(entry.get('ticker') or '').strip().upper();day=(entry.get('date') or '').strip();key=f'{ticker}|{day}'
@@ -307,8 +317,16 @@ def gap_deepdive_charts(job_id):
         if not re.fullmatch(r'[A-Z.\-]{1,10}',ticker): errors[key]='Invalid ticker';continue
         scan_item=next((item for item in job.get('results',[]) if item.get('ticker')==ticker and item.get('date')==day),None)
         if scan_item is None: errors[key]='Session is not part of this scan';continue
-        try: results[key]=_gap_deepdive_chart_payload(ticker,day,scan_item)
-        except Exception as exc: errors[key]=f'{type(exc).__name__}: {exc}'
+        valid.append((key,ticker,day,scan_item))
+    # Candle reads are disk cached; run independent chart packing tasks
+    # concurrently to reduce time-to-first-render for a viewport batch.
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=min(12, max(1,len(valid)))) as pool:
+        futures={pool.submit(_gap_deepdive_chart_payload,ticker,day,item):key for key,ticker,day,item in valid}
+        for future in as_completed(futures):
+            key=futures[future]
+            try: results[key]=future.result()
+            except Exception as exc: errors[key]=f'{type(exc).__name__}: {exc}'
     return jsonify({'charts':results,'errors':errors})
 
 

@@ -137,15 +137,24 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
           <label style="font-size:12px;color:#ddd">Interval <select id="gap_chart_tf" style="height:30px;margin:0"><option>1m</option><option>2m</option><option>5m</option><option>15m</option></select></label>
           <label style="font-size:12px;color:#d7ff6e"><input id="gap_chart_bz" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"> Bone Zone (9/21 EMA)</label>
-          <label style="font-size:12px;color:#29a8ff"><input id="gap_chart_vwap" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"> VWAP</label>
+          <label style="font-size:12px;color:#fff"><input id="gap_chart_vwap" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"> VWAP</label>
           <label style="font-size:12px;color:#c084fc"><input id="gap_chart_twap" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"> TWAP</label>
           <button id="gap_chart_avwap" style="height:32px;padding:0 12px;border-color:#ffd23f;color:#ffe17d">AVWAP · Select A → B</button>
           <button id="gap_chart_clear_avwap" style="height:32px;padding:0 10px;font-size:12px">Clear AVWAP</button>
+          <button id="gap_chart_measure" style="height:32px;padding:0 10px" title="Click and drag between candles to measure price, time, and volume">Measure range</button>
+          <button id="gap_chart_delete_measure" style="height:32px;padding:0 9px" title="Delete selected measurement">Delete range</button>
+          <button id="gap_chart_clear_measures" style="height:32px;padding:0 9px" title="Clear all measurements">Clear ranges</button>
+          <button id="gap_chart_zoom_out" style="height:32px;padding:0 10px" title="Zoom out">−</button>
+          <button id="gap_chart_zoom_in" style="height:32px;padding:0 10px" title="Zoom in">+</button>
+          <button id="gap_chart_zoom_reset" style="height:32px;padding:0 10px" title="Reset zoom and pan">Reset</button>
           <button id="gap_chart_copy" style="height:32px;padding:0 10px;font-size:12px">Copy PNG</button>
           <button onclick="closeGapDeepDiveChart()" style="height:32px;padding:0 10px">✕</button>
         </div>
       </header>
-      <div id="gap_chart_modal_body" style="position:relative;flex:1;min-height:0;padding:8px;background:#050607"><canvas id="gap_chart_modal_canvas" style="display:block;width:100%;height:100%"></canvas></div>
+      <div id="gap_chart_modal_body" style="display:flex;flex-direction:column;position:relative;flex:1;min-height:0;padding:8px;background:#050607">
+        <div id="gap_chart_plot_wrap" style="position:relative;flex:1;min-height:0"><canvas id="gap_chart_modal_canvas" style="display:block;width:100%;height:100%"></canvas><div id="gap_chart_measure_box" hidden style="position:absolute;right:12px;top:12px;z-index:5;max-width:380px;padding:9px 11px;background:rgba(6,13,21,.94);border:1px solid #62c8ff;border-radius:4px;color:#edf6ff;font:12px/1.5 Consolas,monospace;white-space:pre-wrap;pointer-events:none"></div></div>
+        <div id="gap_chart_navigator_wrap" style="height:76px;flex:0 0 76px;margin-top:5px;border:1px solid #242b33;background:#090c10"><canvas id="gap_chart_navigator" style="display:block;width:100%;height:100%;touch-action:none;cursor:grab"></canvas></div>
+      </div>
       <footer id="gap_chart_avwap_status" style="padding:8px 14px;border-top:1px solid #252b31;color:#aab4bf;font-size:12px">VWAP and TWAP are shown. Choose AVWAP to click anchor A, then anchor B.</footer>
     </section>
   </div>
@@ -1088,6 +1097,104 @@ function aggregateEvBars(source, tf){
   }
   return out;
 }
+function gapRangeResolve(point,g){
+  if(!point||!g||!g.bars)return -1;const b=g.bars,n=b.t.length,dates=b.d||[];let first=0,last=n;
+  if(dates.length){let lo=0,hi=n;while(lo<hi){const mid=(lo+hi)>>1;if((dates[mid]||g.chart.date)<point.date)lo=mid+1;else hi=mid;}first=lo;lo=first;hi=n;while(lo<hi){const mid=(lo+hi)>>1;if((dates[mid]||g.chart.date)<=point.date)lo=mid+1;else hi=mid;}last=lo;}
+  if(first>=last)return -1;const dayIndex=g.multi?g.dates.indexOf(point.date):-1,minuteAt=i=>b.t[i]-(dayIndex>=0?dayIndex*g.sessionSpan:0);
+  let lo=first,hi=last;while(lo<hi){const mid=(lo+hi)>>1;if(minuteAt(mid)<point.minute)lo=mid+1;else hi=mid;}
+  if(lo>=last)return last-1;if(lo===first)return lo;return Math.abs(minuteAt(lo)-point.minute)<Math.abs(minuteAt(lo-1)-point.minute)?lo:lo-1;
+}
+function gapRangePointAtIndex(g,index){
+  const b=g.bars,day=b.d?.[index]||g.chart.date,dayIndex=g.multi?g.dates.indexOf(day):-1;
+  const minute=b.t[index]-(dayIndex>=0?dayIndex*g.sessionSpan:0),hh=String(Math.floor(minute/60)).padStart(2,'0'),mm=String(minute%60).padStart(2,'0');
+  return {date:day,minute,price:b.c[index],label:`${day} ${hh}:${mm} ET`};
+}
+function gapRangeTimestamp(point,offsetForDay){
+  const [y,m,d]=point.date.split('-').map(Number),etOffset=330-offsetForDay(point.date);
+  return Date.UTC(y,m-1,d,0,point.minute-etOffset);
+}
+function gapRangeStats(measure,g){
+  const a=gapRangeResolve(measure.a,g),z=gapRangeResolve(measure.b,g);if(a<0||z<0)return null;
+  const from=Math.min(a,z),to=Math.max(a,z),b=g.bars,bars=to-from+1;let cache=b._rangeStatsCache;
+  if(!cache){const n=b.t.length,size=2**Math.ceil(Math.log2(Math.max(1,n))),volumePrefix=new Float64Array(n+1),dollarPrefix=new Float64Array(n+1),maxTree=new Float64Array(size*2),minTree=new Float64Array(size*2);maxTree.fill(-Infinity);minTree.fill(Infinity);
+    for(let i=0;i<n;i++){const v=Number(b.v[i])||0;volumePrefix[i+1]=volumePrefix[i]+v;dollarPrefix[i+1]=dollarPrefix[i]+(Number(b.c[i])||0)*v;maxTree[size+i]=Number(b.h[i]);minTree[size+i]=Number(b.l[i]);}
+    for(let i=size-1;i>0;i--){maxTree[i]=Math.max(maxTree[i*2],maxTree[i*2+1]);minTree[i]=Math.min(minTree[i*2],minTree[i*2+1]);}cache=b._rangeStatsCache={size,volumePrefix,dollarPrefix,maxTree,minTree};}
+  let left=from+cache.size,right=to+1+cache.size,high=-Infinity,low=Infinity;
+  while(left<right){if(left&1){high=Math.max(high,cache.maxTree[left]);low=Math.min(low,cache.minTree[left++]);}if(right&1){--right;high=Math.max(high,cache.maxTree[right]);low=Math.min(low,cache.minTree[right]);}left>>=1;right>>=1;}
+  const volume=cache.volumePrefix[to+1]-cache.volumePrefix[from],dollarVolume=cache.dollarPrefix[to+1]-cache.dollarPrefix[from];
+  const change=measure.b.price-measure.a.price,pct=measure.a.price?change/measure.a.price*100:0;
+  const highPct=measure.a.price?(high/measure.a.price-1)*100:0,lowPct=measure.a.price?(low/measure.a.price-1)*100:0;
+  const elapsed=Math.abs(gapRangeTimestamp(measure.b,g.offsetForDay)-gapRangeTimestamp(measure.a,g.offsetForDay))/60000;
+  return {a,z,from,to,bars,volume,averageVolume:volume/bars,dollarVolume,high,low,change,pct,highPct,lowPct,days:Math.floor(elapsed/1440),hours:Math.floor(elapsed%1440/60),minutes:Math.floor(elapsed%60),direction:change>=0?'Positive':'Negative'};
+}
+function drawGapDeepDiveRanges(cv,x,g){
+  const measures=cv._rangeMeasures||[],palette=['#62c8ff','#ffd23f','#ff78cb','#b8ff6e','#ff9f43'];cv._rangeScreenMeasures=[];
+  if(!measures.length){if(cv._rangeMeasureBox){cv._rangeMeasureBox.hidden=true;cv._rangeMeasureBox.textContent='';}return;}
+  x.save();x.beginPath();x.rect(g.L,g.T,g.plotW,g.plotH);x.clip();
+  for(let n=0;n<measures.length;n++){
+    const measure=measures[n],stats=gapRangeStats(measure,g);if(!stats)continue;
+    const iA=gapRangeResolve(measure.a,g),iB=gapRangeResolve(measure.b,g),a={x:g.X(g.bars.t[iA]+g.tf/2),y:g.Y(measure.a.price)},b={x:g.X(g.bars.t[iB]+g.tf/2),y:g.Y(measure.b.price)},color=palette[n%palette.length];
+    x.strokeStyle=color;x.lineWidth=cv._selectedRangeId===measure.id?2.8:1.8;x.beginPath();x.moveTo(a.x,a.y);x.lineTo(b.x,b.y);x.stroke();
+    [a,b].forEach(pt=>{x.fillStyle='#090c10';x.strokeStyle=color;x.lineWidth=2;x.beginPath();x.arc(pt.x,pt.y,5,0,Math.PI*2);x.fill();x.stroke();});
+    cv._rangeScreenMeasures.push({id:measure.id,a,b,color});
+  }
+  x.restore();
+  const selected=measures.find(m=>m.id===cv._selectedRangeId)||measures[measures.length-1],stats=gapRangeStats(selected,g),box=cv._rangeMeasureBox;
+  if(box&&stats){const sign=stats.change>=0?'+':'−',pctSign=stats.pct>=0?'+':'−',money=n=>'$'+Math.abs(n).toFixed(Math.abs(n)<1?4:2),num=n=>Number(n).toLocaleString('en-US',{maximumFractionDigits:0}),elapsed=`${stats.days}d ${stats.hours}h ${stats.minutes}m`;
+    box.hidden=false;box.style.borderColor=stats.change>=0?'#3ddc84':'#ff5a5a';box.style.color=stats.change>=0?'#d8ffe8':'#ffe1e1';
+    box.textContent=`PRICE RANGE  ${stats.direction.toUpperCase()}\n${selected.a.label} → ${selected.b.label}\nElapsed ${elapsed} · Bars ${stats.bars}\nStart ${money(selected.a.price)}  End ${money(selected.b.price)}\nChange ${sign}${money(stats.change)}  (${pctSign}${Math.abs(stats.pct).toFixed(2)}%)\nVolume ${num(stats.volume)}  · Avg/bar ${num(stats.averageVolume)}\nDollar volume ${money(stats.dollarVolume)}\nHigh ${money(stats.high)} (${stats.highPct>=0?'+':''}${stats.highPct.toFixed(2)}%)\nLow ${money(stats.low)} (${stats.lowPct>=0?'+':''}${stats.lowPct.toFixed(2)}%)`;
+  }
+}
+function gapDeepDiveRangePoint(cv,x){return cv._rangePointAtX?.(x)||null;}
+function bindGapDeepDiveRangeInput(cv){
+  if(cv._rangeInputBound)return;cv._rangeInputBound=true;
+  const stop=e=>{e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();};
+  cv.addEventListener('pointerdown',e=>{
+    if(!cv._rangeMeasureMode||e.button!==0||!cv._rangeGeometry)return;
+    const g=cv._rangeGeometry;if(e.offsetX<g.L||e.offsetX>g.L+g.plotW||e.offsetY<g.T||e.offsetY>g.T+g.plotH)return;
+    const hit=(cv._rangeScreenMeasures||[]).map(m=>({m,which:['a','b'].sort((u,v)=>Math.hypot(m[u].x-e.offsetX,m[u].y-e.offsetY)-Math.hypot(m[v].x-e.offsetX,m[v].y-e.offsetY))[0]})).find(({m,which})=>Math.hypot(m[which].x-e.offsetX,m[which].y-e.offsetY)<12);
+    let drag;
+    if(hit){cv._selectedRangeId=hit.m.id;drag={kind:'endpoint',id:hit.m.id,which:hit.which};}
+    else{
+      const p=gapDeepDiveRangePoint(cv,e.offsetX);if(!p)return;
+      const lineHit=(cv._rangeScreenMeasures||[]).find(m=>{const dx=m.b.x-m.a.x,dy=m.b.y-m.a.y,t=Math.max(0,Math.min(1,((e.offsetX-m.a.x)*dx+(e.offsetY-m.a.y)*dy)/(dx*dx+dy*dy||1)));return Math.hypot(e.offsetX-(m.a.x+t*dx),e.offsetY-(m.a.y+t*dy))<8;});
+      if(lineHit){const measure=cv._rangeMeasures.find(m=>m.id===lineHit.id),i=gapRangeResolve(p,g);cv._selectedRangeId=lineHit.id;drag={kind:'move',id:lineHit.id,index:i,price:p.price,a:{...measure.a},b:{...measure.b}};}
+      else{const measure={id:crypto.randomUUID(),a:p,b:p};cv._rangeMeasures||=[];cv._rangeMeasures.push(measure);cv._selectedRangeId=measure.id;drag={kind:'create',id:measure.id,which:'b'};}
+    }
+    cv._rangeDrag=drag;cv.setPointerCapture(e.pointerId);cv.style.cursor='crosshair';stop(e);drawEv(cv,...cv._drawEvArgs);
+  },true);
+  cv.addEventListener('pointermove',e=>{
+    const drag=cv._rangeDrag,g=cv._rangeGeometry;if(!drag||!g)return;
+    const measure=cv._rangeMeasures.find(m=>m.id===drag.id),p=gapDeepDiveRangePoint(cv,e.offsetX);if(!measure||!p)return;
+    if(drag.kind==='move'){
+      const idx=gapRangeResolve(p,g),delta=idx-drag.index,priceDelta=p.price-drag.price;
+      const movePoint=original=>{const old=gapRangeResolve(original,g),next=gapRangePointAtIndex(g,Math.max(0,Math.min(g.bars.t.length-1,old+delta)));return {...next,price:original.price+priceDelta};};
+      measure.a=movePoint(drag.a);measure.b=movePoint(drag.b);
+    }else measure[drag.which]=p;
+    cv._selectedRangeId=measure.id;stop(e);drawEv(cv,...cv._drawEvArgs);
+  },true);
+  const finish=e=>{if(!cv._rangeDrag)return;cv._rangeDrag=null;cv.style.cursor=cv._rangeMeasureMode?'crosshair':'grab';stop(e);};
+  cv.addEventListener('pointerup',finish,true);cv.addEventListener('pointercancel',finish,true);
+  cv.addEventListener('dblclick',e=>{if(cv.id!=='gap_chart_modal_canvas')return;cv._rangeZoom=1;cv._panOffset=0;cv._yZoom=1;cv._gapDeepDiveRedraw?.();},true);
+  cv.addEventListener('wheel',e=>{
+    if(cv.id!=='gap_chart_modal_canvas'||!cv._wheelZoomEnabled||!cv._rangeGeometry)return;
+    const g=cv._rangeGeometry;if(e.offsetX<g.L||e.offsetX>g.L+g.plotW)return;
+    const ratio=(e.offsetX-g.L)/g.plotW,anchor=g.viewStart+ratio*g.viewSpan,zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,(cv._rangeZoom||1)*Math.exp(-Math.sign(e.deltaY)*.18)));
+    cv._rangeZoom=zoom;const nextSpan=Math.min(g.span,g.baseViewSpan/zoom),viewBase=g.viewBase;
+    cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,anchor-ratio*nextSpan-viewBase));
+    e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();cv._gapDeepDiveRedraw?.();
+  },{capture:true,passive:false});
+}
+function drawGapDeepDiveNavigator(mainCv,baseChart,timeframe){
+  const nav=$('#gap_chart_navigator');if(!nav||!mainCv._rangeGeometry)return;const g=mainCv._rangeGeometry,b=g.bars,parent=nav.parentElement,W=parent.clientWidth,H=parent.clientHeight,dpr=Math.min(2,window.devicePixelRatio||1);
+  if(W<2||H<2)return;nav.width=Math.round(W*dpr);nav.height=Math.round(H*dpr);nav.style.width=W+'px';nav.style.height=H+'px';const x=nav.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);x.fillStyle='#090c10';x.fillRect(0,0,W,H);
+  const pad=8,plotW=W-pad*2,lo=Math.min(...b.l),hi=Math.max(...b.h),range=hi-lo||1,at=t=>pad+plotW*(t-g.fullStart)/g.span;
+  x.strokeStyle='#5c788e';x.lineWidth=1;x.beginPath();let started=false;for(let i=0;i<b.t.length;i++){const px=at(b.t[i]),py=H-7-(b.c[i]-lo)/(range)*(H-14);if(px<pad||px>W-pad)continue;if(!started){x.moveTo(px,py);started=true;}else x.lineTo(px,py);}x.stroke();
+  const left=Math.max(pad,Math.min(W-pad,at(g.viewStart))),right=Math.max(left+10,Math.min(W-pad,at(g.viewStart+g.viewSpan)));nav._gapNav={left,right,pad,plotW,geometry:g};
+  x.fillStyle='rgba(98,200,255,.17)';x.fillRect(left,2,right-left,H-4);x.strokeStyle='#62c8ff';x.lineWidth=1.5;x.strokeRect(left+.5,2.5,right-left-1,H-5);
+  x.fillStyle='#d9f2ff';x.fillRect(left-3,2,6,H-4);x.fillRect(right-3,2,6,H-4);
+  if(!nav._gapNavBound){nav._gapNavBound=true;let drag=null;nav.addEventListener('pointerdown',e=>{const q=nav._gapNav;if(!q)return;const px=e.offsetX;drag={x:px,left:q.left,right:q.right,mode:px<q.left+9?'left':px>q.right-9?'right':px<q.right?'body':'jump'};nav.setPointerCapture(e.pointerId);nav.style.cursor=drag.mode==='body'?'grabbing':'ew-resize';e.preventDefault();});nav.addEventListener('pointermove',e=>{if(!drag||!nav._gapNav)return;const q=nav._gapNav,g=q.geometry,dx=e.offsetX-drag.x,unit=g.span/q.plotW;let left=drag.left,right=drag.right;if(drag.mode==='body'){left+=dx;right+=dx;}else if(drag.mode==='left')left+=dx;else if(drag.mode==='right')right+=dx;else{left=e.offsetX-(right-left)/2;right=e.offsetX+(right-left)/2;}left=Math.max(q.pad,Math.min(right-10,left));right=Math.min(nav.clientWidth-q.pad,Math.max(left+10,right));const newSpan=Math.max(1,(right-left)*g.span/q.plotW),zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,g.baseViewSpan/newSpan)),viewBase=g.viewBase,targetStart=g.fullStart+(left-q.pad)*g.span/q.plotW;mainCv._rangeZoom=zoom;mainCv._panOffset=targetStart-viewBase;mainCv._gapDeepDiveRedraw?.();e.preventDefault();});const end=()=>{drag=null;nav.style.cursor='grab';};nav.addEventListener('pointerup',end);nav.addEventListener('pointercancel',end);}
+}
 function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   const parentW = (cv.parentElement && cv.parentElement.clientWidth) ? cv.parentElement.clientWidth : 0;
   const dpr = Math.min(3,Math.max(window.devicePixelRatio||1,Number(cv._renderDpr)||1));
@@ -1125,7 +1232,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   // to 1x: that made every zoom-out click a no-op.  The loaded date range is
   // still the upper limit, so zooming out reveals neighboring sessions.
   const baseViewSpan=daily?span:sessionSpan;
-  const viewSpan=Math.min(span,baseViewSpan/Math.max(.125,zoom)),panLimit=Math.max(0,span-viewSpan)/2;
+  const viewSpan=Math.min(span,baseViewSpan/Math.max(.01,zoom)),panLimit=Math.max(0,span-viewSpan)/2;
   let viewBase=fullStart+panLimit,panMin=-panLimit,panMax=panLimit;
   if(multi){const anchorIndex=dates.indexOf(cv._anchorDate||c.date);if(anchorIndex>=0){viewBase=fullStart+anchorIndex*sessionSpan+sessionSpan/2-viewSpan/2;panMin=fullStart-viewBase;panMax=fullStart+span-viewSpan-viewBase;}}
   cv._panMinOffset=panMin;cv._panMaxOffset=panMax;
@@ -1140,14 +1247,16 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   const hoverOffsets=new Map(),etClock=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',timeZoneName:'shortOffset'}),istClock=new Intl.DateTimeFormat('en-US',{timeZone:'UTC',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
   const hoverOffset=day=>{if(hoverOffsets.has(day))return hoverOffsets.get(day);let offset=Number(c.off)||0;try{const parts=etClock.formatToParts(new Date(day+'T12:00:00Z')),name=parts.find(p=>p.type==='timeZoneName')?.value||'',match=name.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/);if(match){const et=(match[1]==='-'?-1:1)*(Number(match[2])*60+Number(match[3]||0));offset=330-et;}}catch{}hoverOffsets.set(day,offset);return offset;};
   const hoverStamp=(day,minute)=>{const [yy,mm,dd]=String(day||'').split('-').map(Number);if(!yy||!mm||!dd)return 'time unavailable';const at=new Date(Date.UTC(yy,mm-1,dd,0,Math.round(minute+hoverOffset(day)))),parts=istClock.formatToParts(at),v=Object.fromEntries(parts.map(p=>[p.type,p.value]));return `${v.month}/${v.day}/${v.year} ${v.hour}:${v.minute} IST`;};
-  cv._hoverItems=visible.map(i=>{const day=b.d?.[i]||c.date||'',dayIndex=multi?dates.indexOf(day):-1,minute=daily?0:b.t[i]-(dayIndex>=0?dayIndex*sessionSpan:0);return {key:`${day}|${b.t[i]}`,index:i,x:X(b.t[i]+(daily?.5:tf/2)),label:daily?`${hoverStamp(day,0).split(' ').slice(0,1)[0]} · Daily IST`:hoverStamp(day,minute),o:b.o[i],h:b.h[i],l:b.l[i],c:b.c[i],prevC:i>0?b.c[i-1]:c.pc,v:b.v[i]||0};});
+  cv._rangeGeometry={bars:b,chart:c,dates,multi,sessionSpan,tf,X,Y,L,T,plotW:pw,plotH:ph,offsetForDay:hoverOffset,span,fullStart,viewStart,viewSpan,baseViewSpan,viewBase};
+  cv._hoverItems=visible.map(i=>{const day=b.d?.[i]||c.date||'',dayIndex=multi?dates.indexOf(day):-1,minute=daily?0:b.t[i]-(dayIndex>=0?dayIndex*sessionSpan:0);return {key:`${day}|${b.t[i]}`,index:i,date:day,minute,x:X(b.t[i]+(daily?.5:tf/2)),label:daily?`${hoverStamp(day,0).split(' ').slice(0,1)[0]} · Daily IST`:hoverStamp(day,minute),o:b.o[i],h:b.h[i],l:b.l[i],c:b.c[i],prevC:i>0?b.c[i-1]:c.pc,v:b.v[i]||0};});
+  cv._rangePointAtX=px=>{const p=cv._hoverItems?.reduce((best,item)=>Math.abs(item.x-px)<Math.abs(best.x-px)?item:best,cv._hoverItems?.[0]);return p?{date:p.date,minute:p.minute,price:p.c,label:p.label}:null;};
   cv._showChartHover=(px,py)=>{if(px<L||px>W-R||!cv._hoverItems?.length){if(cv._hoverTip)cv._hoverTip.style.display='none';return}let item=cv._hoverItems.reduce((best,p)=>Math.abs(p.x-px)<Math.abs(best.x-px)?p:best,cv._hoverItems[0]);const tip=cv._hoverTip;if(!tip)return;const fmt=n=>Number.isFinite(Number(n))?Number(n).toFixed(Number(n)<1?4:2):'—';tip.textContent=cv._showOhlcTip?`${item.label}\nO ${fmt(item.o)}  H ${fmt(item.h)}\nL ${fmt(item.l)}  C ${fmt(item.c)}  V ${Number(item.v||0).toLocaleString('en-US')}`:item.label;tip.style.whiteSpace=cv._showOhlcTip?'pre-line':'nowrap';tip.style.display='block';if(cv._quoteLine){const change=item.c-Number(item.prevC||0),pct=item.prevC?change/Number(item.prevC)*100:0,tp=(item.h+item.l+item.c)/3,dv=tp*item.v,float=Number(cv._floatShares),compact=n=>Number.isFinite(n)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(n):'—',money=n=>Number.isFinite(n)?(Math.abs(n)>=1000?'$'+compact(Math.abs(n)):Math.abs(n)<1?'$'+Math.abs(n).toFixed(4):'$'+Math.abs(n).toFixed(2)):'—',signedMoney=n=>`${n>=0?'+':'-'}${money(change)}`;cv._quoteLine.textContent=`${item.label} · %Chg ${pct>=0?'+':''}${pct.toFixed(2)}% · $Chg ${signedMoney(change)} · Vol ${Number(item.v).toLocaleString('en-US')} · $Vol ${money(dv)} · Float ${Number.isFinite(float)?compact(float)+' sh':'unavailable'}`;cv._quoteLine.style.color=change>=0?'#64d99b':'#ff7777';}if(cv.id==='kwModalCanvas'){tip.style.left='' ;tip.style.top='' ;}else if(cv._showOhlcTip){tip.style.left=Math.min(W-210,Math.max(L,px+14))+'px';tip.style.top=(cv.offsetTop+8)+'px';}else{tip.style.left=Math.max(4,cv.offsetLeft+8)+'px';tip.style.top=(cv.offsetTop+cv.offsetHeight+2)+'px';}cv.title=item.label;};
   cv._viewSpan=viewSpan;cv._panSpan=span;cv._plotWidth=pw;cv._drawEvArgs=[c,sel,bzChecked,targetH,timeframe,zoom];
   if(!cv._panBound){
     cv._panBound=true;cv.style.cursor='grab';
     const hoverParent=cv.parentElement;if(hoverParent){if(getComputedStyle(hoverParent).position==='static')hoverParent.style.position='relative';const tip=document.createElement('div');tip.className='chartHoverTip';tip.style.cssText='display:none;position:absolute;z-index:9;pointer-events:none;background:rgba(8,12,16,.96);border:1px solid #465362;color:#e7eef5;padding:5px 7px;border-radius:3px;font:11px Consolas,monospace;white-space:nowrap;box-shadow:0 2px 8px #000';if(cv.id==='kwModalCanvas'){tip.style.position='static';tip.style.background='transparent';tip.style.border='0';tip.style.padding='0';document.querySelector('.kwModalLegend')?.appendChild(tip)}else hoverParent.appendChild(tip);cv._hoverTip=tip;}
     cv.addEventListener('pointerdown',e=>{if(e.button!==0)return;if(cv._avwapSelectMode){if(e.offsetX<L||e.offsetX>W-R)return;const p=cv._hoverItems?.reduce((a,z)=>Math.abs(z.x-e.offsetX)<Math.abs(a.x-e.offsetX)?z:a,cv._hoverItems?.[0]);if(!p)return;if(cv._avwapAnchors?.a==null){cv._avwapAnchors={a:p.index,b:null};cv._avwapOnChange?.(`Anchor A selected · ${p.label} · ${p.c}`);}else if(p.index<=cv._avwapAnchors.a){cv._avwapOnChange?.('Choose point B after point A in time.');}else{cv._avwapAnchors={...cv._avwapAnchors,b:p.index};cv._avwapSelectMode=false;cv._avwapOnChange?.(`AVWAP drawn · A ${cv._hoverItems.find(z=>z.index===cv._avwapAnchors.a)?.label||''} → B ${p.label}`);}e.preventDefault();e.stopPropagation();drawEv(cv,...cv._drawEvArgs);return;}if(cv._measureMode&&e.offsetX>L&&e.offsetX<W-R){const p=cv._hoverItems?.reduce((a,z)=>Math.abs(z.x-e.offsetX)<Math.abs(a.x-e.offsetX)?z:a,cv._hoverItems?.[0]);if(p){cv._measureActive=true;cv._measureStartKey=p.key;cv._measureEndKey=p.key;cv.setPointerCapture(e.pointerId);drawEv(cv,...cv._drawEvArgs);}return;}cv._panActive=true;cv._panMode=e.offsetX<=L?'price':'time';cv._panStartX=e.clientX;cv._panStartY=e.clientY;cv._panStartOffset=cv._panOffset||0;cv._panStartYZoom=cv._yZoom||1;cv._panDidMove=false;cv.setPointerCapture(e.pointerId);cv.style.cursor=cv._panMode==='price'?'ns-resize':'grabbing';});
-    cv.addEventListener('pointermove',e=>{if(cv._measureActive){const p=cv._hoverItems?.reduce((a,z)=>Math.abs(z.x-e.offsetX)<Math.abs(a.x-e.offsetX)?z:a,cv._hoverItems?.[0]);if(p){cv._measureEndKey=p.key;drawEv(cv,...cv._drawEvArgs);}return;}if(!cv._panActive){cv.style.cursor=cv._avwapSelectMode?'crosshair':(e.offsetX<=L?'ns-resize':'grab');cv._showChartHover?.(e.offsetX,e.offsetY);if(cv._showCrosshair){cv._crosshair={x:e.offsetX,y:e.offsetY};if(!cv._crosshairFrame)cv._crosshairFrame=requestAnimationFrame(()=>{cv._crosshairFrame=0;if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);});}return;}if(cv._hoverTip)cv._hoverTip.style.display='none';const dx=e.clientX-cv._panStartX,dy=e.clientY-cv._panStartY;if(Math.abs(dx)>3||Math.abs(dy)>3)cv._panDidMove=true;if(cv._panMode==='price'){cv._yZoom=Math.max(.5,Math.min(20,cv._panStartYZoom*Math.exp(-dy/140)));cv._onYZoomChange?.(cv._yZoom);}else{cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,cv._panStartOffset-dx*cv._viewSpan/Math.max(1,cv._plotWidth)));cv._onPanChange?.(cv._panOffset);}if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);});
+    cv.addEventListener('pointermove',e=>{if(cv._measureActive){const p=cv._hoverItems?.reduce((a,z)=>Math.abs(z.x-e.offsetX)<Math.abs(a.x-e.offsetX)?z:a,cv._hoverItems?.[0]);if(p){cv._measureEndKey=p.key;drawEv(cv,...cv._drawEvArgs);}return;}if(!cv._panActive){cv.style.cursor=(cv._rangeMeasureMode||cv._avwapSelectMode)?'crosshair':(e.offsetX<=L?'ns-resize':'grab');cv._showChartHover?.(e.offsetX,e.offsetY);if(cv._showCrosshair){cv._crosshair={x:e.offsetX,y:e.offsetY};if(!cv._crosshairFrame)cv._crosshairFrame=requestAnimationFrame(()=>{cv._crosshairFrame=0;if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);});}return;}if(cv._hoverTip)cv._hoverTip.style.display='none';const dx=e.clientX-cv._panStartX,dy=e.clientY-cv._panStartY;if(Math.abs(dx)>3||Math.abs(dy)>3)cv._panDidMove=true;if(cv._panMode==='price'){cv._yZoom=Math.max(.5,Math.min(20,cv._panStartYZoom*Math.exp(-dy/140)));cv._onYZoomChange?.(cv._yZoom);}else{cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,cv._panStartOffset-dx*cv._viewSpan/Math.max(1,cv._plotWidth)));cv._onPanChange?.(cv._panOffset);}if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);});
     cv.addEventListener('pointerleave',()=>{if(cv._hoverTip)cv._hoverTip.style.display='none';if(cv._showCrosshair&&cv._crosshair){cv._crosshair=null;if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);}});
     cv.addEventListener('pointerup',e=>{if(cv._measureActive){cv._measureActive=false;return;}if(!cv._panActive)return;cv._panActive=false;cv.style.cursor='grab';if(cv._panDidMove&&cv._panMode==='time'){const dx=e.clientX-cv._panStartX;if(cv._panMinOffset===cv._panMaxOffset&&Math.abs(dx)>20)cv._onPanEdge?.(dx<0?1:-1);else if(cv._panOffset>=cv._panMaxOffset-1)cv._onPanEdge?.(1);else if(cv._panOffset<=cv._panMinOffset+1)cv._onPanEdge?.(-1);}});
     cv.addEventListener('pointercancel',()=>{cv._panActive=false;cv.style.cursor='grab';});
@@ -1254,7 +1363,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
     x.restore();
   }
   if(cv._showVWAP!==false){
-    x.strokeStyle = '#29a8ff';
+    x.strokeStyle = '#ffffff';
     x.lineWidth = isLarge ? 2 : 1.4;
     x.beginPath();
     let on = false, lastVwapDate=null;
@@ -1332,6 +1441,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
       const rot=Number(c.float_shares)>0?`${(vol/Number(c.float_shares)).toFixed(2)}x`:'Unavailable';const lines=[`${a.label} to ${z.label}`,`Volume ${vol.toLocaleString('en-US',{maximumFractionDigits:0})}`,`Dollar volume ~$${dv.toLocaleString('en-US',{maximumFractionDigits:0})}`,`Float rotation ${rot}${Number(c.float_shares)>0?' (float may be stale)':''}`];
       x.font='bold 11px Consolas,monospace';const boxW=Math.min(W-L-R,Math.max(...lines.map(t=>x.measureText(t).width))+16),boxH=lines.length*16+12,bx=Math.min(W-R-boxW,Math.max(L,left+6)),by=T+5;x.fillStyle='rgba(6,13,21,.96)';x.fillRect(bx,by,boxW,boxH);x.strokeStyle='#62c8ff';x.strokeRect(bx,by,boxW,boxH);lines.forEach((line,k)=>{x.fillStyle=k===0?'#8cb8d6':'#edf6ff';x.fillText(line,bx+8,by+16+k*16)});x.restore();}
   }
+  if(cv._rangeMeasureBox)drawGapDeepDiveRanges(cv,x,cv._rangeGeometry);
   if(cv._showCrosshair&&cv._crosshair){const p=cv._crosshair;if(p.x>=L&&p.x<=W-R&&p.y>=T&&p.y<=T+ph){x.save();x.strokeStyle='rgba(220,232,244,.65)';x.lineWidth=1;x.setLineDash([3,4]);x.beginPath();x.moveTo(p.x,T);x.lineTo(p.x,vy1);x.moveTo(L,p.y);x.lineTo(W-R,p.y);x.stroke();x.restore();}}
 }
 
@@ -1741,7 +1851,7 @@ const gapDeepDiveKey=item=>`${item.ticker}|${item.date}`;
 let gapDeepDiveChartQueue=[],gapDeepDiveChartBatchTimer=null;
 function flushGapDeepDiveChartQueue(){
   if(gapDeepDiveChartBatchTimer){clearTimeout(gapDeepDiveChartBatchTimer);gapDeepDiveChartBatchTimer=null;}
-  const batch=gapDeepDiveChartQueue.splice(0,16);if(!batch.length)return;
+  const batch=gapDeepDiveChartQueue.splice(0,32);if(!batch.length)return;
   const url='/api/gap-deepdive/'+encodeURIComponent(batch[0].jobId)+'/charts?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken);
   fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({charts:batch.map(x=>({ticker:x.item.ticker,date:x.item.date}))})})
     .then(gapDeepDiveJson).then(data=>batch.forEach(entry=>{const key=gapDeepDiveKey(entry.item),chart=data.charts?.[key];if(chart){chart.ticker=entry.item.ticker;gapDeepDiveCharts.set(key,chart);entry.resolve(chart);}else entry.reject(new Error(data.errors?.[key]||'Chart data was not returned'));}))
@@ -1769,9 +1879,10 @@ async function loadGapDeepDiveFloat(item,jobId){
 function drawGapDeepDiveCanvas(cv,baseChart,timeframe,targetH){
   const state=cv._gapDeepDiveState,chart=state?.bars?{...baseChart,bars:state.bars,after_hours:true}:baseChart;
   cv._renderDpr=cv.id==='gap_chart_modal_canvas'?3:2;
-  if(state){cv._anchorDate=baseChart.date;cv._panOffset=state.panOffset||0;cv._onPanChange=value=>{state.panOffset=value;};cv._onPanEdge=side=>loadGapDeepDiveAdjacent(cv,baseChart,side);}
-  if(cv.id==='gap_chart_modal_canvas'){cv._quoteLine=$('#gap_chart_quote_line');cv._floatShares=gapDeepDiveCurrent?.float_shares??baseChart.float_shares??null;}
-  drawEv(cv,chart,'none',cv.id==='gap_chart_modal_canvas'?$('#gap_chart_bz').checked:true,targetH,timeframe,1);
+  if(state){cv._anchorDate=baseChart.date;if(cv.id!=='gap_chart_modal_canvas'||!cv._modalPanInitialized){cv._panOffset=state.panOffset||0;if(cv.id==='gap_chart_modal_canvas')cv._modalPanInitialized=true;}if(cv.id==='gap_chart_modal_canvas')state.panOffset=cv._panOffset||0;cv._onPanChange=value=>{state.panOffset=value;};cv._onPanEdge=side=>loadGapDeepDiveAdjacent(cv,baseChart,side);}
+  if(cv.id==='gap_chart_modal_canvas'){cv._quoteLine=$('#gap_chart_quote_line');cv._floatShares=gapDeepDiveCurrent?.float_shares??baseChart.float_shares??null;cv._rangeMeasureBox=$('#gap_chart_measure_box');cv._rangeMeasures||=[];cv._rangeZoom||=1;cv._wheelZoomEnabled=true;cv._gapDeepDiveRedraw=()=>{if(gapDeepDiveCurrent){if(cv._gapDeepDiveState)cv._gapDeepDiveState.panOffset=cv._panOffset||0;renderGapDeepDiveModal();}};bindGapDeepDiveRangeInput(cv);}
+  drawEv(cv,chart,'none',cv.id==='gap_chart_modal_canvas'?$('#gap_chart_bz').checked:true,targetH,timeframe,cv.id==='gap_chart_modal_canvas'?(cv._rangeZoom||1):1);
+  if(cv.id==='gap_chart_modal_canvas')drawGapDeepDiveNavigator(cv,chart,timeframe);
 }
 async function loadGapDeepDiveAdjacent(cv,baseChart,side){
   const state=cv._gapDeepDiveState;if(!state||state.loading)return;
@@ -1791,9 +1902,9 @@ async function loadGapDeepDiveAdjacent(cv,baseChart,side){
   else if(key){const chart=gapDeepDiveCharts.get(key);if(chart)drawGapDeepDiveCanvas(cv,chart,$('#gap_deepdive_tf').value||'1m',540);}
 }
 function renderGapDeepDiveModal(){
-  if(!gapDeepDiveCurrent)return;const cv=$('#gap_chart_modal_canvas'),body=$('#gap_chart_modal_body');
+  if(!gapDeepDiveCurrent)return;const cv=$('#gap_chart_modal_canvas'),body=$('#gap_chart_plot_wrap');
   cv._showHODAVWAP=false;cv._showCrosshair=true;cv._showOhlcTip=true;cv._showVWAP=$('#gap_chart_vwap').checked;cv._showTWAP=$('#gap_chart_twap').checked;cv._avwapOnChange=message=>{$('#gap_chart_avwap_status').textContent=message;};
-  drawGapDeepDiveCanvas(cv,gapDeepDiveCurrent.chart,$('#gap_chart_tf').value,Math.max(500,body.clientHeight-12));
+  drawGapDeepDiveCanvas(cv,gapDeepDiveCurrent.chart,$('#gap_chart_tf').value,Math.max(300,body.clientHeight));
 }
 function setGapDeepDiveTimeframe(timeframe){
   const globalSelect=$('#gap_deepdive_tf'),modalSelect=$('#gap_chart_tf');
@@ -1811,7 +1922,7 @@ async function openGapDeepDiveChart(item,jobId){
     $('#gap_chart_title').textContent=item.ticker;$('#gap_chart_date').textContent=item.date;$('#gap_chart_stats').textContent=`PM high +${(item.move*100).toFixed(1)}% · $${(item.pm_dollar_volume/1e6).toFixed(1)}M premarket`;
     $('#gap_chart_player_tag').hidden=true;$('#gap_chart_player_tag').removeAttribute('href');loadGapDeepDivePlayer(item,jobId);
     $('#gap_chart_tf').value=$('#gap_deepdive_tf').value||'1m';$('#gap_chart_bz').checked=true;$('#gap_chart_vwap').checked=true;$('#gap_chart_twap').checked=true;
-    const cv=$('#gap_chart_modal_canvas'),gridCv=[...$('#gap_deepdive_grid').querySelectorAll('canvas[data-key]')].find(node=>node.dataset.key===gapDeepDiveKey(item));cv.dataset.key=gapDeepDiveKey(item);cv._gapDeepDiveState=gridCv?._gapDeepDiveState||{days:1,dates:[],bars:null,panOffset:0,loading:false};cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Bone Zone (9/21 EMA), VWAP and TWAP are on. Select AVWAP, then click anchor A and anchor B on the chart.';
+    const cv=$('#gap_chart_modal_canvas'),gridCv=[...$('#gap_deepdive_grid').querySelectorAll('canvas[data-key]')].find(node=>node.dataset.key===gapDeepDiveKey(item));cv.dataset.key=gapDeepDiveKey(item);cv._gapDeepDiveState=gridCv?._gapDeepDiveState||{days:1,dates:[],bars:null,panOffset:0,loading:false};cv._avwapAnchors=null;cv._avwapSelectMode=false;cv._rangeMeasures=[];cv._selectedRangeId=null;cv._rangeZoom=1;cv._panOffset=cv._gapDeepDiveState.panOffset||0;cv._modalPanInitialized=true;cv._yZoom=1;cv._rangeMeasureMode=false;$('#gap_chart_measure_box').hidden=true;$('#gap_chart_measure').dataset.active='';$('#gap_chart_measure').style.borderColor='';$('#gap_chart_measure').textContent='Measure range';$('#gap_chart_avwap_status').textContent='Bone Zone (9/21 EMA), VWAP and TWAP are on. Select AVWAP or Measure range to annotate the chart.';
     $('#gap_chart_quote_line').textContent='Float loading · move the cursor over a candle for change and volume';$('#gap_deepdive_chart_modal').style.display='flex';setTimeout(renderGapDeepDiveModal,30);
     loadGapDeepDiveFloat(item,jobId).then(data=>{if(!gapDeepDiveCurrent||gapDeepDiveKey(gapDeepDiveCurrent.item)!==gapDeepDiveKey(item))return;gapDeepDiveCurrent.float_shares=data.float_shares;$('#gap_chart_modal_canvas')._floatShares=data.float_shares;const value=Number(data.float_shares);$('#gap_chart_quote_line').textContent=`Float ${Number.isFinite(value)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(value)+' shares':'unavailable'} · move the cursor over a candle for change and volume`;});
   }catch(error){$('#gap_deepdive_status').textContent=`Could not load ${item.ticker} ${item.date}: ${error.message}`;}
@@ -1822,6 +1933,13 @@ $('#gap_deepdive_tf').onchange=()=>{const cv=$('#gap_chart_modal_canvas');cv._av
 $('#gap_chart_tf').onchange=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Interval changed. Select AVWAP again to choose new anchor points.';setGapDeepDiveTimeframe($('#gap_chart_tf').value);};
 $('#gap_chart_avwap').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=true;cv.style.cursor='crosshair';$('#gap_chart_avwap_status').textContent='AVWAP tool active · click point A, then click a later point B.';renderGapDeepDiveModal();cv.style.cursor='crosshair';};
 $('#gap_chart_clear_avwap').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;cv.style.cursor='grab';$('#gap_chart_avwap_status').textContent='AVWAP cleared. VWAP, TWAP and Bone Zone remain on.';renderGapDeepDiveModal();};
+$('#gap_chart_measure').onclick=()=>{const cv=$('#gap_chart_modal_canvas'),button=$('#gap_chart_measure');cv._rangeMeasureMode=!cv._rangeMeasureMode;button.dataset.active=cv._rangeMeasureMode?'1':'';button.style.borderColor=cv._rangeMeasureMode?'#62c8ff':'';button.textContent=cv._rangeMeasureMode?'Measure active':'Measure range';cv.style.cursor=cv._rangeMeasureMode?'crosshair':'grab';$('#gap_chart_avwap_status').textContent=cv._rangeMeasureMode?'Measure active · drag candle to candle; drag an endpoint or line to edit.':'Measure tool off.';};
+$('#gap_chart_delete_measure').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._rangeMeasures=(cv._rangeMeasures||[]).filter(m=>m.id!==cv._selectedRangeId);cv._selectedRangeId=cv._rangeMeasures.at(-1)?.id||null;renderGapDeepDiveModal();};
+$('#gap_chart_clear_measures').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._rangeMeasures=[];cv._selectedRangeId=null;renderGapDeepDiveModal();};
+function gapDeepDiveZoom(factor){const cv=$('#gap_chart_modal_canvas'),g=cv._rangeGeometry;if(!g)return;const zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,(cv._rangeZoom||1)*factor)),anchor=g.viewStart+g.viewSpan/2,nextSpan=Math.min(g.span,g.baseViewSpan/zoom);cv._rangeZoom=zoom;cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,anchor-nextSpan/2-g.viewBase));renderGapDeepDiveModal();}
+$('#gap_chart_zoom_in').onclick=()=>gapDeepDiveZoom(1.25);
+$('#gap_chart_zoom_out').onclick=()=>gapDeepDiveZoom(.8);
+$('#gap_chart_zoom_reset').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._rangeZoom=1;cv._panOffset=0;cv._yZoom=1;renderGapDeepDiveModal();};
 $('#gap_chart_copy').onclick=async()=>{const cv=$('#gap_chart_modal_canvas');try{const blob=await new Promise(resolve=>cv.toBlob(resolve,'image/png'));if(!blob)throw new Error('Could not render PNG');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);$('#gap_chart_copy').textContent='Copied ✓';setTimeout(()=>$('#gap_chart_copy').textContent='Copy PNG',1200);}catch(error){$('#gap_chart_avwap_status').textContent='PNG copy unavailable: '+error.message;}};
 window.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#gap_deepdive_chart_modal').style.display==='flex')closeGapDeepDiveChart();});
 async function loadGapDeepDive(){
@@ -1833,8 +1951,8 @@ async function loadGapDeepDive(){
     while(runId===gapDeepDiveRequest){const response=await fetch('/api/gap-deepdive/'+encodeURIComponent(started.job)+'?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken));result=await gapDeepDiveJson(response);status.textContent=result.message||'Scanning…';if(result.status==='complete'||result.status==='error')break;await new Promise(resolve=>setTimeout(resolve,2000));}
     if(runId!==gapDeepDiveRequest)return;if(result.status==='error')throw new Error(result.message);const items=result.results||[];if(!items.length){status.textContent=(result.message||'Complete')+' · No qualifying sessions found.';gapDeepDiveLoaded=true;return;}
     status.textContent=`Saved scan as of ${result.scanned_on||'latest saved date'} · ${items.length} qualifying sessions at ≥70% PM high · click a chart to expand.`+(result.errors?.length?` · Could not load full daily history for ${result.errors.length} ticker(s).`:'');
-    grid.innerHTML=items.map((item,i)=>`<article style="min-width:0;background:#090c10;border:1px solid #29313a;border-radius:5px;padding:10px"><header style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:8px"><strong style="color:#e8edf3;font-size:16px">${esc(item.ticker)}</strong><span style="padding:3px 8px;border-radius:3px;background:#211b05;border:1px solid #655516;color:#ffe17d;font-size:13px">${esc(item.date)}</span><span style="color:#64d99b;font-size:13px">PM high +${(item.move*100).toFixed(1)}%</span><span style="color:#b6c0ca;font-size:13px">PM $vol $${(item.pm_dollar_volume/1e6).toFixed(1)}M</span><button class="gap-copy-png" data-index="${i}" disabled style="margin-left:auto;height:32px;font-size:12px;border-color:#555">Copy PNG</button></header><div style="position:relative"><canvas id="gap_deepdive_chart_${i}" data-index="${i}" style="width:100%;height:540px;display:block;cursor:zoom-in"></canvas><span class="gap-chart-loading" style="position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);color:#89939e;font-size:14px">Scroll here to load this chart</span></div><div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#aab4bf;padding:7px 2px"><span style="color:#29a8ff">━ VWAP</span><span style="color:#c084fc">━ TWAP</span><span style="color:#ffe45c">AVWAP · set A/B in expanded chart</span><span style="color:#b0b0b0">░ Premarket</span><span>1-minute OHLCV · Postmarket to 20:00 ET · X-axis IST · click to expand</span></div></article>`).join('');
-    const lazyCharts=new IntersectionObserver(entries=>entries.forEach(async entry=>{if(!entry.isIntersecting)return;const canvas=entry.target;lazyCharts.unobserve(canvas);const i=Number(canvas.dataset.index),item=items[i],key=gapDeepDiveKey(item);canvas.dataset.key=key;canvas._gapDeepDiveState={days:1,dates:[],bars:null,panOffset:0,loading:false};try{const chart=await loadGapDeepDiveChart(item,started.job);canvas._showHODAVWAP=false;drawGapDeepDiveCanvas(canvas,chart,$('#gap_deepdive_tf').value||'1m',540);canvas.dataset.chartLoaded='1';grid.querySelector(`.gap-copy-png[data-index="${i}"]`).disabled=false;canvas.parentElement.querySelector('.gap-chart-loading').remove();canvas.onclick=()=>openGapDeepDiveChart(item,started.job);}catch(error){canvas.parentElement.querySelector('.gap-chart-loading').textContent=error.message;}}),{rootMargin:'500px 0px'});
+    grid.innerHTML=items.map((item,i)=>`<article style="min-width:0;background:#090c10;border:1px solid #29313a;border-radius:5px;padding:10px"><header style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:8px"><strong style="color:#e8edf3;font-size:16px">${esc(item.ticker)}</strong><span style="padding:3px 8px;border-radius:3px;background:#211b05;border:1px solid #655516;color:#ffe17d;font-size:13px">${esc(item.date)}</span><span style="color:#64d99b;font-size:13px">PM high +${(item.move*100).toFixed(1)}%</span><span style="color:#b6c0ca;font-size:13px">PM $vol $${(item.pm_dollar_volume/1e6).toFixed(1)}M</span><button class="gap-copy-png" data-index="${i}" disabled style="margin-left:auto;height:32px;font-size:12px;border-color:#555">Copy PNG</button></header><div style="position:relative"><canvas id="gap_deepdive_chart_${i}" data-index="${i}" style="width:100%;height:540px;display:block;cursor:zoom-in"></canvas><span class="gap-chart-loading" style="position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);color:#89939e;font-size:14px">Scroll here to load this chart</span></div><div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#aab4bf;padding:7px 2px"><span style="color:#fff">━ VWAP</span><span style="color:#c084fc">━ TWAP</span><span style="color:#ffe45c">AVWAP · set A/B in expanded chart</span><span style="color:#b0b0b0">░ Premarket</span><span>1-minute OHLCV · Postmarket to 20:00 ET · X-axis IST · click to expand</span></div></article>`).join('');
+    const lazyCharts=new IntersectionObserver(entries=>entries.forEach(async entry=>{if(!entry.isIntersecting)return;const canvas=entry.target;lazyCharts.unobserve(canvas);const i=Number(canvas.dataset.index),item=items[i],key=gapDeepDiveKey(item);canvas.dataset.key=key;canvas._gapDeepDiveState={days:1,dates:[],bars:null,panOffset:0,loading:false};try{const chart=await loadGapDeepDiveChart(item,started.job);canvas._showHODAVWAP=false;drawGapDeepDiveCanvas(canvas,chart,$('#gap_deepdive_tf').value||'1m',540);canvas.dataset.chartLoaded='1';grid.querySelector(`.gap-copy-png[data-index="${i}"]`).disabled=false;canvas.parentElement.querySelector('.gap-chart-loading').remove();canvas.onclick=()=>openGapDeepDiveChart(item,started.job);}catch(error){canvas.parentElement.querySelector('.gap-chart-loading').textContent=error.message;}}),{rootMargin:'1200px 0px'});
     grid.querySelectorAll('canvas[data-index]').forEach(canvas=>{const item=items[Number(canvas.dataset.index)];canvas.onclick=()=>openGapDeepDiveChart(item,started.job);lazyCharts.observe(canvas);});
     grid.querySelectorAll('.gap-copy-png').forEach(btn=>btn.onclick=async()=>{const canvas=$('#gap_deepdive_chart_'+btn.dataset.index);try{const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw new Error('Could not render PNG');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);btn.textContent='Copied ✓';setTimeout(()=>btn.textContent='Copy PNG',1300);}catch(error){status.textContent='PNG copy unavailable: '+error.message;}});
     gapDeepDiveLoaded=true;
