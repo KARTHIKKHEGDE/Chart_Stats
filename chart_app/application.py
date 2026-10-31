@@ -486,6 +486,20 @@ def run_job(job, t, refresh):
                      "which makes fades look weaker than reality (survivorship bias).")
 
         report = clean(build_report(t, live, lm, lpath, lctx, events, S, notes, daily))
+        reverse_splits = []
+        for split in splits or []:
+            try:
+                split_from = float(split.get("from") or 0)
+                split_to = float(split.get("to") or 0)
+            except (TypeError, ValueError):
+                continue
+            if split_from > split_to > 0 and split.get("date"):
+                reverse_splits.append({"date": str(split["date"]), "ratio": f"{split_from:g}:1"})
+        reverse_splits.sort(key=lambda item: item["date"], reverse=True)
+        report["reverse_splits"] = reverse_splits
+        report["text"] += "\n\nReverse Splits\n"
+        report["text"] += ("\n".join(f"{fdate(item['date'])} · {item['ratio']}" for item in reverse_splits)
+                            if reverse_splits else "No reverse splits found in Polygon's available split history.")
         recent_news = _get_scanner_news(t)
         report["news"] = recent_news
         report["news_status"] = (_scanner_details.get(t, {}).get("news_status") or
