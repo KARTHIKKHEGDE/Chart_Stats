@@ -1,4 +1,8 @@
 """Market Data calculations and formatting."""
+import json
+import threading
+from pathlib import Path
+
 from chart_app.application import (
     ET,
     GAP_MIN,
@@ -21,6 +25,26 @@ from chart_app.application import (
     requests,
     yf,
 )
+
+_DEEPDIVE_CANDLE_PATH = Path(__file__).resolve().parent.parent / "data" / "gap_deepdive_candles_2026.json"
+_DEEPDIVE_CANDLE_CACHE = None
+_DEEPDIVE_CANDLE_LOCK = threading.Lock()
+
+
+def _deepdive_candle_rows(ticker, day):
+    """Read bundled historical deepdive candles before requesting Polygon."""
+    global _DEEPDIVE_CANDLE_CACHE
+    if _DEEPDIVE_CANDLE_CACHE is None:
+        with _DEEPDIVE_CANDLE_LOCK:
+            if _DEEPDIVE_CANDLE_CACHE is None:
+                try:
+                    _DEEPDIVE_CANDLE_CACHE = json.loads(_DEEPDIVE_CANDLE_PATH.read_text(encoding="utf-8")).get("sessions", {})
+                except Exception:
+                    _DEEPDIVE_CANDLE_CACHE = {}
+    bars = _DEEPDIVE_CANDLE_CACHE.get(f"{ticker.upper()}|{day}") or []
+    if not bars:
+        return None
+    return [{"t": t, "o": o, "h": h, "l": l, "c": c, "v": v} for t, o, h, l, c, v in bars]
 
 
 def med(xs):
@@ -168,9 +192,11 @@ def minute_df(t, day, force=False):
     key = f"{t}_{day}_1m"
     rows = None if force else cget(key)
     if rows is None:
-        j = poly_get(f"/v2/aggs/ticker/{t}/range/1/minute/{day}/{day}",
-                     {"adjusted": "false", "sort": "asc", "limit": 50000})
-        rows = j.get("results") or []
+        rows = None if force else _deepdive_candle_rows(t, day)
+        if rows is None:
+            j = poly_get(f"/v2/aggs/ticker/{t}/range/1/minute/{day}/{day}",
+                         {"adjusted": "false", "sort": "asc", "limit": 50000})
+            rows = j.get("results") or []
         cput(key, rows)
     return poly_frame(rows) if rows else None
 
