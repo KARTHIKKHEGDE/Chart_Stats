@@ -23,7 +23,7 @@ input[type=text]{width:min(420px,70vw)}input[type=date]{width:140px}select{min-w
 .kwModalTitle{flex:0 0 auto;margin:0;color:#e7eef5;font-size:17px}
 .kwModalTags{flex:0 0 auto;gap:5px;margin:0}
 .kwModalQuote{flex:1 1 440px;min-width:min(100%,320px);padding:4px 8px;border:1px solid #29313a;border-radius:3px;color:#e8edf3;font:12px/1.45 Consolas,monospace;overflow-wrap:anywhere}
-.kwModalControls{display:flex;width:100%;min-width:0;align-items:center;justify-content:flex-start;gap:8px;flex-wrap:wrap;padding-top:8px;margin-top:8px;border-top:1px solid #29313a}
+.kwModalControls{display:flex;width:100%;min-width:0;align-items:center;justify-content:flex-start;gap:6px;flex-wrap:nowrap;overflow-x:auto;padding:8px 0 2px;margin-top:8px;border-top:1px solid #29313a;scrollbar-width:thin;scrollbar-color:#39434d #101419}
 .kwModalControls>*{flex:0 0 auto;min-width:0}
 .kwControlLabel{display:flex;align-items:center;gap:6px;color:#ddd;font-size:12px;white-space:nowrap}
 .kwModalSelect{height:32px;min-width:70px;margin:0;padding:0 8px;background:#181818;border:1px solid #444;color:#fff;font-size:12px}
@@ -31,7 +31,8 @@ input[type=text]{width:min(420px,70vw)}input[type=date]{width:140px}select{min-w
 .kwToolBtn{width:auto;min-width:34px;height:32px;padding:0 10px;border:1px solid #444;background:#181818;color:#ddd;font-size:12px;line-height:1;white-space:nowrap;cursor:pointer}
 .kwToolBtn:hover{border-color:#62c8ff;color:#fff}
 .kwToolBtn.kwAvwap{border-color:#655516;color:#ffe17d}
-.kwBoneLabel{white-space:nowrap}
+.kwBoneLabel{white-space:nowrap;display:inline-flex;flex-direction:row;align-items:center;gap:5px}
+.kwModalControls input[type=checkbox]{appearance:auto!important;-webkit-appearance:checkbox!important;width:14px!important;min-width:14px!important;height:14px!important;min-height:14px!important;padding:0!important;margin:0!important;flex:none!important;accent-color:#1685ff}
 .kwClose{width:34px;min-width:34px;height:32px;border:1px solid #444;background:#181818;color:#ddd;cursor:pointer}
 .kwModalBody{min-height:0;padding:8px 10px;display:block}
 #kwModalCanvas{position:relative;z-index:1;width:100%;height:100%}
@@ -40,7 +41,7 @@ input[type=text]{width:min(420px,70vw)}input[type=date]{width:140px}select{min-w
 #kwf_measure_box{position:absolute;z-index:4;max-width:300px;padding:8px 10px;background:rgba(6,13,21,.96);border:1px solid #62c8ff;border-radius:4px;color:#edf6ff;font:13px/1.55 Consolas,monospace;white-space:pre-wrap;pointer-events:none}
 #kwf_navigator_wrap{height:76px;flex:0 0 76px;border:1px solid #242b33;background:#090c10}
 #kwf_navigator{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
-@media(max-width:850px){.kwModalQuote{flex-basis:100%}.kwModalControls{gap:6px}.kwModalSelect{min-width:64px}}
+@media(max-width:850px){.kwModalIdentity{align-items:flex-start}.kwModalQuote{flex-basis:100%;min-width:100%}.kwModalControls{gap:5px}.kwModalSelect{min-width:64px}}
 </style></head><body>
 <header><a href="/">← Gap-Up Fade</a><strong>⌕ Search Keyword</strong><a href="#comparePanel">Jump to Compare</a><span style="margin-left:auto;color:#78838e">SEC EDGAR · financing-player research</span></header>
 <main>
@@ -65,9 +66,9 @@ input[type=text]{width:min(420px,70vw)}input[type=date]{width:140px}select{min-w
       </div>
       <div class="kwModalControls">
         <label class="kwControlLabel">Interval<select id="kwModalTf" class="kwModalSelect"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label>
-        <label class="kwControlLabel">Sessions<select id="kwModalDays" class="kwModalSelect"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="60">60 days</option></select></label>
+        <select id="kwModalDays" class="kwModalSelect" hidden aria-hidden="true"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="60">60 days</option></select>
+        <select id="kwModalSig" hidden aria-hidden="true"><option value="none">No signals</option><option value="all">All entry models</option></select>
         <div class="kwControlGroup"><button id="kwf_zoom_out" class="kwToolBtn" title="Zoom out">−</button><button id="kwf_zoom_in" class="kwToolBtn" title="Zoom in">+</button><button id="kwf_reset" class="kwToolBtn">Reset</button></div>
-        <label class="kwControlLabel">Signals<select id="kwModalSig" class="kwModalSelect"><option value="none">No signals</option><option value="all">All entry models</option></select></label>
         <label class="kwBoneLabel"><input id="kwModalBone" type="checkbox" checked> Bone zone</label>
         <label class="kwBoneLabel"><input id="kwf_vwap" type="checkbox" checked> VWAP</label>
         <label class="kwBoneLabel"><input id="kwf_twap" type="checkbox" checked> TWAP</label>
