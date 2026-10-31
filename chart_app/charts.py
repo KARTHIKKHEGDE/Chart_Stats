@@ -563,6 +563,61 @@ def gap_deepdive_events(job_id):
     events.sort(key=lambda item:(item.get('chart_date',''),item.get('minute_et',570),item.get('kind','')))
     return jsonify({'ticker':ticker,'dates':dates,'events':events,'errors':errors})
 
+
+@app.route('/api/recent-filings')
+def recent_filings_feed():
+    user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()
+    if user not in _auth.ALLOWED_USERS or not _db_validate_session(user,token):
+        return jsonify({'error':'Unauthorized'}),401
+    cache_key='sec_recent_ticker_filings_feed_v1'
+    cached=cget(cache_key,120)
+    if cached is not None:
+        return jsonify({'filings':cached,'cached':True})
+    try:
+        from chart_app.keyword_compare import _keyword_sec_get, _keyword_ticker_map
+        from xml.etree import ElementTree as ET
+        from urllib.parse import urljoin
+        params={'CIK':'','action':'getcurrent','company':'','count':'100','dateb':'',
+                'output':'atom','owner':'exclude','start':'0','type':''}
+        response=_keyword_sec_get('https://www.sec.gov/cgi-bin/browse-edgar',params=params,timeout=20)
+        response.raise_for_status()
+        ticker_by_cik={str(cik).zfill(10):info for cik,info in _keyword_ticker_map().items()}
+        root=ET.fromstring(response.content); ns={'atom':'http://www.w3.org/2005/Atom'}
+        descriptions={'8-K':'Material event','6-K':'Foreign issuer report','424B2':'Prospectus supplement (offering priced)',
+                      '424B3':'Prospectus supplement','424B5':'Prospectus supplement','S-1':'Registration statement',
+                      'S-3':'Registration statement','F-1':'Foreign issuer registration statement','F-3':'Foreign issuer registration statement',
+                      '10-K':'Annual report','10-Q':'Quarterly report','13D':'Beneficial ownership filing','13D/A':'Beneficial ownership amendment',
+                      '13G':'Beneficial ownership filing','13G/A':'Beneficial ownership amendment','FWP':'Free writing prospectus'}
+        filings=[]
+        for entry in root.findall('atom:entry',ns):
+            title=' '.join((entry.findtext('atom:title',default='',namespaces=ns) or '').split())
+            cik_match=re.search(r'\((\d{1,10})\)',title)
+            if not cik_match: continue
+            cik=cik_match.group(1).zfill(10); company=ticker_by_cik.get(cik)
+            if not company: continue
+            form=title.split(' - ',1)[0].strip()
+            if not form or form.casefold() in {'3','4','5'}: continue
+            published=entry.findtext('atom:updated',default='',namespaces=ns)
+            summary=entry.findtext('atom:summary',default='',namespaces=ns) or ''
+            summary=re.sub(r'<[^>]+>',' ',summary)
+            summary=' '.join(summary.split())
+            link_node=entry.find("atom:link[@rel='alternate']",ns)
+            if link_node is None: link_node=entry.find('atom:link',ns)
+            href=link_node.get('href','') if link_node is not None else ''
+            filing_url=urljoin('https://www.sec.gov',href)
+            if not filing_url.startswith('https://www.sec.gov/'): continue
+            description=descriptions.get(form,summary or title)
+            filings.append({'ticker':company.get('ticker',''),'company':company.get('name',''),
+                            'form':form,'description':description,'filed_at':published,
+                            'url':filing_url,'title':title})
+        filings.sort(key=lambda filing:filing.get('filed_at',''),reverse=True)
+        filings=filings[:24]
+        cput(cache_key,filings)
+        return jsonify({'filings':filings,'cached':False})
+    except Exception as exc:
+        app.logger.exception('Recent SEC filings feed failed')
+        return jsonify({'error':f'Recent filings unavailable: {type(exc).__name__}'}),502
+
 @app.route("/api/session-chart")
 def session_chart():
     """Load any trading session on demand so chart arrows can visit non-gap-up days."""

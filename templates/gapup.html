@@ -21,6 +21,20 @@ select{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;f
 .two>div{padding:10px 14px}.two>div+div{border-left:1px solid var(--line);padding-left:60px}
 .three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:18px}
 .three .panel{margin-top:0}
+.recent-layout{grid-template-columns:minmax(0,2fr) minmax(250px,1fr)}
+.recent-filings-panel{grid-column:span 2;background:#0b0f12;border:1px solid #263039;border-radius:10px;padding:14px 16px}
+.recent-filings-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;color:#8da6bd;font-size:12px;letter-spacing:.08em}
+.recent-filings-heading a,.recent-filing-open{color:#00e88b;text-decoration:none;font-size:11px;white-space:nowrap}
+.recent-filings-list{max-height:420px;overflow:auto}
+.recent-filing-row{padding:9px 0;border-bottom:1px solid #20272d;font:13px/1.35 Arial,sans-serif}
+.recent-filing-row:last-child{border-bottom:0}
+.recent-filing-head{display:flex;align-items:center;gap:8px;min-width:0}
+.recent-filing-ticker{color:#30e89b;font-weight:bold;font-family:Consolas,monospace}
+.recent-filing-form{color:#9cb3c7;background:#17212a;border:1px solid #2b3844;padding:2px 5px;border-radius:3px;font:10px Consolas,monospace}
+.recent-filing-company{color:#91a9c0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.recent-filing-foot{display:flex;justify-content:space-between;gap:12px;margin-top:4px;color:#e5ebf0}
+.recent-filing-age{color:#8da6bd;font:11px Consolas,monospace;white-space:nowrap}
+@media(max-width:900px){.three.recent-layout{grid-template-columns:1fr}.recent-filings-panel{grid-column:span 1}}
 .kv{display:grid;grid-template-columns:max-content 1fr;column-gap:34px;row-gap:2px}
 .kv span:nth-child(odd){white-space:pre}
 .scroll{overflow-x:auto}
@@ -724,6 +738,27 @@ function makeSortable(tb){
 
 let openTabs = {}; // ticker -> { ticker, result, lastText, lastChart, EV, container, timer, isRunning }
 let activeTab = null;
+let recentFilingsCache={items:null,savedAt:0,pending:null};
+
+function recentFilingAge(value){
+  const at=Date.parse(value||''),elapsed=Date.now()-at;if(!Number.isFinite(at))return 'recent';
+  if(elapsed<60*60*1000)return `${Math.max(1,Math.floor(elapsed/60000))} min ago`;
+  if(elapsed<24*60*60*1000)return `${Math.floor(elapsed/3600000)} hr${elapsed>=2*3600000?'s':''} ago`;
+  const days=Math.floor(elapsed/86400000);return `${days} day${days===1?'':'s'} ago`;
+}
+function renderRecentFilingsFeed(target,items,error=''){
+  if(!target)return;
+  if(error){target.innerHTML=`<div style="padding:18px 0;color:#ff7777;font:12px Consolas,monospace">${esc(error)}</div>`;return;}
+  if(!items?.length){target.innerHTML='<div style="padding:18px 0;color:#8da6bd;font:12px Consolas,monospace">No recent public company filings found.</div>';return;}
+  target.innerHTML=items.map(item=>`<div class="recent-filing-row"><div class="recent-filing-head">${item.ticker?`<strong class="recent-filing-ticker">${esc(item.ticker)}</strong>`:''}<span class="recent-filing-form">${esc(item.form)}</span><span class="recent-filing-company">${esc(item.company)}</span><a class="recent-filing-open" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open filing ↗</a></div><div class="recent-filing-foot"><span>${esc(item.description||item.title||item.form)}</span><time class="recent-filing-age" datetime="${esc(item.filed_at||'')}">${esc(recentFilingAge(item.filed_at))}</time></div></div>`).join('');
+}
+async function loadRecentFilingsFeed(target){
+  if(!target)return;
+  if(recentFilingsCache.items&&Date.now()-recentFilingsCache.savedAt<120000){renderRecentFilingsFeed(target,recentFilingsCache.items);return;}
+  target.innerHTML='<div style="padding:18px 0;color:#8da6bd;font:12px Consolas,monospace">Loading latest SEC filings…</div>';
+  if(!recentFilingsCache.pending){const query=new URLSearchParams({user:currentUser||'',token:sessionToken||''}),pending=(async()=>{const response=await fetch('/api/recent-filings?'+query.toString()),data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load SEC filings.');recentFilingsCache.items=data.filings||[];recentFilingsCache.savedAt=Date.now();return recentFilingsCache.items;})();recentFilingsCache.pending=pending;pending.then(()=>{if(recentFilingsCache.pending===pending)recentFilingsCache.pending=null;},()=>{if(recentFilingsCache.pending===pending)recentFilingsCache.pending=null;});}
+  try{renderRecentFilingsFeed(target,await recentFilingsCache.pending);}catch(error){renderRecentFilingsFeed(target,[],error.message);}
+}
 
 function renderTabBar(){
   const bar = $('#tab_bar');
@@ -957,12 +992,12 @@ function renderTab(tab, r, isRefresh){
   o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap"><span>${esc(T.p7)}</span><span style="display:flex;align-items:center;gap:12px;font-size:12px;font-weight:normal;color:#aaa"><span>Premarket gap: <b style="color:#e8e8e8">${esc(pmGapText)}</b></span><label for="path_norm">View <select id="path_norm" style="margin-left:5px"><option value="dev">Price vs VWAP (Dᵥ)</option><option value="dt">Price vs TWAP (Dₜ)</option><option value="spread">ln(VWAP / TWAP)</option><option value="vwap">Cumulative VWAP height</option><option value="twap">Clock-time TWAP height</option><option value="prev_close">Recomposed price from previous close</option><option value="gap">% of premarket gap retained</option></select></label></span></div><canvas id="cv"></canvas>`+
      `<div class="foot" id="path_norm_foot"><span class="b" data-tip="Historical median across VWAP-state-matched gap-up setups.">━ history median<\/span> &nbsp; <span style="color:#6c8" data-tip="Middle 50% range of similar setups.">▒ p25–p75<\/span> &nbsp; <span class="y">━ today<\/span> &nbsp; <span class="y">┅ expected path<\/span> &nbsp; <span class="d">━ each similar setup<\/span> &nbsp; Default Y = price / cumulative VWAP − 1; expected price = projected VWAP × (1 + deviation).<\/div><\/div>`;
 
-  o += `<div class="three"><div class="panel"><div class="ttl">${esc(T.pa)}</div>${kv(r.pa)}</div>`+
-     `<div class="panel"><div class="ttl">${esc(T.pb)}</div>${kv(r.pb)}</div>`+
+  o += `<div class="three recent-layout"><div class="panel recent-filings-panel"><div class="recent-filings-heading"><span><span style="color:#25cf91">●</span> LIVE FILINGS FEED</span><a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent" target="_blank" rel="noopener noreferrer">Full feed ↗</a></div><div class="recent-filings-list" id="recent_filings_feed"></div></div>`+
      `<div class="panel"><div class="ttl">${esc(T.pc)}</div>${kv(r.pc)}</div></div>`;
   if(r.pd.rows.length) o += `<div class="panel"><div class="ttl">${esc(T.pd)}</div>${table(r.pd.cols,r.pd.rows,null,false)}</div>`;
 
   tab.container.innerHTML = o;
+  loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'));
   tab.container.querySelectorAll('table.sort').forEach(makeSortable);
 
   const sigSelect = tab.container.querySelector('#sig');

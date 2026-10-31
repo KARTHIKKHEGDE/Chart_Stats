@@ -529,54 +529,6 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
                      "sim": id(e) in simset, "chart": e["chart"]})
 
     # ---- extras: stats / patterns / rating
-    p3 = [
-        frow("Faded ≥ 15% from HOD", st["faded15"]),
-        frow("Closed below open (fade rate)", st["below_open"]),
-        frow("Below VWAP at close", st["below_vwap"]),
-        frow("Lost VWAP, never reclaimed", st["vwap_never"]),
-        ["Median price vs VWAP at 10:00", pct(st["med_vwap_dev_1000"], 1), sc(st["med_vwap_dev_1000"])],
-        ["Median RTH bars below VWAP", fmt("rate", st["med_vwap_below_frac"]), "r"],
-        frow("Failed VWAP reclaim after loss", st["vwap_failed_reclaim"]),
-        ["VWAP−TWAP spread at HOD (median, p25–p75)",
-         f"{pct(st['med_hod_vwap_twap_spread'], 1)} · {pct(st['p25_hod_vwap_twap_spread'], 1)} to {pct(st['p75_hod_vwap_twap_spread'], 1)}", "b"],
-        ["HOD price vs VWAP at HOD time (median, p25–p75)",
-         f"{pct(st['med_hod_price_vs_vwap_pct'], 1)} · {pct(st['p25_hod_price_vs_vwap_pct'], 1)} to {pct(st['p75_hod_price_vs_vwap_pct'], 1)}", "b"],
-        ["HOD price vs TWAP at HOD time (median, p25–p75)",
-         f"{pct(st['med_hod_price_vs_twap_pct'], 1)} · {pct(st['p25_hod_price_vs_twap_pct'], 1)} to {pct(st['p75_hod_price_vs_twap_pct'], 1)}", "b"],
-        frow("TWAP touched after HOD", st["twap_touch_after_hod"]),
-        ["Median HOD time (IST)", hhmm(st["med_hod_min"], live["date"]), "b"],
-        ["Median HOD → close", pct(st["med_hod_close"], 0), sc(st["med_hod_close"])],
-        ["Median open → close", pct(st["med_o2c"], 0), sc(st["med_o2c"])],
-        ["Squeeze open→HOD med / p75", f"{pct(st['med_o2h'], 0)} / {pct(st['p75_o2h'], 0)}", "y"],
-        ["Median open → LOD", pct(st["med_o2l"], 0), "r"],
-        ["Median gap fill (day)", fmt("rate", st["med_gap_fill"]), "b"],
-        ["Median best gap fill (≤30d)", fmt("rate", st["med_best_fill"]), "b"],
-        frow("Day-1 closed lower", st["d1_red"]),
-        frow("Gap filled same day (day 0)", st["fill0"]),
-        frow("Gap filled within 5 days", st["fill5"]),
-        frow("Gap filled within 30 days", st["fill30"]),
-        ["Median days to fill (filled only)", f"{st['med_fill']:.0f} days" if st["med_fill"] is not None else "—", "b"],
-        ["Not filled after 30 days", (f"{st['fill30'][1] - st['fill30'][0]} / {st['fill30'][1]}" if st["fill30"][1] else "—"), "y"],
-    ]
-    hb = st["hodb"]
-    p4 = [
-        frow(f"Early HOD (<{hhmm(600, live['date'])} IST / <10:00 ET)", st["early_hod"]),
-        ["HOD first 5 min / <30m (Early)", f"{hb['First 5m']} / {hb['<10:00']}  of {st['n']}", "b"],
-        [f"HOD midday / late ({hhmm(840, live['date'])}+ IST)", f"{hb['Midday']} / {hb['Late']}  of {st['n']}", "b"],
-        frow("VWAP rejection", st["vwap_reject"]),
-        frow("VWAP broken in premarket", st["pm_vb"]),
-        frow("VWAP reclaimed in premarket", st["pm_vr"]),
-        frow("VWAP reclaimed pre+reg", st["pm_vr_all"]),
-        ["1st VWAP break → close (median)", pct(st["med_vb_to_close"], 0), sc(st["med_vb_to_close"])],
-        ["1st VWAP break → high (median)", pct(st["med_vb_to_high"], 0), "y"],
-        frow("Failed breakouts (PM high)", st["failed_bo"]),
-        frow("Consolidation → breakdown", st["consol_bd"]),
-        frow("Opened below PM high", st["below_pm"]),
-        frow("Opening-range (5m) low broke", st["orl_broke"]),
-        frow("First 5m candle red", st["f5_red"]),
-        ["Average float rotation @ HOD", f"{st['avg_rot']:.1f}x" if st["avg_rot"] else "—", "b"],
-        ["Rotation @ HOD p75", f"{st['p75_rot']:.1f}x" if st["p75_rot"] else "—", "b"],
-    ]
     summary = summary_text(st)
     if g:
         verdict = verdict_text(g, st)
@@ -749,7 +701,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
         "p1": f"[1] CURRENT DAY SETUP ({day_display} — latest data)",
         "p6": "[6] 2-MIN CHARTS — premarket → close, volume + VWAP + TWAP + running-HOD AVWAP, SELL = short entry, BUY = cover",
         "p7": "[7] VWAP-CONDITIONED EXPECTED PATH",
-        "pa": "[A] HISTORICAL STATISTICS (similar)", "pb": "[B] KEY PATTERNS (similar)", "pc": "[C] FINAL RATING",
+        "pc": "[C] FINAL RATING",
         "pd": "[D] ENTRY MODELS (similar setups)",
     }
     dilution_url = f"https://finviz.com/stock?b=2&p=m&t={quote(t, safe='')}&ta=1&ty=di"
@@ -769,7 +721,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
              f"HOD time (15m bars, {hod_times['date_from']} to {hod_times['date_to']})",
              f"All sessions  median {hod_times['median_time'] or '—'} IST ({len(hod_times['rows'])} days)",
              "", T["p7"], kv_text(ptext, 40), "",
-             T["pa"], kv_text(p3), "", T["pb"], kv_text(p4), "", T["pc"], kv_text(p5)]
+             T["pc"], kv_text(p5)]
     if mrows:
         text += ["", T["pd"], tbl_text(mcols, mrows)]
     if notes:
@@ -779,7 +731,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
             "evcharts": evch, "session_dates": [r["date"] for r in daily] + [day_str, next_session.isoformat()],
             "model_names": ["Short at open", "PM high rejection", "5m low break",
                                               "First red 5m candle", "VWAP loss (post-HOD)"],
-            "pa": p3, "pb": p4, "pc": p5, "pd": {"cols": mcols, "rows": mrows},
+            "pc": p5, "pd": {"cols": mcols, "rows": mrows},
             "chart": chart, "dilution_url": dilution_url, "text": "\n".join(text)}
 
 
