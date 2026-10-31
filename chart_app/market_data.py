@@ -181,9 +181,11 @@ def load_shares_out(t):
 
 
 def poly_frame(rows):
-    df = pd.DataFrame(rows)
-    df.index = pd.DatetimeIndex(pd.to_datetime(df["t"], unit="ms", utc=True)).tz_convert(ET)
-    df = df[["o", "h", "l", "c", "v"]].astype(float)
+    df = pd.DataFrame(rows)[["t", "o", "h", "l", "c", "v"]].copy()
+    df = df.apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan)
+    df = df.dropna(subset=["t", "o", "h", "l", "c", "v"])
+    index = pd.DatetimeIndex(pd.to_datetime(df.pop("t"), unit="ms", utc=True)).tz_convert(ET)
+    df.index = index
     df["v"] = df["v"].round()
     return df
 
@@ -473,11 +475,17 @@ def bars2(df, include_after_hours=False):
         anchor_vol += v
         anchor_dollar += float((row.h+row.l+row.c)/3)*v
         avh.append(anchor_dollar/anchor_vol if anchor_vol else None)
+    def finite_round(values):
+        result = []
+        for value in values:
+            number = float(value) if pd.notna(value) else float("nan")
+            result.append(round(number, 4) if math.isfinite(number) else None)
+        return result
     t = (b.index.hour * 60 + b.index.minute).tolist()
     return {"t": [int(x) for x in t], "o": b.o.round(4).tolist(), "h": b.h.round(4).tolist(),
             "l": b.l.round(4).tolist(), "c": b.c.round(4).tolist(),
-            "v": [int(x) for x in b.v.round(0).tolist()], "vw": vb.round(4).tolist(),
-            "tw": tw.round(4).tolist(), "atw": atw.round(4).tolist(), "avh": [round(x,4) if x is not None else None for x in avh]}
+            "v": [int(x) for x in b.v.round(0).tolist()], "vw": finite_round(vb),
+            "tw": finite_round(tw), "atw": finite_round(atw), "avh": [round(x,4) if x is not None else None for x in avh]}
 
 
 def mdl(rg, start_ts, entry, entry_min, close):
