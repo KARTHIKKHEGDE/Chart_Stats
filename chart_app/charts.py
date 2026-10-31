@@ -548,6 +548,11 @@ def gap_deepdive_events(job_id):
         if manifest and manifest.get('job')==job_id: job=manifest
     if not job or not any(str(item.get('ticker') or '').upper()==ticker for item in job.get('results',[])):
         return jsonify({'error':'Ticker is not part of this saved scan.'}),404
+    include_previous=request.args.get('include_previous')=='1'
+    if include_previous:
+        first_day=min(dates)
+        prior=max((row.get('date') for row in load_daily(ticker) if row.get('date') and row['date']<first_day),default=None)
+        if prior and prior not in dates: dates.insert(0,prior)
     wanted=set(dates); events=[]; errors=[]
     try: events.extend(item for item in _gap_deepdive_yahoo_news(ticker) if item.get('chart_date') in wanted)
     except Exception as exc:
