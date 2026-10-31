@@ -33,6 +33,8 @@ GAP_DEEPDIVE_TICKERS = list(dict.fromkeys("VIOT PPBT FAMI BIAF GELS RDAC GYGY WE
 GAP_DEEPDIVE_JOBS = {}
 GAP_DEEPDIVE_LOCK = threading.Lock()
 _GAP_DEEPDIVE_MANIFESTS = {}
+_GAP_DEEPDIVE_CHART_PAYLOADS = {}
+_GAP_DEEPDIVE_CHART_PAYLOAD_LOCK = threading.Lock()
 
 
 def _saved_gap_deepdive_manifest(year):
@@ -270,22 +272,33 @@ def _gap_deepdive_chart_payload(ticker,day,scan_item):
     # derived chart fields on every open still costs time. Persist this ready-
     # to-render payload as well so repeat chart visits are disk-cache hits.
     from chart_app.application import cget, cput
+    from chart_app.market_data import _deepdive_candle_rows
     import hashlib
-    payload_key = 'gap_chart_payload_' + hashlib.sha1(f'{ticker.upper()}|{day}'.encode()).hexdigest()
+    chart_key=f'{ticker.upper()}|{day}'
+    with _GAP_DEEPDIVE_CHART_PAYLOAD_LOCK:
+        cached_memory=_GAP_DEEPDIVE_CHART_PAYLOADS.get(chart_key)
+    if cached_memory is not None:
+        return cached_memory
+    payload_key = 'gap_chart_payload_' + hashlib.sha1(chart_key.encode()).hexdigest()
     cached = cget(payload_key)
     if cached is not None:
+        with _GAP_DEEPDIVE_CHART_PAYLOAD_LOCK:
+            _GAP_DEEPDIVE_CHART_PAYLOADS[chart_key]=cached
         return cached
     pc=scan_item.get('previous_close')
     if not pc:
         saved=_saved_gap_deepdive_manifest(dt.date.today().year)
         saved_item=next((item for item in (saved or {}).get('results',[]) if item.get('ticker')==ticker and item.get('date')==day),None)
         pc=(saved_item or {}).get('previous_close')
-    if not pc:
-        daily=load_daily(ticker)
-        index=next((i for i,row in enumerate(daily) if row['date']==day),None)
-        if index is None or index==0: raise ValueError('No previous close is available for this session.')
-        pc=float(daily[index-1]['c'])
-    frame=minute_df(ticker,day)
+    if not pc: raise ValueError('Cached previous close is unavailable for this session.')
+    # Deepdive candles are bundled in the versioned JSON file and mirrored in
+    # .gapcache. Read those sources directly; chart rendering must not fall
+    # through to the Polygon fetch path in minute_df().
+    from chart_app.application import cget
+    from chart_app.market_data import poly_frame
+    rows=cget(f'{ticker}_{day}_1m') or _deepdive_candle_rows(ticker,day)
+    if not rows: raise ValueError('Cached intraday candles are unavailable for this session.')
+    frame=poly_frame(rows)
     if frame is None or frame.empty: raise ValueError('Cached intraday candles are unavailable.')
     mm=frame.index.hour*60+frame.index.minute
     pm=frame[(mm>=PM_START)&(mm<RG_START)]
@@ -293,6 +306,8 @@ def _gap_deepdive_chart_payload(ticker,day,scan_item):
                       float(pc),dt.date.fromisoformat(day),include_after_hours=True)
     packed['ticker']=ticker
     cput(payload_key, packed)
+    with _GAP_DEEPDIVE_CHART_PAYLOAD_LOCK:
+        _GAP_DEEPDIVE_CHART_PAYLOADS[chart_key]=packed
     return packed
 
 
@@ -321,7 +336,7 @@ def gap_deepdive_charts(job_id):
     # Candle reads are disk cached; run independent chart packing tasks
     # concurrently to reduce time-to-first-render for a viewport batch.
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    with ThreadPoolExecutor(max_workers=min(12, max(1,len(valid)))) as pool:
+    with ThreadPoolExecutor(max_workers=min(8, max(1,len(valid)))) as pool:
         futures={pool.submit(_gap_deepdive_chart_payload,ticker,day,item):key for key,ticker,day,item in valid}
         for future in as_completed(futures):
             key=futures[future]

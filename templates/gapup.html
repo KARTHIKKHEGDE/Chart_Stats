@@ -1848,7 +1848,7 @@ const gapDeepDiveCharts=new Map(),gapDeepDiveChartPending=new Map(),gapDeepDiveF
 const gapDeepDivePlayers=new Map();
 let gapDeepDiveCurrent=null;
 const gapDeepDiveKey=item=>`${item.ticker}|${item.date}`;
-let gapDeepDiveChartQueue=[],gapDeepDiveChartBatchTimer=null;
+let gapDeepDiveChartQueue=[],gapDeepDiveChartBatchTimer=null,gapDeepDiveChartActiveBatches=0;
 let gapDeepDiveBrowserDbPromise=null;
 function gapDeepDiveOpenBrowserCache(){
   if(!('indexedDB' in window))return Promise.resolve(null);if(gapDeepDiveBrowserDbPromise)return gapDeepDiveBrowserDbPromise;
@@ -1862,12 +1862,14 @@ async function gapDeepDiveBrowserCachePut(key,chart){
 }
 function flushGapDeepDiveChartQueue(){
   if(gapDeepDiveChartBatchTimer){clearTimeout(gapDeepDiveChartBatchTimer);gapDeepDiveChartBatchTimer=null;}
-  const batch=gapDeepDiveChartQueue.splice(0,8);if(!batch.length)return;
-  const url='/api/gap-deepdive/'+encodeURIComponent(batch[0].jobId)+'/charts?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken);
-  fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({charts:batch.map(x=>({ticker:x.item.ticker,date:x.item.date}))})})
-    .then(gapDeepDiveJson).then(data=>batch.forEach(entry=>{const key=gapDeepDiveKey(entry.item),chart=data.charts?.[key];if(chart){chart.ticker=entry.item.ticker;gapDeepDiveCharts.set(key,chart);gapDeepDiveBrowserCachePut(key,chart);entry.resolve(chart);}else entry.reject(new Error(data.errors?.[key]||'Chart data was not returned'));}))
-    .catch(error=>batch.forEach(entry=>entry.reject(error)))
-    .finally(()=>{batch.forEach(entry=>gapDeepDiveChartPending.delete(gapDeepDiveKey(entry.item)));if(gapDeepDiveChartQueue.length)flushGapDeepDiveChartQueue();});
+  while(gapDeepDiveChartQueue.length&&gapDeepDiveChartActiveBatches<4){
+    const batch=gapDeepDiveChartQueue.splice(0,8);if(!batch.length)break;gapDeepDiveChartActiveBatches++;
+    const url='/api/gap-deepdive/'+encodeURIComponent(batch[0].jobId)+'/charts?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken);
+    fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({charts:batch.map(x=>({ticker:x.item.ticker,date:x.item.date}))})})
+      .then(gapDeepDiveJson).then(data=>batch.forEach(entry=>{const key=gapDeepDiveKey(entry.item),chart=data.charts?.[key];if(chart){chart.ticker=entry.item.ticker;gapDeepDiveCharts.set(key,chart);gapDeepDiveBrowserCachePut(key,chart);entry.resolve(chart);}else entry.reject(new Error(data.errors?.[key]||'Chart data was not returned'));}))
+      .catch(error=>batch.forEach(entry=>entry.reject(error)))
+      .finally(()=>{batch.forEach(entry=>gapDeepDiveChartPending.delete(gapDeepDiveKey(entry.item)));gapDeepDiveChartActiveBatches--;if(gapDeepDiveChartQueue.length)flushGapDeepDiveChartQueue();});
+  }
 }
 function loadGapDeepDiveChart(item,jobId){
   const key=gapDeepDiveKey(item);if(gapDeepDiveCharts.has(key))return Promise.resolve(gapDeepDiveCharts.get(key));if(gapDeepDiveChartPending.has(key))return gapDeepDiveChartPending.get(key);
