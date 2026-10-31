@@ -144,6 +144,104 @@ def _sec_verified_gap_player(ticker, event_day):
     return result
 
 
+def _gap_deepdive_yahoo_news(ticker):
+    """Return recent Yahoo Finance article metadata, normalized to Eastern chart time."""
+    cache_key = f"gap_deepdive_yahoo_news_v1_{ticker}"
+    cached = cget(cache_key, 6 * 3600)
+    if cached is not None:
+        return cached
+    from chart_app.scanner import _normalize_yahoo_news
+    from urllib.parse import urlparse
+    import yfinance as yf
+    unique = {}
+    for query in (ticker, f"{ticker} press release"):
+        try:
+            search = yf.Search(query=query, news_count=100, max_results=1, include_cb=False,
+                               enable_fuzzy_query=False, timeout=12, raise_errors=False)
+            for article in (search.news or []):
+                item = _normalize_yahoo_news(article, "Yahoo Finance news")
+                if not item or not item.get("url"):
+                    continue
+                host = (urlparse(item["url"]).hostname or "").lower()
+                if host not in ("finance.yahoo.com", "www.finance.yahoo.com"):
+                    continue
+                try:
+                    published = pd.Timestamp(item.get("published"))
+                    if pd.isna(published):
+                        continue
+                    if published.tzinfo is None:
+                        published = published.tz_localize("UTC")
+                    eastern = published.tz_convert("America/New_York")
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                item.update({"kind": "news", "source": "Yahoo Finance", "chart_date": eastern.date().isoformat(),
+                             "minute_et": eastern.hour * 60 + eastern.minute,
+                             "published_at": eastern.isoformat(), "time_exact": True})
+                unique[item["url"]] = item
+        except Exception:
+            app.logger.exception("Yahoo Finance event-news lookup failed for %s", ticker)
+    result = sorted(unique.values(), key=lambda item: (item["chart_date"], item["minute_et"]))
+    cput(cache_key, result)
+    return result
+
+
+def _gap_deepdive_sec_filings(ticker):
+    """Return SEC submissions with accepted times so chart markers land on the right candle."""
+    from chart_app.keyword_compare import _keyword_sec_get, _keyword_ticker_map
+    cache_key = f"gap_deepdive_sec_filings_v1_{ticker}"
+    cached = cget(cache_key, 24 * 3600)
+    if cached is not None:
+        return cached
+    cik, company = next(((cik, info) for cik, info in _keyword_ticker_map().items()
+                         if str(info.get("ticker") or "").upper() == ticker), (None, None))
+    if not cik:
+        cput(cache_key, [])
+        return []
+    response = _keyword_sec_get(f"https://data.sec.gov/submissions/CIK{cik}.json", timeout=20)
+    response.raise_for_status()
+    recent = (((response.json().get("filings") or {}).get("recent")) or {})
+    filings = []
+    n = len(recent.get("accessionNumber") or [])
+    def filing_value(name, index):
+        values = recent.get(name) or []
+        return values[index] if index < len(values) else ""
+    for i in range(n):
+        accession = str(filing_value("accessionNumber", i) or "")
+        filed = str(filing_value("filingDate", i) or "")
+        form = str(filing_value("form", i) or "")
+        acceptance = str(filing_value("acceptanceDateTime", i) or "")
+        description = str(filing_value("primaryDocDescription", i) or "")
+        try:
+            if acceptance:
+                accepted = pd.Timestamp(acceptance)
+                if accepted.tzinfo is None:
+                    accepted = accepted.tz_localize("UTC")
+                accepted = accepted.tz_convert("America/New_York")
+                chart_date = accepted.date().isoformat()
+                minute_et = accepted.hour * 60 + accepted.minute
+                published_at = accepted.isoformat()
+                time_exact = True
+            else:
+                chart_date = dt.date.fromisoformat(filed).isoformat()
+                minute_et = 570
+                published_at = filed
+                time_exact = False
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not accession or not form:
+            continue
+        accession_path = accession.replace("-", "")
+        filing_url = (f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
+                      f"{accession_path}/{accession}-index.html")
+        filings.append({"kind": "sec", "title": description or f"SEC Form {form}",
+                        "form": form, "url": filing_url, "chart_date": chart_date,
+                        "minute_et": minute_et, "published_at": published_at,
+                        "filing_date": filed, "time_exact": time_exact,
+                        "company": company.get("name", "")})
+    cput(cache_key, filings)
+    return filings
+
+
 def _run_gap_deepdive(job_id):
     from chart_app.market_data import PM_START
     from chart_app.application import clean, cput
@@ -386,6 +484,36 @@ def gap_deepdive_player(job_id):
     if not job or not any(item.get('ticker')==ticker and item.get('date')==day for item in job.get('results',[])):
         return jsonify({'error':'Session is not part of this saved scan.'}),404
     return jsonify(_sec_verified_gap_player(ticker,day))
+
+
+@app.route('/api/gap-deepdive/<job_id>/events')
+def gap_deepdive_events(job_id):
+    user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()
+    ticker=(request.args.get('ticker') or '').strip().upper()
+    if user not in _auth.ALLOWED_USERS or not _db_validate_session(user, token): return jsonify({'error':'Unauthorized'}),401
+    if not re.fullmatch(r'[A-Z.\-]{1,10}',ticker): return jsonify({'error':'Invalid ticker'}),400
+    raw_dates=request.args.get('dates') or request.args.get('date') or ''
+    dates=[]
+    for raw in raw_dates.split(','):
+        try: dates.append(dt.date.fromisoformat(raw.strip()).isoformat())
+        except ValueError: return jsonify({'error':'Invalid chart date'}),400
+    dates=list(dict.fromkeys(dates))
+    if not dates or len(dates)>120: return jsonify({'error':'Choose between 1 and 120 chart dates.'}),400
+    job=cget(f"gap_deepdive_job_{job_id}") or GAP_DEEPDIVE_JOBS.get(job_id)
+    if not job:
+        manifest=_saved_gap_deepdive_manifest(dt.date.today().year)
+        if manifest and manifest.get('job')==job_id: job=manifest
+    if not job or not any(str(item.get('ticker') or '').upper()==ticker for item in job.get('results',[])):
+        return jsonify({'error':'Ticker is not part of this saved scan.'}),404
+    wanted=set(dates); events=[]; errors=[]
+    try: events.extend(item for item in _gap_deepdive_yahoo_news(ticker) if item.get('chart_date') in wanted)
+    except Exception as exc:
+        app.logger.exception('Yahoo Finance chart-event lookup failed for %s',ticker);errors.append('Yahoo Finance news unavailable')
+    try: events.extend(item for item in _gap_deepdive_sec_filings(ticker) if item.get('chart_date') in wanted)
+    except Exception as exc:
+        app.logger.exception('SEC chart-event lookup failed for %s',ticker);errors.append('SEC filings unavailable')
+    events.sort(key=lambda item:(item.get('chart_date',''),item.get('minute_et',570),item.get('kind','')))
+    return jsonify({'ticker':ticker,'dates':dates,'events':events,'errors':errors})
 
 @app.route("/api/session-chart")
 def session_chart():
