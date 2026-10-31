@@ -141,7 +141,8 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
           <label style="font-size:12px;color:#c084fc"><input id="gap_chart_twap" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"> TWAP</label>
           <button id="gap_chart_avwap" style="height:32px;padding:0 12px;border-color:#ffd23f;color:#ffe17d">AVWAP · Select A → B</button>
           <button id="gap_chart_clear_avwap" style="height:32px;padding:0 10px;font-size:12px">Clear AVWAP</button>
-          <button id="gap_chart_measure" style="height:32px;padding:0 10px" title="Click and drag between candles to measure price, time, and volume">Measure range</button>
+          <button id="gap_chart_measure" style="height:32px;padding:0 10px" title="Hold and drag between candles to measure % change, $ change, share volume, and dollar volume">Measure range</button>
+          <button id="gap_chart_zoom_area" style="height:32px;padding:0 10px" title="Drag a box around the area to zoom into">Zoom area</button>
           <button id="gap_chart_delete_measure" style="height:32px;padding:0 9px" title="Delete selected measurement">Delete range</button>
           <button id="gap_chart_clear_measures" style="height:32px;padding:0 9px" title="Clear all measurements">Clear ranges</button>
           <button id="gap_chart_zoom_out" style="height:32px;padding:0 10px" title="Zoom out">−</button>
@@ -152,7 +153,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
         </div>
       </header>
       <div id="gap_chart_modal_body" style="display:flex;flex-direction:column;position:relative;flex:1;min-height:0;padding:8px;background:#050607">
-        <div id="gap_chart_plot_wrap" style="position:relative;flex:1;min-height:0"><canvas id="gap_chart_modal_canvas" style="display:block;width:100%;height:100%"></canvas><div id="gap_chart_measure_box" hidden style="position:absolute;right:12px;top:12px;z-index:5;max-width:380px;padding:9px 11px;background:rgba(6,13,21,.94);border:1px solid #62c8ff;border-radius:4px;color:#edf6ff;font:12px/1.5 Consolas,monospace;white-space:pre-wrap;pointer-events:none"></div></div>
+        <div id="gap_chart_plot_wrap" style="position:relative;flex:1;min-height:0"><canvas id="gap_chart_modal_canvas" style="display:block;width:100%;height:100%"></canvas><canvas id="gap_chart_range_overlay" style="position:absolute;inset:0;display:block;width:100%;height:100%;pointer-events:none"></canvas><div id="gap_chart_measure_box" hidden style="position:absolute;right:12px;top:12px;z-index:5;max-width:300px;padding:8px 10px;background:rgba(6,13,21,.96);border:1px solid #62c8ff;border-radius:4px;color:#edf6ff;font:13px/1.55 Consolas,monospace;white-space:pre-wrap;pointer-events:none"></div></div>
         <div id="gap_chart_navigator_wrap" style="height:76px;flex:0 0 76px;margin-top:5px;border:1px solid #242b33;background:#090c10"><canvas id="gap_chart_navigator" style="display:block;width:100%;height:100%;touch-action:none;cursor:grab"></canvas></div>
       </div>
       <footer id="gap_chart_avwap_status" style="padding:8px 14px;border-top:1px solid #252b31;color:#aab4bf;font-size:12px">VWAP and TWAP are shown. Choose AVWAP to click anchor A, then anchor B.</footer>
@@ -1116,16 +1117,12 @@ function gapRangeTimestamp(point,offsetForDay){
 function gapRangeStats(measure,g){
   const a=gapRangeResolve(measure.a,g),z=gapRangeResolve(measure.b,g);if(a<0||z<0)return null;
   const from=Math.min(a,z),to=Math.max(a,z),b=g.bars,bars=to-from+1;let cache=b._rangeStatsCache;
-  if(!cache){const n=b.t.length,size=2**Math.ceil(Math.log2(Math.max(1,n))),volumePrefix=new Float64Array(n+1),dollarPrefix=new Float64Array(n+1),maxTree=new Float64Array(size*2),minTree=new Float64Array(size*2);maxTree.fill(-Infinity);minTree.fill(Infinity);
-    for(let i=0;i<n;i++){const v=Number(b.v[i])||0;volumePrefix[i+1]=volumePrefix[i]+v;dollarPrefix[i+1]=dollarPrefix[i]+(Number(b.c[i])||0)*v;maxTree[size+i]=Number(b.h[i]);minTree[size+i]=Number(b.l[i]);}
-    for(let i=size-1;i>0;i--){maxTree[i]=Math.max(maxTree[i*2],maxTree[i*2+1]);minTree[i]=Math.min(minTree[i*2],minTree[i*2+1]);}cache=b._rangeStatsCache={size,volumePrefix,dollarPrefix,maxTree,minTree};}
-  let left=from+cache.size,right=to+1+cache.size,high=-Infinity,low=Infinity;
-  while(left<right){if(left&1){high=Math.max(high,cache.maxTree[left]);low=Math.min(low,cache.minTree[left++]);}if(right&1){--right;high=Math.max(high,cache.maxTree[right]);low=Math.min(low,cache.minTree[right]);}left>>=1;right>>=1;}
+  if(!cache){const n=b.t.length,volumePrefix=new Float64Array(n+1),dollarPrefix=new Float64Array(n+1);
+    for(let i=0;i<n;i++){const v=Number(b.v[i])||0;volumePrefix[i+1]=volumePrefix[i]+v;dollarPrefix[i+1]=dollarPrefix[i]+(Number(b.c[i])||0)*v;}
+    cache=b._rangeStatsCache={volumePrefix,dollarPrefix};}
   const volume=cache.volumePrefix[to+1]-cache.volumePrefix[from],dollarVolume=cache.dollarPrefix[to+1]-cache.dollarPrefix[from];
   const change=measure.b.price-measure.a.price,pct=measure.a.price?change/measure.a.price*100:0;
-  const highPct=measure.a.price?(high/measure.a.price-1)*100:0,lowPct=measure.a.price?(low/measure.a.price-1)*100:0;
-  const elapsed=Math.abs(gapRangeTimestamp(measure.b,g.offsetForDay)-gapRangeTimestamp(measure.a,g.offsetForDay))/60000;
-  return {a,z,from,to,bars,volume,averageVolume:volume/bars,dollarVolume,high,low,change,pct,highPct,lowPct,days:Math.floor(elapsed/1440),hours:Math.floor(elapsed%1440/60),minutes:Math.floor(elapsed%60),direction:change>=0?'Positive':'Negative'};
+  return {a,z,from,to,bars,volume,dollarVolume,change,pct};
 }
 function drawGapDeepDiveRanges(cv,x,g){
   const measures=cv._rangeMeasures||[],palette=['#62c8ff','#ffd23f','#ff78cb','#b8ff6e','#ff9f43'];cv._rangeScreenMeasures=[];
@@ -1140,16 +1137,26 @@ function drawGapDeepDiveRanges(cv,x,g){
   }
   x.restore();
   const selected=measures.find(m=>m.id===cv._selectedRangeId)||measures[measures.length-1],stats=gapRangeStats(selected,g),box=cv._rangeMeasureBox;
-  if(box&&stats){const sign=stats.change>=0?'+':'−',pctSign=stats.pct>=0?'+':'−',money=n=>'$'+Math.abs(n).toFixed(Math.abs(n)<1?4:2),num=n=>Number(n).toLocaleString('en-US',{maximumFractionDigits:0}),elapsed=`${stats.days}d ${stats.hours}h ${stats.minutes}m`;
+  if(box&&stats){const sign=stats.change>=0?'+':'−',pctSign=stats.pct>=0?'+':'−',money=n=>'$'+Math.abs(n).toFixed(Math.abs(n)<1?4:2),num=n=>Number(n).toLocaleString('en-US',{maximumFractionDigits:0});
     box.hidden=false;box.style.borderColor=stats.change>=0?'#3ddc84':'#ff5a5a';box.style.color=stats.change>=0?'#d8ffe8':'#ffe1e1';
-    box.textContent=`PRICE RANGE  ${stats.direction.toUpperCase()}\n${selected.a.label} → ${selected.b.label}\nElapsed ${elapsed} · Bars ${stats.bars}\nStart ${money(selected.a.price)}  End ${money(selected.b.price)}\nChange ${sign}${money(stats.change)}  (${pctSign}${Math.abs(stats.pct).toFixed(2)}%)\nVolume ${num(stats.volume)}  · Avg/bar ${num(stats.averageVolume)}\nDollar volume ${money(stats.dollarVolume)}\nHigh ${money(stats.high)} (${stats.highPct>=0?'+':''}${stats.highPct.toFixed(2)}%)\nLow ${money(stats.low)} (${stats.lowPct>=0?'+':''}${stats.lowPct.toFixed(2)}%)`;
-  }
+    box.textContent=`% Change  ${pctSign}${Math.abs(stats.pct).toFixed(2)}%\n$ Change  ${sign}${money(stats.change)}\nVolume  ${num(stats.volume)} sh\n$ Volume  ${money(stats.dollarVolume)}`;
+  }else if(box){box.hidden=true;box.textContent='';}
 }
+function drawGapDeepDiveRangeOverlay(cv){
+  const overlay=$('#gap_chart_range_overlay'),g=cv._rangeGeometry;if(!overlay||!g)return;
+  const W=cv.clientWidth,H=cv.clientHeight;if(W<2||H<2)return;
+  if(overlay.width!==cv.width)overlay.width=cv.width;if(overlay.height!==cv.height)overlay.height=cv.height;if(overlay.style.width!==W+'px')overlay.style.width=W+'px';if(overlay.style.height!==H+'px')overlay.style.height=H+'px';
+  const x=overlay.getContext('2d');x.setTransform(overlay.width/W,0,0,overlay.height/H,0,0);x.clearRect(0,0,W,H);
+  drawGapDeepDiveRanges(cv,x,g);
+  const z=cv._zoomDrag;if(z){const left=Math.min(z.x0,z.x1),top=Math.min(z.y0,z.y1),width=Math.abs(z.x1-z.x0),height=Math.abs(z.y1-z.y0);x.save();x.fillStyle='rgba(98,200,255,.14)';x.fillRect(left,top,width,height);x.strokeStyle='#62c8ff';x.lineWidth=1.5;x.setLineDash([5,4]);x.strokeRect(left,top,width,height);x.restore();}
+}
+function scheduleGapDeepDiveRangeOverlay(cv){if(cv._rangeOverlayFrame)return;cv._rangeOverlayFrame=requestAnimationFrame(()=>{cv._rangeOverlayFrame=0;drawGapDeepDiveRangeOverlay(cv);});}
 function gapDeepDiveRangePoint(cv,x){return cv._rangePointAtX?.(x)||null;}
 function bindGapDeepDiveRangeInput(cv){
   if(cv._rangeInputBound)return;cv._rangeInputBound=true;
   const stop=e=>{e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();};
   cv.addEventListener('pointerdown',e=>{
+    if(cv._zoomSelectMode&&e.button===0&&cv._rangeGeometry){const g=cv._rangeGeometry;if(e.offsetX<g.L||e.offsetX>g.L+g.plotW||e.offsetY<g.T||e.offsetY>g.T+g.plotH)return;cv._zoomDrag={x0:e.offsetX,y0:e.offsetY,x1:e.offsetX,y1:e.offsetY};cv.setPointerCapture(e.pointerId);stop(e);drawGapDeepDiveRangeOverlay(cv);return;}
     if(!cv._rangeMeasureMode||e.button!==0||!cv._rangeGeometry)return;
     const g=cv._rangeGeometry;if(e.offsetX<g.L||e.offsetX>g.L+g.plotW||e.offsetY<g.T||e.offsetY>g.T+g.plotH)return;
     const hit=(cv._rangeScreenMeasures||[]).map(m=>({m,which:['a','b'].sort((u,v)=>Math.hypot(m[u].x-e.offsetX,m[u].y-e.offsetY)-Math.hypot(m[v].x-e.offsetX,m[v].y-e.offsetY))[0]})).find(({m,which})=>Math.hypot(m[which].x-e.offsetX,m[which].y-e.offsetY)<12);
@@ -1161,9 +1168,10 @@ function bindGapDeepDiveRangeInput(cv){
       if(lineHit){const measure=cv._rangeMeasures.find(m=>m.id===lineHit.id),i=gapRangeResolve(p,g);cv._selectedRangeId=lineHit.id;drag={kind:'move',id:lineHit.id,index:i,price:p.price,a:{...measure.a},b:{...measure.b}};}
       else{const measure={id:crypto.randomUUID(),a:p,b:p};cv._rangeMeasures||=[];cv._rangeMeasures.push(measure);cv._selectedRangeId=measure.id;drag={kind:'create',id:measure.id,which:'b'};}
     }
-    cv._rangeDrag=drag;cv.setPointerCapture(e.pointerId);cv.style.cursor='crosshair';stop(e);drawEv(cv,...cv._drawEvArgs);
+    cv._rangeDrag=drag;cv.setPointerCapture(e.pointerId);cv.style.cursor='crosshair';stop(e);drawGapDeepDiveRangeOverlay(cv);
   },true);
   cv.addEventListener('pointermove',e=>{
+    if(cv._zoomDrag){cv._zoomDrag.x1=e.offsetX;cv._zoomDrag.y1=e.offsetY;stop(e);scheduleGapDeepDiveRangeOverlay(cv);return;}
     const drag=cv._rangeDrag,g=cv._rangeGeometry;if(!drag||!g)return;
     const measure=cv._rangeMeasures.find(m=>m.id===drag.id),p=gapDeepDiveRangePoint(cv,e.offsetX);if(!measure||!p)return;
     if(drag.kind==='move'){
@@ -1171,13 +1179,16 @@ function bindGapDeepDiveRangeInput(cv){
       const movePoint=original=>{const old=gapRangeResolve(original,g),next=gapRangePointAtIndex(g,Math.max(0,Math.min(g.bars.t.length-1,old+delta)));return {...next,price:original.price+priceDelta};};
       measure.a=movePoint(drag.a);measure.b=movePoint(drag.b);
     }else measure[drag.which]=p;
-    cv._selectedRangeId=measure.id;stop(e);drawEv(cv,...cv._drawEvArgs);
+    cv._selectedRangeId=measure.id;stop(e);scheduleGapDeepDiveRangeOverlay(cv);
   },true);
-  const finish=e=>{if(!cv._rangeDrag)return;cv._rangeDrag=null;cv.style.cursor=cv._rangeMeasureMode?'crosshair':'grab';stop(e);};
+  const finish=e=>{
+    if(cv._zoomDrag){const z=cv._zoomDrag;cv._zoomDrag=null;const g=cv._rangeGeometry,dx=Math.abs(z.x1-z.x0),dy=Math.abs(z.y1-z.y0);if(dx>=12&&dy>=12&&g){const left=Math.max(g.L,Math.min(z.x0,z.x1)),right=Math.min(g.L+g.plotW,Math.max(z.x0,z.x1)),top=Math.max(g.T,Math.min(z.y0,z.y1)),bottom=Math.min(g.T+g.plotH,Math.max(z.y0,z.y1)),ratio=(left-g.L)/g.plotW,newSpan=Math.max(1,(right-left)*g.viewSpan/g.plotW),minZoom=g.baseViewSpan/g.span;cv._rangeZoom=Math.max(minZoom,Math.min(24,g.baseViewSpan/newSpan));cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,g.viewStart+ratio*g.viewSpan-g.viewBase));const priceSpan=(bottom-top)/g.plotH*(g.yMax-g.yMin);if(priceSpan>0)cv._yZoom=Math.max(.5,Math.min(20,(cv._yZoom||1)*(g.yMax-g.yMin)/priceSpan));cv._zoomSelectMode=false;$('#gap_chart_zoom_area').dataset.active='';$('#gap_chart_zoom_area').style.borderColor='';$('#gap_chart_zoom_area').textContent='Zoom area';cv._gapDeepDiveRedraw?.();}else drawGapDeepDiveRangeOverlay(cv);cv.style.cursor=cv._rangeMeasureMode?'crosshair':'grab';stop(e);return;}
+    if(!cv._rangeDrag)return;cv._rangeDrag=null;cv.style.cursor=cv._rangeMeasureMode?'crosshair':'grab';stop(e);drawGapDeepDiveRangeOverlay(cv);
+  };
   cv.addEventListener('pointerup',finish,true);cv.addEventListener('pointercancel',finish,true);
   cv.addEventListener('dblclick',e=>{if(cv.id!=='gap_chart_modal_canvas')return;cv._rangeZoom=1;cv._panOffset=0;cv._yZoom=1;cv._gapDeepDiveRedraw?.();},true);
   cv.addEventListener('wheel',e=>{
-    if(cv.id!=='gap_chart_modal_canvas'||!cv._wheelZoomEnabled||!cv._rangeGeometry)return;
+  if(cv.id!=='gap_chart_modal_canvas'||!cv._wheelZoomEnabled||!cv._rangeGeometry)return;
     const g=cv._rangeGeometry;if(e.offsetX<g.L||e.offsetX>g.L+g.plotW)return;
     const ratio=(e.offsetX-g.L)/g.plotW,anchor=g.viewStart+ratio*g.viewSpan,zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,(cv._rangeZoom||1)*Math.exp(-Math.sign(e.deltaY)*.18)));
     cv._rangeZoom=zoom;const nextSpan=Math.min(g.span,g.baseViewSpan/zoom),viewBase=g.viewBase;
@@ -1247,7 +1258,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   const hoverOffsets=new Map(),etClock=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',timeZoneName:'shortOffset'}),istClock=new Intl.DateTimeFormat('en-US',{timeZone:'UTC',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
   const hoverOffset=day=>{if(hoverOffsets.has(day))return hoverOffsets.get(day);let offset=Number(c.off)||0;try{const parts=etClock.formatToParts(new Date(day+'T12:00:00Z')),name=parts.find(p=>p.type==='timeZoneName')?.value||'',match=name.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/);if(match){const et=(match[1]==='-'?-1:1)*(Number(match[2])*60+Number(match[3]||0));offset=330-et;}}catch{}hoverOffsets.set(day,offset);return offset;};
   const hoverStamp=(day,minute)=>{const [yy,mm,dd]=String(day||'').split('-').map(Number);if(!yy||!mm||!dd)return 'time unavailable';const at=new Date(Date.UTC(yy,mm-1,dd,0,Math.round(minute+hoverOffset(day)))),parts=istClock.formatToParts(at),v=Object.fromEntries(parts.map(p=>[p.type,p.value]));return `${v.month}/${v.day}/${v.year} ${v.hour}:${v.minute} IST`;};
-  cv._rangeGeometry={bars:b,chart:c,dates,multi,sessionSpan,tf,X,Y,L,T,plotW:pw,plotH:ph,offsetForDay:hoverOffset,span,fullStart,viewStart,viewSpan,baseViewSpan,viewBase};
+  cv._rangeGeometry={bars:b,chart:c,dates,multi,sessionSpan,tf,X,Y,L,T,plotW:pw,plotH:ph,yMin:lo,yMax:hi,offsetForDay:hoverOffset,span,fullStart,viewStart,viewSpan,baseViewSpan,viewBase};
   cv._hoverItems=visible.map(i=>{const day=b.d?.[i]||c.date||'',dayIndex=multi?dates.indexOf(day):-1,minute=daily?0:b.t[i]-(dayIndex>=0?dayIndex*sessionSpan:0);return {key:`${day}|${b.t[i]}`,index:i,date:day,minute,x:X(b.t[i]+(daily?.5:tf/2)),label:daily?`${hoverStamp(day,0).split(' ').slice(0,1)[0]} · Daily IST`:hoverStamp(day,minute),o:b.o[i],h:b.h[i],l:b.l[i],c:b.c[i],prevC:i>0?b.c[i-1]:c.pc,v:b.v[i]||0};});
   cv._rangePointAtX=px=>{const p=cv._hoverItems?.reduce((best,item)=>Math.abs(item.x-px)<Math.abs(best.x-px)?item:best,cv._hoverItems?.[0]);return p?{date:p.date,minute:p.minute,price:p.c,label:p.label}:null;};
   cv._showChartHover=(px,py)=>{if(px<L||px>W-R||!cv._hoverItems?.length){if(cv._hoverTip)cv._hoverTip.style.display='none';return}let item=cv._hoverItems.reduce((best,p)=>Math.abs(p.x-px)<Math.abs(best.x-px)?p:best,cv._hoverItems[0]);const tip=cv._hoverTip;if(!tip)return;const fmt=n=>Number.isFinite(Number(n))?Number(n).toFixed(Number(n)<1?4:2):'—';tip.textContent=cv._showOhlcTip?`${item.label}\nO ${fmt(item.o)}  H ${fmt(item.h)}\nL ${fmt(item.l)}  C ${fmt(item.c)}  V ${Number(item.v||0).toLocaleString('en-US')}`:item.label;tip.style.whiteSpace=cv._showOhlcTip?'pre-line':'nowrap';tip.style.display='block';if(cv._quoteLine){const change=item.c-Number(item.prevC||0),pct=item.prevC?change/Number(item.prevC)*100:0,tp=(item.h+item.l+item.c)/3,dv=tp*item.v,float=Number(cv._floatShares),compact=n=>Number.isFinite(n)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(n):'—',money=n=>Number.isFinite(n)?(Math.abs(n)>=1000?'$'+compact(Math.abs(n)):Math.abs(n)<1?'$'+Math.abs(n).toFixed(4):'$'+Math.abs(n).toFixed(2)):'—',signedMoney=n=>`${n>=0?'+':'-'}${money(change)}`;cv._quoteLine.textContent=`${item.label} · %Chg ${pct>=0?'+':''}${pct.toFixed(2)}% · $Chg ${signedMoney(change)} · Vol ${Number(item.v).toLocaleString('en-US')} · $Vol ${money(dv)} · Float ${Number.isFinite(float)?compact(float)+' sh':'unavailable'}`;cv._quoteLine.style.color=change>=0?'#64d99b':'#ff7777';}if(cv.id==='kwModalCanvas'){tip.style.left='' ;tip.style.top='' ;}else if(cv._showOhlcTip){tip.style.left=Math.min(W-210,Math.max(L,px+14))+'px';tip.style.top=(cv.offsetTop+8)+'px';}else{tip.style.left=Math.max(4,cv.offsetLeft+8)+'px';tip.style.top=(cv.offsetTop+cv.offsetHeight+2)+'px';}cv.title=item.label;};
@@ -1441,8 +1452,8 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
       const rot=Number(c.float_shares)>0?`${(vol/Number(c.float_shares)).toFixed(2)}x`:'Unavailable';const lines=[`${a.label} to ${z.label}`,`Volume ${vol.toLocaleString('en-US',{maximumFractionDigits:0})}`,`Dollar volume ~$${dv.toLocaleString('en-US',{maximumFractionDigits:0})}`,`Float rotation ${rot}${Number(c.float_shares)>0?' (float may be stale)':''}`];
       x.font='bold 11px Consolas,monospace';const boxW=Math.min(W-L-R,Math.max(...lines.map(t=>x.measureText(t).width))+16),boxH=lines.length*16+12,bx=Math.min(W-R-boxW,Math.max(L,left+6)),by=T+5;x.fillStyle='rgba(6,13,21,.96)';x.fillRect(bx,by,boxW,boxH);x.strokeStyle='#62c8ff';x.strokeRect(bx,by,boxW,boxH);lines.forEach((line,k)=>{x.fillStyle=k===0?'#8cb8d6':'#edf6ff';x.fillText(line,bx+8,by+16+k*16)});x.restore();}
   }
-  if(cv._rangeMeasureBox)drawGapDeepDiveRanges(cv,x,cv._rangeGeometry);
   if(cv._showCrosshair&&cv._crosshair){const p=cv._crosshair;if(p.x>=L&&p.x<=W-R&&p.y>=T&&p.y<=T+ph){x.save();x.strokeStyle='rgba(220,232,244,.65)';x.lineWidth=1;x.setLineDash([3,4]);x.beginPath();x.moveTo(p.x,T);x.lineTo(p.x,vy1);x.moveTo(L,p.y);x.lineTo(W-R,p.y);x.stroke();x.restore();}}
+  cv._afterDraw?.();
 }
 
 let currentModalIndex = 0;
@@ -1893,9 +1904,8 @@ function drawGapDeepDiveCanvas(cv,baseChart,timeframe,targetH){
   const state=cv._gapDeepDiveState,chart=state?.bars?{...baseChart,bars:state.bars,after_hours:true}:baseChart;
   cv._renderDpr=cv.id==='gap_chart_modal_canvas'?3:2;
   if(state){cv._anchorDate=baseChart.date;if(cv.id!=='gap_chart_modal_canvas'||!cv._modalPanInitialized){cv._panOffset=state.panOffset||0;if(cv.id==='gap_chart_modal_canvas')cv._modalPanInitialized=true;}if(cv.id==='gap_chart_modal_canvas')state.panOffset=cv._panOffset||0;cv._onPanChange=value=>{state.panOffset=value;};cv._onPanEdge=side=>loadGapDeepDiveAdjacent(cv,baseChart,side);}
-  if(cv.id==='gap_chart_modal_canvas'){cv._quoteLine=$('#gap_chart_quote_line');cv._floatShares=gapDeepDiveCurrent?.float_shares??baseChart.float_shares??null;cv._rangeMeasureBox=$('#gap_chart_measure_box');cv._rangeMeasures||=[];cv._rangeZoom||=1;cv._wheelZoomEnabled=true;cv._gapDeepDiveRedraw=()=>{if(gapDeepDiveCurrent){if(cv._gapDeepDiveState)cv._gapDeepDiveState.panOffset=cv._panOffset||0;renderGapDeepDiveModal();}};bindGapDeepDiveRangeInput(cv);}
+  if(cv.id==='gap_chart_modal_canvas'){cv._quoteLine=$('#gap_chart_quote_line');cv._floatShares=gapDeepDiveCurrent?.float_shares??baseChart.float_shares??null;cv._rangeMeasureBox=$('#gap_chart_measure_box');cv._rangeMeasures||=[];cv._rangeZoom||=1;cv._wheelZoomEnabled=true;cv._afterDraw=()=>{drawGapDeepDiveRangeOverlay(cv);drawGapDeepDiveNavigator(cv,chart,timeframe);};cv._gapDeepDiveRedraw=()=>{if(gapDeepDiveCurrent){if(cv._gapDeepDiveState)cv._gapDeepDiveState.panOffset=cv._panOffset||0;renderGapDeepDiveModal();}};bindGapDeepDiveRangeInput(cv);}
   drawEv(cv,chart,'none',cv.id==='gap_chart_modal_canvas'?$('#gap_chart_bz').checked:true,targetH,timeframe,cv.id==='gap_chart_modal_canvas'?(cv._rangeZoom||1):1);
-  if(cv.id==='gap_chart_modal_canvas')drawGapDeepDiveNavigator(cv,chart,timeframe);
 }
 async function loadGapDeepDiveAdjacent(cv,baseChart,side){
   const state=cv._gapDeepDiveState;if(!state||state.loading)return;
@@ -1935,7 +1945,7 @@ async function openGapDeepDiveChart(item,jobId){
     $('#gap_chart_title').textContent=item.ticker;$('#gap_chart_date').textContent=item.date;$('#gap_chart_stats').textContent=`PM high +${(item.move*100).toFixed(1)}% · $${(item.pm_dollar_volume/1e6).toFixed(1)}M premarket`;
     $('#gap_chart_player_tag').hidden=true;$('#gap_chart_player_tag').removeAttribute('href');loadGapDeepDivePlayer(item,jobId);
     $('#gap_chart_tf').value=$('#gap_deepdive_tf').value||'1m';$('#gap_chart_bz').checked=true;$('#gap_chart_vwap').checked=true;$('#gap_chart_twap').checked=true;
-    const cv=$('#gap_chart_modal_canvas'),gridCv=[...$('#gap_deepdive_grid').querySelectorAll('canvas[data-key]')].find(node=>node.dataset.key===gapDeepDiveKey(item));cv.dataset.key=gapDeepDiveKey(item);cv._gapDeepDiveState=gridCv?._gapDeepDiveState||{days:1,dates:[],bars:null,panOffset:0,loading:false};cv._avwapAnchors=null;cv._avwapSelectMode=false;cv._rangeMeasures=[];cv._selectedRangeId=null;cv._rangeZoom=1;cv._panOffset=cv._gapDeepDiveState.panOffset||0;cv._modalPanInitialized=true;cv._yZoom=1;cv._rangeMeasureMode=false;$('#gap_chart_measure_box').hidden=true;$('#gap_chart_measure').dataset.active='';$('#gap_chart_measure').style.borderColor='';$('#gap_chart_measure').textContent='Measure range';$('#gap_chart_avwap_status').textContent='Bone Zone (9/21 EMA), VWAP and TWAP are on. Select AVWAP or Measure range to annotate the chart.';
+    const cv=$('#gap_chart_modal_canvas'),gridCv=[...$('#gap_deepdive_grid').querySelectorAll('canvas[data-key]')].find(node=>node.dataset.key===gapDeepDiveKey(item));cv.dataset.key=gapDeepDiveKey(item);cv._gapDeepDiveState=gridCv?._gapDeepDiveState||{days:1,dates:[],bars:null,panOffset:0,loading:false};cv._avwapAnchors=null;cv._avwapSelectMode=false;cv._rangeMeasures=[];cv._selectedRangeId=null;cv._rangeZoom=1;cv._panOffset=cv._gapDeepDiveState.panOffset||0;cv._modalPanInitialized=true;cv._yZoom=1;cv._rangeMeasureMode=false;cv._zoomSelectMode=false;cv._zoomDrag=null;$('#gap_chart_measure_box').hidden=true;$('#gap_chart_measure').dataset.active='';$('#gap_chart_measure').style.borderColor='';$('#gap_chart_measure').textContent='Measure range';$('#gap_chart_zoom_area').dataset.active='';$('#gap_chart_zoom_area').style.borderColor='';$('#gap_chart_zoom_area').textContent='Zoom area';$('#gap_chart_avwap_status').textContent='Bone Zone (9/21 EMA), VWAP and TWAP are on. Select AVWAP, Measure range, or Zoom area.';
     $('#gap_chart_quote_line').textContent='Float loading · move the cursor over a candle for change and volume';$('#gap_deepdive_chart_modal').style.display='flex';setTimeout(renderGapDeepDiveModal,30);
     loadGapDeepDiveFloat(item,jobId).then(data=>{if(!gapDeepDiveCurrent||gapDeepDiveKey(gapDeepDiveCurrent.item)!==gapDeepDiveKey(item))return;gapDeepDiveCurrent.float_shares=data.float_shares;$('#gap_chart_modal_canvas')._floatShares=data.float_shares;const value=Number(data.float_shares);$('#gap_chart_quote_line').textContent=`Float ${Number.isFinite(value)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(value)+' shares':'unavailable'} · move the cursor over a candle for change and volume`;});
   }catch(error){$('#gap_deepdive_status').textContent=`Could not load ${item.ticker} ${item.date}: ${error.message}`;}
@@ -1946,14 +1956,15 @@ $('#gap_deepdive_tf').onchange=()=>{const cv=$('#gap_chart_modal_canvas');cv._av
 $('#gap_chart_tf').onchange=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Interval changed. Select AVWAP again to choose new anchor points.';setGapDeepDiveTimeframe($('#gap_chart_tf').value);};
 $('#gap_chart_avwap').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=true;cv.style.cursor='crosshair';$('#gap_chart_avwap_status').textContent='AVWAP tool active · click point A, then click a later point B.';renderGapDeepDiveModal();cv.style.cursor='crosshair';};
 $('#gap_chart_clear_avwap').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;cv.style.cursor='grab';$('#gap_chart_avwap_status').textContent='AVWAP cleared. VWAP, TWAP and Bone Zone remain on.';renderGapDeepDiveModal();};
-$('#gap_chart_measure').onclick=()=>{const cv=$('#gap_chart_modal_canvas'),button=$('#gap_chart_measure');cv._rangeMeasureMode=!cv._rangeMeasureMode;button.dataset.active=cv._rangeMeasureMode?'1':'';button.style.borderColor=cv._rangeMeasureMode?'#62c8ff':'';button.textContent=cv._rangeMeasureMode?'Measure active':'Measure range';cv.style.cursor=cv._rangeMeasureMode?'crosshair':'grab';$('#gap_chart_avwap_status').textContent=cv._rangeMeasureMode?'Measure active · drag candle to candle; drag an endpoint or line to edit.':'Measure tool off.';};
+$('#gap_chart_measure').onclick=()=>{const cv=$('#gap_chart_modal_canvas'),button=$('#gap_chart_measure');cv._zoomSelectMode=false;$('#gap_chart_zoom_area').dataset.active='';$('#gap_chart_zoom_area').style.borderColor='';$('#gap_chart_zoom_area').textContent='Zoom area';cv._rangeMeasureMode=!cv._rangeMeasureMode;button.dataset.active=cv._rangeMeasureMode?'1':'';button.style.borderColor=cv._rangeMeasureMode?'#62c8ff':'';button.textContent=cv._rangeMeasureMode?'Measure active':'Measure range';cv.style.cursor=cv._rangeMeasureMode?'crosshair':'grab';$('#gap_chart_avwap_status').textContent=cv._rangeMeasureMode?'Measure active · hold and drag between candles; release to keep the line.':'Measure tool off.';drawGapDeepDiveRangeOverlay(cv);};
+$('#gap_chart_zoom_area').onclick=()=>{const cv=$('#gap_chart_modal_canvas'),button=$('#gap_chart_zoom_area');cv._rangeMeasureMode=false;$('#gap_chart_measure').dataset.active='';$('#gap_chart_measure').style.borderColor='';$('#gap_chart_measure').textContent='Measure range';cv._zoomSelectMode=!cv._zoomSelectMode;button.dataset.active=cv._zoomSelectMode?'1':'';button.style.borderColor=cv._zoomSelectMode?'#62c8ff':'';button.textContent=cv._zoomSelectMode?'Drag area…':'Zoom area';cv.style.cursor=cv._zoomSelectMode?'crosshair':'grab';$('#gap_chart_avwap_status').textContent=cv._zoomSelectMode?'Drag a rectangle around the candles to zoom into that time and price range.':'Area zoom off.';};
 $('#gap_chart_delete_measure').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._rangeMeasures=(cv._rangeMeasures||[]).filter(m=>m.id!==cv._selectedRangeId);cv._selectedRangeId=cv._rangeMeasures.at(-1)?.id||null;renderGapDeepDiveModal();};
 $('#gap_chart_clear_measures').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._rangeMeasures=[];cv._selectedRangeId=null;renderGapDeepDiveModal();};
 function gapDeepDiveZoom(factor){const cv=$('#gap_chart_modal_canvas'),g=cv._rangeGeometry;if(!g)return;const zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,(cv._rangeZoom||1)*factor)),anchor=g.viewStart+g.viewSpan/2,nextSpan=Math.min(g.span,g.baseViewSpan/zoom);cv._rangeZoom=zoom;cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,anchor-nextSpan/2-g.viewBase));renderGapDeepDiveModal();}
 $('#gap_chart_zoom_in').onclick=()=>gapDeepDiveZoom(1.25);
 $('#gap_chart_zoom_out').onclick=()=>gapDeepDiveZoom(.8);
 $('#gap_chart_zoom_reset').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._rangeZoom=1;cv._panOffset=0;cv._yZoom=1;renderGapDeepDiveModal();};
-$('#gap_chart_copy').onclick=async()=>{const cv=$('#gap_chart_modal_canvas');try{const blob=await new Promise(resolve=>cv.toBlob(resolve,'image/png'));if(!blob)throw new Error('Could not render PNG');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);$('#gap_chart_copy').textContent='Copied ✓';setTimeout(()=>$('#gap_chart_copy').textContent='Copy PNG',1200);}catch(error){$('#gap_chart_avwap_status').textContent='PNG copy unavailable: '+error.message;}};
+$('#gap_chart_copy').onclick=async()=>{const cv=$('#gap_chart_modal_canvas'),overlay=$('#gap_chart_range_overlay');try{const out=document.createElement('canvas');out.width=cv.width;out.height=cv.height;const ctx=out.getContext('2d');ctx.drawImage(cv,0,0);if(overlay)ctx.drawImage(overlay,0,0);const blob=await new Promise(resolve=>out.toBlob(resolve,'image/png'));if(!blob)throw new Error('Could not render PNG');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);$('#gap_chart_copy').textContent='Copied ✓';setTimeout(()=>$('#gap_chart_copy').textContent='Copy PNG',1200);}catch(error){$('#gap_chart_avwap_status').textContent='PNG copy unavailable: '+error.message;}};
 window.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#gap_deepdive_chart_modal').style.display==='flex')closeGapDeepDiveChart();});
 async function loadGapDeepDive(){
   if(gapDeepDivePromise)return gapDeepDivePromise;
