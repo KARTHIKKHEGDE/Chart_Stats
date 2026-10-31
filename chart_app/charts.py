@@ -82,11 +82,11 @@ def _extract_explicit_financing_party(excerpt, role_phrase):
 def _sec_verified_gap_player(ticker, event_day):
     """Find a named placement agent/underwriter in issuer SEC filings; ambiguity yields no tag."""
     from chart_app.keyword_compare import _keyword_match_excerpt, _keyword_sec_get, _keyword_ticker_map
-    cache_key = f"gap_sec_player_{ticker}_{event_day}"
+    cache_key = f"gap_sec_players_v2_{ticker}_{event_day}"
     cached = cget(cache_key, 30 * 86400)
     if cached is not None:
         return cached
-    result = {'verified': False}
+    result = {'verified': False, 'players': []}
     try:
         ticker_map = _keyword_ticker_map()
         cik, company = next(((cik, info) for cik, info in ticker_map.items()
@@ -133,9 +133,13 @@ def _sec_verified_gap_player(ticker, event_day):
                 filing_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession.replace('-', '')}/{accession}-index.html"
                 disclosures[(role_label, firm)] = {'verified': True, 'role': role_label, 'name': firm,
                     'filing_date': filed, 'filing_url': filing_url, 'evidence': excerpt[:420]}
-        result = next(iter(disclosures.values())) if len(disclosures) == 1 else result
+        players = sorted(disclosures.values(), key=lambda player: (player['role'], player['name'].casefold()))
+        result = {'verified': bool(players), 'players': players}
+        if len(players) == 1:
+            result.update(players[0])
     except Exception:
         app.logger.exception('SEC placement/underwriter verification failed for %s %s', ticker, event_day)
+        result = {'verified': False, 'players': [], 'error': True}
     cput(cache_key, result)
     return result
 
