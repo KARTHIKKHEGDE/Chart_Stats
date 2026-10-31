@@ -1,5 +1,6 @@
 """Charts feature module."""
 from chart_app.application import (
+    PM_START,
     RG_END,
     RG_START,
     _db_validate_session,
@@ -31,15 +32,20 @@ from pathlib import Path
 GAP_DEEPDIVE_TICKERS = list(dict.fromkeys("VIOT PPBT FAMI BIAF GELS RDAC GYGY WETO CLGN RDHL WHLR QNRX LGPS VNRX PPCB CELU BRNX SXTC VRAX SKK BIVI TNON CDTG ZSTK YJ EJH SGLY ONFO CIGL YMT DKI HKIT HUIZ GAUZ CELZ CLRO YXT ZYBT HYFM FCUV FFAI EDBL CJMB AKAN INLF GVH DXST EHGO ZBAO YMAT GMM YRD DXF CDT APWC IHT ICCM CIIT BEEM CRE CAST AIDX BYAH DSY BQ CHNR CCTG CGTL AZI CHAI BATL DAIC ANYBAOS BOXL BYSI CHOW DOGZ FRGT FXHO HCTI INM ITOC IVF JZXN KUST KXIN LGHL LICN LNAI LRHC LXEH MBRX MIMI MLEC MTEN NAII NCRA NEXR NIXX NUWE NVVE NXTS ODYS OFAL OMH OPTX ORIS PAVS PCLA PCSA PN PWCM RGNT RLYB RMAX RMSG RUBI RYOJ SAFX SBFM SDOT SFHG SILO SKYQ SLGB SLND SOAR SOBR SSM STG TDIC TRNR TURB TWG UK UPC VEEE VIVK VIVS".split()))
 GAP_DEEPDIVE_JOBS = {}
 GAP_DEEPDIVE_LOCK = threading.Lock()
+_GAP_DEEPDIVE_MANIFESTS = {}
 
 
 def _saved_gap_deepdive_manifest(year):
+    if year in _GAP_DEEPDIVE_MANIFESTS:
+        return _GAP_DEEPDIVE_MANIFESTS[year]
     path = Path(__file__).resolve().parent.parent / 'data' / f'gap_deepdive_{year}.json'
     try:
         manifest = json.loads(path.read_text(encoding='utf-8'))
-        return manifest if manifest.get('status') == 'complete' and manifest.get('results') is not None else None
+        saved = manifest if manifest.get('status') == 'complete' and manifest.get('results') is not None else None
     except (OSError, ValueError, TypeError):
-        return None
+        saved = None
+    _GAP_DEEPDIVE_MANIFESTS[year] = saved
+    return saved
 
 
 def _extract_explicit_financing_party(excerpt, role_phrase):
@@ -164,7 +170,7 @@ def _run_gap_deepdive(job_id):
                 if move >= .70 and dollar_volume >= 10_000_000:
                     # minute_df has persisted the raw 1-minute candles to disk. Keep only
                     # metadata in the scan response; cards request their chart on visibility.
-                    days.append({'ticker': ticker, 'date': day, 'move': move, 'pm_dollar_volume': dollar_volume,
+                    days.append({'ticker': ticker, 'date': day, 'previous_close': prev, 'move': move, 'pm_dollar_volume': dollar_volume,
                                  'title': f"{ticker} · {day} · PM high +{move:.0%} · ${dollar_volume/1e6:.1f}M"})
             except Exception:
                 continue
@@ -250,18 +256,60 @@ def gap_deepdive_chart(job_id):
         if manifest and manifest.get('job')==job_id:
             job=manifest
     if not job or job.get('status')!='complete': return jsonify({'error':'Scan is not complete or has expired.'}),404
-    if not any(item.get('ticker')==ticker and item.get('date')==day for item in job.get('results',[])):
+    scan_item=next((item for item in job.get('results',[]) if item.get('ticker')==ticker and item.get('date')==day),None)
+    if scan_item is None:
         return jsonify({'error':'Session is not part of this scan.'}),404
     try:
-        daily=load_daily(ticker)
-        index=next((i for i,row in enumerate(daily) if row['date']==day),None)
-        if index is None or index==0: return jsonify({'error':'No previous close is available for this session.'}),404
-        frame=minute_df(ticker,day)
-        if frame is None or frame.empty: return jsonify({'error':'Cached intraday candles are unavailable.'}),404
-        packed=chart_pack(frame,metrics(frame,float(daily[index-1]['c']),True),float(daily[index-1]['c']),dt.date.fromisoformat(day),include_after_hours=True)
-        return jsonify({'chart':packed})
+        return jsonify({'chart':_gap_deepdive_chart_payload(ticker,day,scan_item)})
     except Exception as exc:
         return jsonify({'error':f'{type(exc).__name__}: {exc}'}),502
+
+
+def _gap_deepdive_chart_payload(ticker,day,scan_item):
+    pc=scan_item.get('previous_close')
+    if not pc:
+        saved=_saved_gap_deepdive_manifest(dt.date.today().year)
+        saved_item=next((item for item in (saved or {}).get('results',[]) if item.get('ticker')==ticker and item.get('date')==day),None)
+        pc=(saved_item or {}).get('previous_close')
+    if not pc:
+        daily=load_daily(ticker)
+        index=next((i for i,row in enumerate(daily) if row['date']==day),None)
+        if index is None or index==0: raise ValueError('No previous close is available for this session.')
+        pc=float(daily[index-1]['c'])
+    frame=minute_df(ticker,day)
+    if frame is None or frame.empty: raise ValueError('Cached intraday candles are unavailable.')
+    mm=frame.index.hour*60+frame.index.minute
+    pm=frame[(mm>=PM_START)&(mm<RG_START)]
+    packed=chart_pack(frame,{'models':{},'pm_high':float(pm.h.max()) if not pm.empty else None},
+                      float(pc),dt.date.fromisoformat(day),include_after_hours=True)
+    packed['ticker']=ticker
+    return packed
+
+
+@app.route('/api/gap-deepdive/<job_id>/charts',methods=['POST'])
+def gap_deepdive_charts(job_id):
+    user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()
+    if user not in _auth.ALLOWED_USERS or not _db_validate_session(user,token): return jsonify({'error':'Unauthorized'}),401
+    from chart_app.application import cget
+    job=cget(f"gap_deepdive_job_{job_id}") or GAP_DEEPDIVE_JOBS.get(job_id)
+    if not job:
+        manifest=_saved_gap_deepdive_manifest(dt.date.today().year)
+        if manifest and manifest.get('job')==job_id: job=manifest
+    if not job or job.get('status')!='complete': return jsonify({'error':'Scan is not complete or has expired.'}),404
+    requested=(request.get_json(silent=True) or {}).get('charts') or []
+    if not isinstance(requested,list) or not requested or len(requested)>16: return jsonify({'error':'Request between 1 and 16 charts.'}),400
+    results={};errors={}
+    for entry in requested:
+        if not isinstance(entry,dict): continue
+        ticker=(entry.get('ticker') or '').strip().upper();day=(entry.get('date') or '').strip();key=f'{ticker}|{day}'
+        try: dt.date.fromisoformat(day)
+        except ValueError: errors[key]='Invalid session date';continue
+        if not re.fullmatch(r'[A-Z.\-]{1,10}',ticker): errors[key]='Invalid ticker';continue
+        scan_item=next((item for item in job.get('results',[]) if item.get('ticker')==ticker and item.get('date')==day),None)
+        if scan_item is None: errors[key]='Session is not part of this scan';continue
+        try: results[key]=_gap_deepdive_chart_payload(ticker,day,scan_item)
+        except Exception as exc: errors[key]=f'{type(exc).__name__}: {exc}'
+    return jsonify({'charts':results,'errors':errors})
 
 
 @app.route('/api/gap-deepdive/<job_id>/float')
