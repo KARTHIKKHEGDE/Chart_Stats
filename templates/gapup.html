@@ -51,6 +51,7 @@ canvas{display:block;width:100%}
 .gap-ticker-group{margin:0 0 24px;border:1px solid #303943;border-radius:5px;background:#080b0f;overflow:hidden}
 .gap-ticker-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 14px;background:#11151a;border-bottom:1px solid #29313a}
 .gap-ticker-head strong{color:#e8edf3;font-size:18px;letter-spacing:.03em}
+.gap-ticker-head>a{color:#bfaeff;text-decoration:none;border-bottom:1px solid #725bcc;font-size:12px}
 .gap-ticker-count{color:#9ba6b0;font-size:12px}
 .gap-player-summary{display:flex;align-items:center;gap:8px 14px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid #222a32;color:#9ba6b0;font-size:12px;line-height:1.5}
 .gap-player-summary a{color:#bfaeff;text-decoration:none;border-bottom:1px solid #725bcc}
@@ -142,6 +143,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
       <strong style="font-size:20px;color:#ffe17d">Gap Up Deepdive</strong>
       <span style="color:#9ba3ad;font-size:13px">This year · Premarket high ≥ +70% vs prior close · Premarket dollar volume ≥ $10M</span>
       <label style="display:flex;align-items:center;gap:6px;color:#ddd;font-size:13px">All charts interval <select id="gap_deepdive_tf" style="height:30px;margin:0"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option></select></label>
+      <label style="display:flex;align-items:center;gap:6px;color:#ddd;font-size:13px">Group by <select id="gap_deepdive_group_by" style="height:30px;margin:0"><option value="ticker" selected>Ticker</option><option value="player">Financing player</option></select></label>
       <span id="gap_deepdive_status" style="margin-left:auto;color:#aeb6c0;font-size:13px">Opening the saved scan…</span>
     </header>
     <div id="gap_deepdive_grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px"></div>
@@ -1907,7 +1909,7 @@ $('#nav_gap_deepdive_btn').onclick=()=>{
 };
 const gapDeepDiveCharts=new Map(),gapDeepDiveChartPending=new Map(),gapDeepDiveFloats=new Map();
 const gapDeepDivePlayers=new Map();
-let gapDeepDiveCurrent=null;
+let gapDeepDiveCurrent=null,gapDeepDiveItems=[],gapDeepDiveJobId='',gapDeepDiveGroupBy='ticker',gapDeepDiveViewObservers=[],gapDeepDiveStatusBase='',gapDeepDiveGroupRequest=0;
 const gapDeepDiveKey=item=>`${item.ticker}|${item.date}`;
 let gapDeepDiveChartQueue=[],gapDeepDiveChartBatchTimer=null,gapDeepDiveChartActiveBatches=0;
 let gapDeepDiveBrowserDbPromise=null;
@@ -1953,6 +1955,47 @@ function renderGapDeepDivePlayerSummary(group,sessions,done){
   if(unmatched.length)entries.push(`<span>No unambiguous underwriter or placement-agent disclosure found for: ${unmatched.map(esc).join(', ')}.</span>`);
   if(failed.length)entries.push(`<span>SEC lookup unavailable for: ${failed.map(esc).join(', ')}.</span>`);
   target.innerHTML=`<strong style="color:#c8baff">SEC financing players around gap-up disclosures:</strong>${entries.length?entries.join(''):'No matching SEC financing-party records found.'}`;
+}
+function renderGapDeepDiveGroups(items,jobId,mode=gapDeepDiveGroupBy){
+  gapDeepDiveViewObservers.forEach(observer=>observer.disconnect());gapDeepDiveViewObservers=[];
+  const grid=$('#gap_deepdive_grid'),tickerGroups=new Map(),playerGroups=new Map(),unmatched=[],failed=[];
+  items.forEach((item,index)=>{
+    const ticker=String(item.ticker||'').toUpperCase();
+    if(!tickerGroups.has(ticker))tickerGroups.set(ticker,[]);
+    tickerGroups.get(ticker).push({item,index});
+    if(mode!=='player')return;
+    const data=item._gapPlayerData,players=data?.players?.length?data.players:(data?.verified&&data.name?[data]:[]);
+    if(data?.error){failed.push({item,index});return;}
+    if(!players.length){unmatched.push({item,index});return;}
+    players.forEach(player=>{const key=`${player.role}|${player.name}`;if(!playerGroups.has(key))playerGroups.set(key,{title:key,player,entries:[]});playerGroups.get(key).entries.push({item,index});});
+  });
+  let groups;
+  if(mode==='player'){
+    groups=[...playerGroups.values()].sort((a,b)=>a.title.localeCompare(b.title));
+    if(unmatched.length)groups.push({title:'No verified financing player',kind:'unmatched',entries:unmatched});
+    if(failed.length)groups.push({title:'SEC lookup unavailable',kind:'failed',entries:failed});
+  }else groups=[...tickerGroups].map(([ticker,entries])=>({title:ticker,kind:'ticker',entries}));
+  const sessionMarkup=(entry,groupIndex)=>{const {item,index}=entry;return `<article class="gap-session-card"><header class="gap-session-head"><strong>${mode==='player'?`${esc(item.ticker)} · `:''}${esc(item.date)}</strong><span style="color:#64d99b;font-size:13px">PM high +${(item.move*100).toFixed(1)}%</span><span style="color:#b6c0ca;font-size:13px">PM $vol $${(item.pm_dollar_volume/1e6).toFixed(1)}M</span><button class="gap-copy-png" data-index="${index}" disabled style="margin-left:auto;height:32px;font-size:12px;border-color:#555">Copy PNG</button></header><div class="gap-session-canvas-wrap"><canvas id="gap_deepdive_chart_${index}_${groupIndex}" data-index="${index}"></canvas><span class="gap-chart-loading" style="position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);color:#89939e;font-size:14px">Scroll here to load this chart</span></div><div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#aab4bf;padding:7px 2px"><span style="color:#fff">━ VWAP</span><span style="color:#c084fc">━ TWAP</span><span style="color:#ffe45c">AVWAP · set A/B in expanded chart</span><span style="color:#b0b0b0">░ Premarket</span><span>1-minute OHLCV · Postmarket to 20:00 ET · X-axis IST · click to expand</span></div></article>`;};
+  grid.innerHTML=groups.map((group,groupIndex)=>{
+    const entries=mode==='player'?group.entries.slice().sort((a,b)=>String(a.item.date).localeCompare(String(b.item.date))||String(a.item.ticker).localeCompare(String(b.item.ticker))):group.entries;
+    const heading=mode==='player'&&group.player?`<strong>${esc(group.player.role)} · ${esc(group.player.name)}</strong><a href="${esc(group.player.filing_url)}" target="_blank" rel="noopener noreferrer" title="Open the SEC filing">SEC filing</a>`:`<strong>${esc(group.title)}</strong>`;
+    const summary=mode==='player'?group.kind==='unmatched'?'No unambiguous underwriter or placement-agent disclosure was found for these sessions.':group.kind==='failed'?'SEC financing-player lookup failed for these sessions.':`Qualifying gap-up sessions · oldest to newest · ${group.player?.filing_date?`SEC filing date ${esc(group.player.filing_date)}`:''}`:'Checking SEC offering disclosures around these gap-up dates…';
+    return `<section class="gap-ticker-group ${mode==='player'?'gap-player-group':''}" data-group-index="${groupIndex}"><header class="gap-ticker-head">${heading}<span class="gap-ticker-count">${entries.length} qualifying gap-up session${entries.length===1?'':'s'}</span></header><div class="gap-player-summary">${summary}</div><div class="gap-session-grid">${entries.map(entry=>sessionMarkup(entry,groupIndex)).join('')}</div></section>`;
+  }).join('');
+  if(mode==='ticker'){
+    const playerObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(!entry.isIntersecting)return;const group=entry.target;playerObserver.unobserve(group);const groupSessions=[...group.querySelectorAll('.gap-session-card')].map(card=>{const item=items[Number(card.querySelector('.gap-copy-png').dataset.index)];return {item,card,_playerData:item._gapPlayerData};});let next=0,finished=0;const worker=async()=>{while(next<groupSessions.length){const session=groupSessions[next++];if(!session._playerData)session._playerData=await loadGapDeepDivePlayer(session.item,jobId);session.item._gapPlayerData=session._playerData;finished++;renderGapDeepDivePlayerSummary(group,groupSessions,finished>=groupSessions.length);}};Promise.all(Array.from({length:Math.min(3,groupSessions.length)},worker));}),{rootMargin:'450px 0px'});
+    gapDeepDiveViewObservers.push(playerObserver);grid.querySelectorAll('.gap-ticker-group').forEach(group=>playerObserver.observe(group));
+  }
+  const lazyCharts=new IntersectionObserver(entries=>entries.forEach(async entry=>{if(!entry.isIntersecting)return;const canvas=entry.target;lazyCharts.unobserve(canvas);const i=Number(canvas.dataset.index),item=items[i],key=gapDeepDiveKey(item);canvas.dataset.key=key;canvas._gapDeepDiveState={days:1,dates:[],bars:null,panOffset:0,loading:false};try{const chart=await loadGapDeepDiveChart(item,jobId);canvas._showHODAVWAP=false;drawGapDeepDiveCanvas(canvas,chart,$('#gap_deepdive_tf').value||'2m',540);canvas.dataset.chartLoaded='1';canvas.closest('.gap-session-card').querySelector('.gap-copy-png').disabled=false;canvas.parentElement.querySelector('.gap-chart-loading').remove();canvas.onclick=()=>openGapDeepDiveChart(item,jobId);}catch(error){canvas.parentElement.querySelector('.gap-chart-loading').textContent=error.message;}}),{rootMargin:'1200px 0px'});
+  gapDeepDiveViewObservers.push(lazyCharts);
+  grid.querySelectorAll('canvas[data-index]').forEach(canvas=>{const item=items[Number(canvas.dataset.index)];canvas.onclick=()=>openGapDeepDiveChart(item,jobId);lazyCharts.observe(canvas);});
+  grid.querySelectorAll('.gap-copy-png').forEach(btn=>btn.onclick=async()=>{const canvas=btn.closest('.gap-session-card').querySelector('canvas');try{const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw new Error('Could not render PNG');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);btn.textContent='Copied ✓';setTimeout(()=>btn.textContent='Copy PNG',1300);}catch(error){$('#gap_deepdive_status').textContent='PNG copy unavailable: '+error.message;}});
+}
+async function ensureGapDeepDivePlayers(items,jobId){
+  let next=0,done=0;const status=$('#gap_deepdive_status');
+  const worker=async()=>{while(next<items.length){const item=items[next++];if(!item._gapPlayerData)item._gapPlayerData=await loadGapDeepDivePlayer(item,jobId);done++;if(gapDeepDiveGroupBy==='player')status.textContent=`Checking SEC financing players · ${done}/${items.length} gap-up sessions…`;}};
+  await Promise.all(Array.from({length:Math.min(8,items.length)},worker));
+  if(gapDeepDiveGroupBy==='player')status.textContent=`${gapDeepDiveStatusBase} · financing-player groups ready · gap-ups sorted oldest to newest`;
 }
 async function loadGapDeepDiveFloat(item,jobId){
   const key=item.ticker.toUpperCase();if(gapDeepDiveFloats.has(key))return gapDeepDiveFloats.get(key);
@@ -2061,19 +2104,25 @@ async function loadGapDeepDive(){
     while(runId===gapDeepDiveRequest){const response=await fetch('/api/gap-deepdive/'+encodeURIComponent(started.job)+'?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken));result=await gapDeepDiveJson(response);status.textContent=result.message||'Scanning…';if(result.status==='complete'||result.status==='error')break;await new Promise(resolve=>setTimeout(resolve,2000));}
     if(runId!==gapDeepDiveRequest)return;if(result.status==='error')throw new Error(result.message);const items=result.results||[];if(!items.length){status.textContent=(result.message||'Complete')+' · No qualifying sessions found.';gapDeepDiveLoaded=true;return;}
     status.textContent=`Saved scan as of ${result.scanned_on||'latest saved date'} · ${new Set(items.map(item=>String(item.ticker||'').toUpperCase())).size} tickers · ${items.length} qualifying sessions at ≥70% PM high · click a chart to expand.`+(result.errors?.length?` · Could not load full daily history for ${result.errors.length} ticker(s).`:'');
-    const tickerGroups=new Map();items.forEach((item,i)=>{const ticker=String(item.ticker||'').toUpperCase();if(!tickerGroups.has(ticker))tickerGroups.set(ticker,[]);tickerGroups.get(ticker).push({item,index:i});});
-    grid.innerHTML=[...tickerGroups].map(([ticker,sessions])=>`<section class="gap-ticker-group" data-ticker="${esc(ticker)}"><header class="gap-ticker-head"><strong>${esc(ticker)}</strong><span class="gap-ticker-count">${sessions.length} qualifying gap-up session${sessions.length===1?'':'s'}</span></header><div class="gap-player-summary">Checking SEC offering disclosures around these gap-up dates…</div><div class="gap-session-grid">${sessions.map(({item,index:i})=>`<article class="gap-session-card"><header class="gap-session-head"><strong>${esc(item.date)}</strong><span style="color:#64d99b;font-size:13px">PM high +${(item.move*100).toFixed(1)}%</span><span style="color:#b6c0ca;font-size:13px">PM $vol $${(item.pm_dollar_volume/1e6).toFixed(1)}M</span><button class="gap-copy-png" data-index="${i}" disabled style="margin-left:auto;height:32px;font-size:12px;border-color:#555">Copy PNG</button></header><div class="gap-session-canvas-wrap"><canvas id="gap_deepdive_chart_${i}" data-index="${i}"></canvas><span class="gap-chart-loading" style="position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);color:#89939e;font-size:14px">Scroll here to load this chart</span></div><div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#aab4bf;padding:7px 2px"><span style="color:#fff">━ VWAP</span><span style="color:#c084fc">━ TWAP</span><span style="color:#ffe45c">AVWAP · set A/B in expanded chart</span><span style="color:#b0b0b0">░ Premarket</span><span>1-minute OHLCV · Postmarket to 20:00 ET · X-axis IST · click to expand</span></div></article>`).join('')}</div></section>`).join('');
-    const playerObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(!entry.isIntersecting)return;const group=entry.target;playerObserver.unobserve(group);const sessions=[...group.querySelectorAll('.gap-session-card')].map(card=>({item:items[Number(card.querySelector('.gap-copy-png').dataset.index)],card}));let next=0,finished=0;const worker=async()=>{while(next<sessions.length){const session=sessions[next++];session._playerData=await loadGapDeepDivePlayer(session.item,started.job);finished++;renderGapDeepDivePlayerSummary(group,sessions,finished>=sessions.length);}};Promise.all(Array.from({length:Math.min(3,sessions.length)},worker));}),{rootMargin:'450px 0px'});
-    grid.querySelectorAll('.gap-ticker-group').forEach(group=>playerObserver.observe(group));    const lazyCharts=new IntersectionObserver(entries=>entries.forEach(async entry=>{if(!entry.isIntersecting)return;const canvas=entry.target;lazyCharts.unobserve(canvas);const i=Number(canvas.dataset.index),item=items[i],key=gapDeepDiveKey(item);canvas.dataset.key=key;canvas._gapDeepDiveState={days:1,dates:[],bars:null,panOffset:0,loading:false};try{const chart=await loadGapDeepDiveChart(item,started.job);canvas._showHODAVWAP=false;drawGapDeepDiveCanvas(canvas,chart,$('#gap_deepdive_tf').value||'2m',540);canvas.dataset.chartLoaded='1';grid.querySelector(`.gap-copy-png[data-index="${i}"]`).disabled=false;canvas.parentElement.querySelector('.gap-chart-loading').remove();canvas.onclick=()=>openGapDeepDiveChart(item,started.job);}catch(error){canvas.parentElement.querySelector('.gap-chart-loading').textContent=error.message;}}),{rootMargin:'1200px 0px'});
-    grid.querySelectorAll('canvas[data-index]').forEach(canvas=>{const item=items[Number(canvas.dataset.index)];canvas.onclick=()=>openGapDeepDiveChart(item,started.job);lazyCharts.observe(canvas);});
+    gapDeepDiveItems=items;gapDeepDiveJobId=started.job;gapDeepDiveStatusBase=status.textContent;
+    if(gapDeepDiveGroupBy==='player')await ensureGapDeepDivePlayers(items,started.job);
+    renderGapDeepDiveGroups(items,started.job,gapDeepDiveGroupBy);
     gapDeepDiveCommonPattern(items,started.job,runId);
-    grid.querySelectorAll('.gap-copy-png').forEach(btn=>btn.onclick=async()=>{const canvas=$('#gap_deepdive_chart_'+btn.dataset.index);try{const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw new Error('Could not render PNG');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);btn.textContent='Copied ✓';setTimeout(()=>btn.textContent='Copy PNG',1300);}catch(error){status.textContent='PNG copy unavailable: '+error.message;}});
+
     gapDeepDiveLoaded=true;
   }catch(error){if(runId===gapDeepDiveRequest)status.textContent='Deepdive error: '+error.message;}
   })();
   gapDeepDivePromise=task;
   try{await task;}finally{if(gapDeepDivePromise===task)gapDeepDivePromise=null;}
 }
+$('#gap_deepdive_group_by').onchange=async()=>{
+  gapDeepDiveGroupBy=$('#gap_deepdive_group_by').value;const request=++gapDeepDiveGroupRequest;
+  if(!gapDeepDiveItems.length)return;
+  if(gapDeepDiveGroupBy==='player')await ensureGapDeepDivePlayers(gapDeepDiveItems,gapDeepDiveJobId);
+  if(request!==gapDeepDiveGroupRequest)return;
+  renderGapDeepDiveGroups(gapDeepDiveItems,gapDeepDiveJobId,gapDeepDiveGroupBy);
+  if(gapDeepDiveGroupBy==='ticker')$('#gap_deepdive_status').textContent=gapDeepDiveStatusBase;
+};
 $('#gate_btn').onclick=submitGate;
 $('#gate_name').addEventListener('keydown',e=>{if(e.key==='Enter')submitGate();});
 if($('#gate_create_btn')) $('#gate_create_btn').onclick=submitCreate;
