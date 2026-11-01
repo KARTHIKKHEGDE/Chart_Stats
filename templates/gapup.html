@@ -1205,7 +1205,7 @@ function renderTab(tab, r, isRefresh){
   const filingsDate=tab.container.querySelector('#recent_filings_asof');
   if(filingsDate){const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()),part=k=>parts.find(x=>x.type===k)?.value||'00',today=`${part('year')}-${part('month')}-${part('day')}`;filingsDate.max=today;if(!filingsDate.value)filingsDate.value=today;filingsDate.onchange=()=>loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker,filingsDate.value);}
   const filingsJump=window.gapDeepDiveFilingsJump;
-  if(filingsJump&&filingsJump.ticker===String(h.ticker).toUpperCase()&&filingsDate){filingsDate.value=filingsJump.date;window.gapDeepDiveFilingsJump=null;setTimeout(()=>tab.container.querySelector('.recent-filings-panel')?.scrollIntoView({behavior:'smooth',block:'center'}),250);}
+  if(filingsJump&&filingsJump.ticker===String(h.ticker).toUpperCase()&&filingsDate){filingsDate.value=filingsJump.date;window.gapDeepDiveFilingsJump=null;setTimeout(()=>{tab.container.querySelector('.recent-filings-panel')?.scrollIntoView({behavior:'smooth',block:'center'});requestDilutionHistory(h.ticker,filingsJump.date);},350);}
   loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker,filingsDate?.value||'');
   tab.container.querySelectorAll('table.sort').forEach(makeSortable);
 
