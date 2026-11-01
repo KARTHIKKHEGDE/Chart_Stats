@@ -25,9 +25,11 @@ from chart_app.application import (
 )
 from chart_app import auth as _auth
 import threading
+import time
 import uuid
 import json
 import os
+import hashlib
 import requests
 from pathlib import Path
 from html.parser import HTMLParser
@@ -1242,10 +1244,11 @@ def sec_dilution_history():
     if asof_date>current_day:
         return jsonify({'error':'As-of date cannot be in the future.'}),400
     today=asof_date.isoformat()
-    cache_key=f'sec_dilution_history_v6_{ticker}_{today}_asof'
+    cache_key=f'sec_dilution_history_v7_{ticker}_{today}_asof'
     cached=cget(cache_key,30*60)
     if cached is not None:
         return jsonify(cached)
+    request_started=time.monotonic()
     try:
         all_filings=sorted((item for item in _gap_deepdive_sec_filings(ticker)
                             if item.get('filing_date') and item.get('filing_date')<=today),
@@ -1300,48 +1303,86 @@ def sec_dilution_history():
                 if chunk:chunks.append(chunk);used+=len(chunk);last_end=end
                 if used>=limit:break
             return '\n[... relevant filing passage ...]\n'.join(chunks)
-        sources=[]
-        excerpts=[]
-        for item in candidates:
-            url=item.get('document_url') or item.get('url') or ''
+        # SEC retrieval paces request starts centrally but allows downloads to
+        # overlap. Fetching 55 filings serially could take several minutes when
+        # EDGAR responds slowly; bounded workers preserve SEC pacing and avoid
+        # exhausting the web server's request threads.
+        from concurrent.futures import ThreadPoolExecutor
+        def read_sec_document(url,limit=8500):
+            doc_key='sec_dilution_doc_v1_'+hashlib.sha256(url.encode('utf-8')).hexdigest()[:32]
+            cached_document=cget(doc_key,30*86400)
+            if isinstance(cached_document,dict) and len(cached_document.get('text') or '')>=100:
+                return cached_document['text'],cached_document.get('anchors') or []
             try:
-                filing_text,filing_anchors=_filing_document_text(url)
-            except Exception:
+                text,anchors=_filing_document_text(url)
+                if len(text)<100:return None,None
+                excerpt=dilution_excerpt(text,limit)
+                cput(doc_key,{'text':excerpt,'anchors':anchors})
+                return excerpt,anchors
+            except Exception as exc:
+                app.logger.debug('SEC document fetch failed for %s (%s)',url,type(exc).__name__)
+                return None, None
+        filing_urls=[item.get('document_url') or item.get('url') or '' for item in candidates]
+        with ThreadPoolExecutor(max_workers=min(8,max(1,len(candidates)))) as pool:
+            primary_results=list(pool.map(read_sec_document,filing_urls))
+        source_records=[]
+        exhibit_jobs=[]
+        seen_exhibits=set()
+        source_budget=70
+        for item,(filing_text,filing_anchors),url in zip(candidates,primary_results,filing_urls):
+            if not filing_text or len(filing_text)<100:
                 app.logger.info('Skipping unreadable dilution source %s %s',ticker,item.get('accession'))
                 continue
-            if len(filing_text)<100:
+            record={'item':item,'url':url,'text':filing_text,'exhibits':[]}
+            source_records.append(record)
+            source_budget-=1
+            if source_budget<=0 or not (offering_form.search(str(item.get('form') or '')) or
+                                        likely.search(str(item.get('title') or ''))):
                 continue
+            exhibit_candidates=[]
+            for anchor in filing_anchors or []:
+                exhibit_url=urljoin(url,anchor.get('href') or '')
+                parsed_exhibit=_sec_archive_url_parts(exhibit_url)
+                if not parsed_exhibit or parsed_exhibit['accession_path']!=str(item.get('accession') or '').replace('-',''):
+                    continue
+                filename=parsed_exhibit['filename'].rsplit('/',1)[-1]
+                exhibit_match=re.search(r'(?:ex|exhibit)[_-]?(1[-._]1|4[-._]\d+|10[-._]\d+)',filename,re.I)
+                label=' '.join(str(anchor.get('text') or '').split())
+                exhibit_number=exhibit_match.group(1).replace('_','.').replace('-','.') if exhibit_match else ''
+                if exhibit_match and (exhibit_number=='1.1' or exhibit_number.startswith('4.') or
+                                      (exhibit_number.startswith('10.') and likely.search(label+' '+filename))):
+                    exhibit_candidates.append((exhibit_url,label,exhibit_number))
+            for exhibit_url,label,exhibit_number in exhibit_candidates[:2]:
+                if source_budget<=0:break
+                if exhibit_url in seen_exhibits:continue
+                seen_exhibits.add(exhibit_url);source_budget-=1
+                exhibit_job={'url':exhibit_url,'label':label,'number':exhibit_number,'item':item}
+                record['exhibits'].append(exhibit_job);exhibit_jobs.append(exhibit_job)
+        with ThreadPoolExecutor(max_workers=min(8,max(1,len(exhibit_jobs)))) as pool:
+            exhibit_results=list(pool.map(read_sec_document,[job['url'] for job in exhibit_jobs]))
+        for job,(text,_anchors) in zip(exhibit_jobs,exhibit_results):
+            job['text']=text if text and len(text)>=100 else None
+        sources=[]
+        excerpts=[]
+        def add_source(source,text,excerpt_limit=8500):
             source_id=f'F{len(sources)+1}'
-            sources.append({'id':source_id,'ticker':ticker,'accession':item.get('accession',''),
-                            'title':item.get('title') or f"SEC Form {item.get('form','')}",
-                            'form':item.get('form',''),'filing_date':item.get('filing_date',''),
-                            'url':item.get('url',''),'document_url':url})
-            excerpts.append(f"[{source_id}] {item.get('filing_date','')} | {item.get('form','')} | {item.get('title','')}\n{dilution_excerpt(filing_text)}")
-            if (offering_form.search(str(item.get('form') or '')) or likely.search(str(item.get('title') or ''))):
-                exhibit_candidates=[]
-                for anchor in filing_anchors:
-                    exhibit_url=urljoin(url,anchor.get('href') or '')
-                    parsed_exhibit=_sec_archive_url_parts(exhibit_url)
-                    if not parsed_exhibit or parsed_exhibit['accession_path']!=str(item.get('accession') or '').replace('-',''):
-                        continue
-                    filename=parsed_exhibit['filename'].rsplit('/',1)[-1]
-                    exhibit_match=re.search(r'(?:ex|exhibit)[_-]?(1[-._]1|4[-._]\d+|10[-._]\d+)',filename,re.I)
-                    label=' '.join(str(anchor.get('text') or '').split())
-                    exhibit_number=exhibit_match.group(1).replace('_','.').replace('-','.') if exhibit_match else ''
-                    if exhibit_match and (exhibit_number=='1.1' or exhibit_number.startswith('4.') or
-                                          (exhibit_number.startswith('10.') and likely.search(label+' '+filename))):
-                        exhibit_candidates.append((exhibit_url,label,exhibit_number))
-                for exhibit_url,label,exhibit_number in exhibit_candidates[:2]:
-                    if len(sources)>=70:break
-                    try: exhibit_text,_=_filing_document_text(exhibit_url)
-                    except Exception: continue
-                    if len(exhibit_text)<100:continue
-                    exhibit_id=f'F{len(sources)+1}'
-                    title=f"Exhibit {exhibit_number} — {label or 'Financing agreement'} ({item.get('form','')} filing)"
-                    sources.append({'id':exhibit_id,'ticker':ticker,'accession':'','title':title,
-                                    'form':f'EX-{exhibit_number}','filing_date':item.get('filing_date',''),
-                                    'url':exhibit_url,'document_url':exhibit_url})
-                    excerpts.append(f"[{exhibit_id}] {item.get('filing_date','')} | EX-{exhibit_number} | {title}\n{dilution_excerpt(exhibit_text,5000)}")
+            source['id']=source_id
+            sources.append(source)
+            excerpts.append(f"[{source_id}] {source['filing_date']} | {source['form']} | {source['title']}\n{text if len(text)<=excerpt_limit else dilution_excerpt(text,excerpt_limit)}")
+        for record in source_records:
+            item,url,filing_text=record['item'],record['url'],record['text']
+            add_source({'ticker':ticker,'accession':item.get('accession',''),
+                        'title':item.get('title') or f"SEC Form {item.get('form','')}",
+                        'form':item.get('form',''),'filing_date':item.get('filing_date',''),
+                        'url':item.get('url',''),'document_url':url},filing_text)
+            for job in record['exhibits']:
+                if not job.get('text'):continue
+                item=job['item'];title=f"Exhibit {job['number']} — {job['label'] or 'Financing agreement'} ({item.get('form','')} filing)"
+                add_source({'ticker':ticker,'accession':'','title':title,'form':f"EX-{job['number']}",
+                            'filing_date':item.get('filing_date',''),'url':job['url'],'document_url':job['url']},
+                           job['text'],5000)
+        app.logger.info('SEC dilution review %s: %d filings, %d exhibits fetched/prepared in %.1fs',
+                        ticker,len(candidates),len(exhibit_jobs),time.monotonic()-request_started)
         if not sources:
             return jsonify({'error':'No readable SEC filings were found for this company.'}),404
         market_snapshot={'market_date':None,'last_price':None,'shares_outstanding':None,
@@ -1372,10 +1413,9 @@ def sec_dilution_history():
             market_snapshot['notes'].append(f'As-of price/volume data unavailable ({type(exc).__name__}).')
         try:
             from chart_app.market_data import latest_security_stats, load_shares_out, load_splits
-            # Refresh filings and split facts so the baseline cannot silently lag by
-            # the longer historical-data cache lifetime.
-            cput(f'{ticker}_sec',None)
-            cput(f'{ticker}_splits',None)
+            # Keep SEC companyfacts and split data on their normal short cache
+            # lifetimes (3 and 7 days). Forcing both caches cold on every report
+            # added up to two avoidable SEC/market-data round trips.
             facts=load_shares_out(ticker) or []
             fact=max((row for row in facts if row.get('filed','')<=today),key=lambda row:row.get('filed',''),default=None)
             if fact:
@@ -1479,6 +1519,8 @@ def sec_dilution_history():
             "Use [] for empty lists. Keep the JSON compact but do not omit an active instrument merely to save space.\n\n"
             f"Ticker: {ticker}\n{snapshot_context}\n\nSEC filings read ({len(sources)}; source IDs link to filings):\n"+'\n\n'.join(excerpts))
         answer,provider=_call_filing_ai(prompt,max_tokens=2800)
+        app.logger.info('SEC dilution review %s: AI response received from %s after %.1fs total',
+                        ticker,provider,time.monotonic()-request_started)
         analysis=_parse_ai_json_object(answer)
         source_ids={item['id'] for item in sources}
         history=[]
