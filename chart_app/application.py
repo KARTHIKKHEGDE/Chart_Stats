@@ -922,7 +922,7 @@ def premarket_spikes_api():
             if day >= cutoff and row["date"] not in split_dates and prior_close > 0 and high / prior_close - 1 >= 0.50:
                 candidates.append(index)
         if candidates:
-            workers = min(20, max(4, len(_key_pool) * 2))
+            workers = min(len(_key_pool), max(4, len(candidates)))
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 list(pool.map(_prefetch_minute, [(ticker, index, daily) for index in candidates]))
         found = []

@@ -905,7 +905,7 @@ async function run(refresh){
       }
     };
 
-    tab.timer = setInterval(poll, 1500);
+    tab.timer = setInterval(poll, 250);
     poll();
   } catch(e) {
     tab.isRunning = false;

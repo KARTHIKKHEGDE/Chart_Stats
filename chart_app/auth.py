@@ -342,7 +342,7 @@ def start():
     t = (request.args.get("ticker") or "").strip().upper()
     if not re.fullmatch(r"[A-Z.\-]{1,10}", t):
         return jsonify({"error": "Invalid ticker"}), 400
-    log_search(u, t)
+    threading.Thread(target=log_search, args=(u, t), daemon=True).start()
     jid = uuid.uuid4().hex[:10]
     JOBS[jid] = {"status": "running", "msg": "Starting…"}
     threading.Thread(target=run_job, args=(JOBS[jid], t, request.args.get("refresh") == "1"), daemon=True).start()

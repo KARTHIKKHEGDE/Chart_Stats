@@ -238,24 +238,38 @@ def _alpaca_live_df(t):
 
 def live_snapshot(t):
     tk = yf.Ticker(t.replace(".", "-"))
-    df = tk.history(period="5d", interval="1m", prepost=True, auto_adjust=False)
+    with ThreadPoolExecutor(max_workers=2) as yf_pool:
+        f_intraday = yf_pool.submit(lambda: tk.history(period="1d", interval="1m", prepost=True, auto_adjust=False))
+        f_daily = yf_pool.submit(lambda: tk.history(period="3mo", interval="1d", auto_adjust=False))
+        df = f_intraday.result()
+        dly = f_daily.result()
+    if df is None or df.empty:
+        # Fallback for weekend / early Monday premarket
+        df = tk.history(period="5d", interval="1m", prepost=True, auto_adjust=False)
     if df is None or df.empty:
         raise RuntimeError(f"No Yahoo intraday data for {t}")
+    dly = dly.dropna()
     df.index = df.index.tz_convert(ET)
     df = df.rename(columns={"Open": "o", "High": "h", "Low": "l", "Close": "c", "Volume": "v"})
     df = df[["o", "h", "l", "c", "v"]].dropna().astype(float)
     day = df.index[-1].date()
     d = df[df.index.date == day]
-    dly = tk.history(period="1y", interval="1d", auto_adjust=False).dropna()
     prev = dly[dly.index.date < day]
     if prev.empty:
         raise RuntimeError("Could not determine previous close from Yahoo")
     hist = [{"date": str(ix.date()), "o": float(r.Open), "h": float(r.High), "l": float(r.Low),
              "c": float(r.Close), "v": float(r.Volume)} for ix, r in prev.iterrows()]
+    info = {}
     try:
-        info = tk.info or {}
+        fast = getattr(tk, "fast_info", None)
+        if fast:
+            info = {
+                "sharesOutstanding": getattr(fast, "shares", None),
+                "marketCap": getattr(fast, "market_cap", None),
+                "last_volume": getattr(fast, "last_volume", None),
+            }
     except Exception:
-        info = {}
+        pass
 
     # Prefer 100% exact real-time tick volume from Alpaca SIP feed if configured in .env
     alp_df = _alpaca_live_df(t)
