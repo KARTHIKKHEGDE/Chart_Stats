@@ -388,7 +388,10 @@ def model_rows(S):
         exp = float(np.mean(eff))
         maes = [x["mae"] for x in ms]
         avg_risk = float(np.mean([x["stop_pct"] for x in ms]))
-        rows.append([C(name), C(str(len(ms))), C(f"{wr:.0%}", "g" if wr >= .55 else "y" if wr >= .45 else "r", wr),
+        stop_rule = {"2m ORB low break": "First 2m candle high",
+                     "5m ORB low break": "First 5m candle high",
+                     "Short at open": "20% above entry"}[name]
+        rows.append([C(name), C(stop_rule), C(str(len(ms))), C(f"{wr:.0%}", "g" if wr >= .55 else "y" if wr >= .45 else "r", wr),
                      C(pct(np.mean(wins)) if wins else "—", "g"), C(pct(np.mean(loss)) if loss else "—", "r"),
                      C(pct(exp), sc(exp), exp), C(f"{exp / avg_risk:+.2f}R" if avg_risk else "—", sc(exp), exp),
                      C(pct(med(maes), 0), "y", med(maes)), C(pct(max(maes), 0), "r", max(maes))])
@@ -558,11 +561,11 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     else:
         head = {"grade": "N/A", "score": "—", "gcls": "r", "verdict": "Not enough history.", "total": len(events)}
 
-    mcols = ["Entry (short; exit at close / stop)", "Trades", "Win %", "Avg win", "Avg loss", "Expectancy",
+    mcols = ["Entry (short; exit at close / stop)", "Stop loss", "Trades", "Win %", "Avg win", "Avg loss", "Expectancy",
              "Avg R (per-model stop)", "Median squeeze", "Worst squeeze"]
     mrows = model_rows(S)
-    mfoot = ("2m/5m ORB shorts enter on a break below the opening-range low; stop = the highest RTH high observed "
-             "before the breakdown candle. Short at open stop = the greater of 20% above entry or the session high.")
+    mfoot = ("2m/5m ORB shorts enter on a break below the opening-range low; stop = the high of the first "
+             "2-minute/5-minute candle, respectively. Short at open stop = 20% above entry.")
 
     # ---- [7] aggregate path chart: premarket -> close, % from prev close, IST axis
     arr = np.array([[np.nan if v is None else v for v in e["path"]] for e in S], dtype=float) if S else np.zeros((0, NPTS + 1))

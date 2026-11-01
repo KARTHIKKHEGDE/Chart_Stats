@@ -714,9 +714,9 @@ def metrics(df, pc, full=True):
         if (base.h.max() - base.l.min()) / base.h.max() < 0.20:
             consol_bd = bool(after.iloc[40:].l.min() < base.l.min() * 0.99)
 
-    # Opening-range breakdowns enter at the range low and use the highest RTH
-    # high observed before the breakdown candle; the open short uses max(20%, HOD).
-    open_short_stop = max(o * (1 + STOP_PCT), hod)
+    # Stop rules: opening candle high for ORB breakdowns; 20% above entry for
+    # the short-at-open model.
+    open_short_stop = o * (1 + STOP_PCT)
     models = {
         "Short at open": mdl(rg, rg.index[0], o, mm[0], close, open_short_stop),
     }
@@ -731,10 +731,7 @@ def metrics(df, pc, full=True):
         if breakdown.empty:
             continue
         break_ts = breakdown.index[0]
-        prior_bars = rg.loc[:break_ts].iloc[:-1]
-        if prior_bars.empty:
-            continue
-        stop_price = float(prior_bars.h.max())
+        stop_price = float(opening.h.max())
         if stop_price <= opening_low:
             continue
         models[label] = mdl(
