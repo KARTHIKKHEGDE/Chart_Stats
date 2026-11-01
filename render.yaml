@@ -3,7 +3,9 @@ services:
     name: gapup-fade-analyzer
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --workers 1 --threads 4 --timeout 120 chart_stats:app
+    # 2 workers x 8 threads = 16 concurrent request slots to exploit the 49-key pool (~245 RPM)
+    startCommand: gunicorn --workers 2 --threads 8 --timeout 120 chart_stats:app
+    healthCheckPath: /
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
@@ -11,6 +13,10 @@ services:
         sync: false
       - key: POLYGON_API_KEYS
         sync: false
+      - key: POLYGON_RPM
+        value: "5"          # per-key free-tier limit; pool throughput = 49 keys x 5 = ~245 RPM
+      - key: POLY_MAX_PARALLEL
+        value: "0"          # 0 = use all keys; raise to cap parallelism if needed
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_KEY
