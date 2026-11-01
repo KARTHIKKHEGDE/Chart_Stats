@@ -2002,7 +2002,7 @@ function openGapDeepDiveFilings(){
   const target=new URL('/',location.origin);
   target.searchParams.set('gap_filings_ticker',String(item.ticker).toUpperCase());
   target.searchParams.set('gap_filings_date',String(item.date));
-  location.assign(target.toString());
+  window.open(target.toString(),'_blank','noopener');
 }
 $('#gap_chart_bz').onchange=renderGapDeepDiveModal;
 $('#gap_deepdive_tf').onchange=()=>{const timeframe=$('#gap_deepdive_tf').value,cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Interval changed. Select AVWAP again to choose new anchor points.';if(gapDeepDiveCurrent){$('#gap_chart_tf').value=timeframe;configureGapDeepDiveTimeframe(timeframe);}setGapDeepDiveTimeframe(timeframe);if(gapDeepDiveCurrent)loadGapDeepDiveContext();};
