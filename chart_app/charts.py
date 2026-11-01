@@ -636,6 +636,29 @@ def recent_filings_feed():
     user=(request.args.get('user') or '').strip().lower(); token=(request.args.get('token') or '').strip()
     if user not in _auth.ALLOWED_USERS or not _db_validate_session(user,token):
         return jsonify({'error':'Unauthorized'}),401
+    ticker=(request.args.get('ticker') or '').strip().upper()
+    if ticker:
+        if not re.fullmatch(r'[A-Z.\-]{1,10}',ticker):
+            return jsonify({'error':'Invalid ticker'}),400
+        ticker_cache_key=f'sec_recent_ticker_filings_feed_v1_{ticker}'
+        cached=cget(ticker_cache_key,120)
+        if cached is not None:
+            return jsonify({'filings':cached,'cached':True})
+        try:
+            filings=[
+                {'ticker':ticker,'company':item.get('company',''),
+                 'form':item.get('form',''),'description':item.get('title',''),
+                 'filed_at':item.get('published_at') or item.get('filing_date',''),
+                 'url':item.get('url',''),'title':item.get('title','')}
+                for item in _gap_deepdive_sec_filings(ticker)
+            ]
+            filings.sort(key=lambda item:item.get('filed_at',''),reverse=True)
+            filings=filings[:24]
+            cput(ticker_cache_key,filings)
+            return jsonify({'filings':filings,'cached':False})
+        except Exception as exc:
+            app.logger.exception('Recent SEC filings lookup failed for %s',ticker)
+            return jsonify({'error':f'Recent filings unavailable: {type(exc).__name__}'}),502
     cache_key='sec_recent_ticker_filings_feed_v1'
     cached=cget(cache_key,120)
     if cached is not None:
