@@ -1035,7 +1035,8 @@ def sec_filing_explanation():
                 continue
             related_keys.add(key)
             related.append({'ticker': '', 'title': anchor.get('text') or 'Linked SEC filing',
-                            'url': link_url, 'cik': linked['cik']})
+                            'url': link_url, 'explain_url': link_url, 'cik': linked['cik'],
+                            'accession_path': linked['accession_path']})
             if len(related) >= 10:
                 break
         if related:
@@ -1046,6 +1047,15 @@ def sec_filing_explanation():
                     company = ticker_by_cik.get(item['cik']) or {}
                     item['ticker'] = str(company.get('ticker') or '')
                     item['company'] = str(company.get('name') or '')
+                    if item['ticker']:
+                        linked_record = next((record for record in _gap_deepdive_sec_filings(item['ticker'])
+                                              if str(record.get('accession') or '').replace('-', '') == item['accession_path']), None)
+                        if linked_record:
+                            item['title'] = linked_record.get('title') or item['title']
+                            item['form'] = linked_record.get('form') or ''
+                            item['filing_date'] = linked_record.get('filing_date') or ''
+                            item['url'] = linked_record.get('url') or item['url']
+                            item['explain_url'] = linked_record.get('document_url') or item['explain_url']
             except Exception:
                 pass
 
