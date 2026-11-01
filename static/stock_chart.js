@@ -95,6 +95,12 @@ function drawGapDeepDiveRangeOverlay(cv){
 function scheduleGapDeepDiveRangeOverlay(cv){if(cv._rangeOverlayFrame)return;cv._rangeOverlayFrame=requestAnimationFrame(()=>{cv._rangeOverlayFrame=0;drawGapDeepDiveRangeOverlay(cv);});}
 function drawGapDeepDiveCrosshair(cv){const g=cv._rangeGeometry,p=cv._crosshair,v=cv._crosshairV||$('#gap_chart_crosshair_v'),h=cv._crosshairH||$('#gap_chart_crosshair_h');if(!v||!h)return;if(!cv._showCrosshair||!g||!p||p.x<g.L||p.x>g.L+g.plotW||p.y<g.T||p.y>g.T+g.plotH){v.hidden=true;h.hidden=true;return;}v.hidden=false;h.hidden=false;v.style.left=p.x+'px';v.style.top=g.T+'px';v.style.height=((g.crosshairBottom||g.T+g.plotH)-g.T)+'px';h.style.left=g.L+'px';h.style.top=p.y+'px';h.style.width=g.plotW+'px';}
 function gapDeepDiveEventMarkerAt(cv,x,y){return (cv._eventMarkersScreen||[]).find(marker=>x>=marker.x&&x<=marker.x+marker.w&&y>=marker.y&&y<=marker.y+marker.h)||null;}
+function setGapDeepDiveZoomView(cv,g,zoom,targetStart){
+  const span=Math.min(g.span,g.baseViewSpan/zoom),panLimit=Math.max(0,g.span-span)/2;
+  let viewBase=g.fullStart+panLimit,panMin=-panLimit,panMax=panLimit;
+  if(g.multi){const anchorIndex=g.dates.indexOf(cv._anchorDate||g.chart.date);if(anchorIndex>=0){viewBase=g.fullStart+anchorIndex*g.sessionSpan+g.sessionSpan/2-span/2;panMin=g.fullStart-viewBase;panMax=g.fullStart+g.span-span-viewBase;}}
+  cv._rangeZoom=zoom;cv._panOffset=Math.max(panMin,Math.min(panMax,targetStart-viewBase));
+}
 function drawGapDeepDiveEventMarkers(cv,x,g){
   const events=cv._marketEvents||[],b=g?.bars;if(!events.length||!b?.t?.length){cv._eventMarkersScreen=[];return;}
   const placed=[],counts=new Map();x.save();x.font='bold 10px Consolas,monospace';x.textAlign='center';x.textBaseline='middle';
@@ -155,7 +161,7 @@ function bindGapDeepDiveRangeInput(cv){
   },true);
   const finish=e=>{
     if(cv._eventMarkerPointer){const {marker,pointerId}=cv._eventMarkerPointer;cv._eventMarkerPointer=null;cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode)?'crosshair':'grab';if(e.pointerId===pointerId&&e.offsetX>=marker.x&&e.offsetX<=marker.x+marker.w&&e.offsetY>=marker.y&&e.offsetY<=marker.y+marker.h)window.open(marker.url,'_blank','noopener,noreferrer');stop(e);return;}
-    if(cv._zoomDrag){const z=cv._zoomDrag;cv._zoomDrag=null;const g=cv._rangeGeometry,dx=Math.abs(z.x1-z.x0);if(dx>=12&&g){const left=Math.max(g.L,Math.min(z.x0,z.x1)),right=Math.min(g.L+g.plotW,Math.max(z.x0,z.x1)),ratio=(left-g.L)/g.plotW,newSpan=Math.max(1,(right-left)*g.viewSpan/g.plotW),minZoom=g.baseViewSpan/g.span;cv._rangeZoom=Math.max(minZoom,Math.min(24,g.baseViewSpan/newSpan));cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,g.viewStart+ratio*g.viewSpan-g.viewBase));cv._yZoom=1;cv._gapDeepDiveRedraw?.();}else drawGapDeepDiveRangeOverlay(cv);cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode)?'crosshair':'grab';stop(e);return;}
+    if(cv._zoomDrag){const z=cv._zoomDrag;cv._zoomDrag=null;const g=cv._rangeGeometry,dx=Math.abs(z.x1-z.x0);if(dx>=12&&g){const left=Math.max(g.L,Math.min(z.x0,z.x1)),right=Math.min(g.L+g.plotW,Math.max(z.x0,z.x1)),requestedSpan=Math.max(1,(right-left)*g.viewSpan/g.plotW),minZoom=g.baseViewSpan/g.span,nextZoom=Math.max(minZoom,Math.min(24,g.baseViewSpan/requestedSpan)),targetStart=g.viewStart+((left-g.L)/g.plotW)*g.viewSpan;setGapDeepDiveZoomView(cv,g,nextZoom,targetStart);cv._yZoom=1;cv._gapDeepDiveRedraw?.();}else drawGapDeepDiveRangeOverlay(cv);cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode)?'crosshair':'grab';stop(e);return;}
     if(!cv._rangeDrag)return;cv._rangeDrag=null;cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode)?'crosshair':'grab';stop(e);drawGapDeepDiveRangeOverlay(cv);
   };
   cv.addEventListener('pointerup',finish,true);cv.addEventListener('pointercancel',finish,true);
@@ -163,9 +169,8 @@ function bindGapDeepDiveRangeInput(cv){
   cv.addEventListener('wheel',e=>{
   if(!cv._fullFeatures||!cv._wheelZoomEnabled||!cv._rangeGeometry)return;
     const g=cv._rangeGeometry;if(e.offsetX<g.L||e.offsetX>g.L+g.plotW)return;
-    const ratio=(e.offsetX-g.L)/g.plotW,anchor=g.viewStart+ratio*g.viewSpan,zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,(cv._rangeZoom||1)*Math.exp(-Math.sign(e.deltaY)*.18)));
-    cv._rangeZoom=zoom;const nextSpan=Math.min(g.span,g.baseViewSpan/zoom),viewBase=g.viewBase;
-    cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,anchor-ratio*nextSpan-viewBase));
+    const ratio=(e.offsetX-g.L)/g.plotW,anchor=g.viewStart+ratio*g.viewSpan,zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,(cv._rangeZoom||1)*Math.exp(-Math.sign(e.deltaY)*.18))),nextSpan=Math.min(g.span,g.baseViewSpan/zoom);
+    setGapDeepDiveZoomView(cv,g,zoom,anchor-ratio*nextSpan);
     e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();cv._gapDeepDiveRedraw?.();
   },{capture:true,passive:false});
 }
@@ -200,7 +205,7 @@ function bindUnifiedChartFeatures(cv,ui,persist,redraw){
   ui.clearAvwap.onclick=()=>{cv._avwapAnchors=null;cv._avwapSelectMode=false;setGapDeepDiveMouseMode('zoom',cv,ui);ui.status.textContent='AVWAP cleared.';cv._featurePersist?.();cv._featureRedraw?.();};
   ui.deleteMeasure.onclick=()=>{cv._rangeMeasures=(cv._rangeMeasures||[]).filter(m=>m.id!==cv._selectedRangeId);cv._selectedRangeId=cv._rangeMeasures.at(-1)?.id||null;cv._featurePersist?.();cv._featureRedraw?.();};
   ui.clearMeasures.onclick=()=>{cv._rangeMeasures=[];cv._selectedRangeId=null;cv._featurePersist?.();cv._featureRedraw?.();};
-  const zoomBy=factor=>{const g=cv._rangeGeometry;if(!g)return;const zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,(cv._rangeZoom||1)*factor)),anchor=g.viewStart+g.viewSpan/2,nextSpan=Math.min(g.span,g.baseViewSpan/zoom);cv._rangeZoom=zoom;cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,anchor-nextSpan/2-g.viewBase));cv._gapDeepDiveRedraw?.();};ui.zoomIn.onclick=()=>zoomBy(1.25);ui.zoomOut.onclick=()=>zoomBy(.8);
+  const zoomBy=factor=>{const g=cv._rangeGeometry;if(!g)return;const zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,(cv._rangeZoom||1)*factor)),anchor=g.viewStart+g.viewSpan/2,nextSpan=Math.min(g.span,g.baseViewSpan/zoom);setGapDeepDiveZoomView(cv,g,zoom,anchor-nextSpan/2);cv._gapDeepDiveRedraw?.();};ui.zoomIn.onclick=()=>zoomBy(1.25);ui.zoomOut.onclick=()=>zoomBy(.8);
   ui.reset.onclick=()=>{cv._rangeZoom=1;cv._zoom=1;cv._panOffset=0;cv._yZoom=1;cv._featurePersist?.();cv._featureRedraw?.();};
   ui.copy.onclick=async()=>{try{await copyChartWithOverlays(cv,ui.overlay,ui.measureBox);ui.copy.textContent='Copied ✓';setTimeout(()=>ui.copy.textContent='Copy PNG',1200);}catch(error){ui.status.textContent='PNG copy unavailable: '+error.message;}};
   [ui.vwap,ui.twap].forEach((toggle,index)=>toggle.onchange=()=>{if(index===0)cv._showVWAP=toggle.checked;else cv._showTWAP=toggle.checked;cv._featurePersist?.();cv._featureRedraw?.();});
