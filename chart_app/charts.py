@@ -38,7 +38,7 @@ from urllib.parse import quote, urljoin, urlparse
 from concurrent.futures import Future, ThreadPoolExecutor
 from flask import g
 
-GAP_DEEPDIVE_TICKERS = list(dict.fromkeys("VIOT PPBT FAMI BIAF GELS RDAC GYGY WETO CLGN RDHL WHLR QNRX LGPS VNRX PPCB CELU BRNX SXTC VRAX SKK BIVI TNON CDTG ZSTK YJ EJH SGLY ONFO CIGL YMT DKI HKIT HUIZ GAUZ CELZ CLRO YXT ZYBT HYFM FCUV FFAI EDBL CJMB AKAN INLF GVH DXST EHGO ZBAO YMAT GMM YRD DXF CDT APWC IHT ICCM CIIT BEEM CRE CAST AIDX BYAH DSY BQ CHNR CCTG CGTL AZI CHAI BATL DAIC ANYBAOS BOXL BYSI CHOW DOGZ FRGT FXHO HCTI INM ITOC IVF JZXN KUST KXIN LGHL LICN LNAI LRHC LXEH MBRX MIMI MLEC MTEN NAII NCRA NEXR NIXX NUWE NVVE NXTS ODYS OFAL OMH OPTX ORIS PAVS PCLA PCSA PN PWCM RGNT RLYB RMAX RMSG RUBI RYOJ SAFX SBFM SDOT SFHG SILO SKYQ SLGB SLND SOAR SOBR SSM STG TDIC TRNR TURB TWG UK UPC VEEE VIVK VIVS".split()))
+GAP_DEEPDIVE_TICKERS = list(dict.fromkeys("VIOT PPBT FAMI BIAF GELS RDAC GYGY WETO CLGN RDHL WHLR QNRX LGPS VNRX PPCB CELU BRNX SXTC VRAX SKK BIVI TNON CDTG ZSTK YJ EJH SGLY ONFO CIGL YMT DKI HKIT HUIZ GAUZ CELZ CLRO YXT ZYBT HYFM FCUV FFAI EDBL CJMB AKAN INLF GVH DXST EHGO ZBAO YMAT GMM YRD DXF CDT APWC IHT ICCM CIIT BEEM CRE CAST AIDX BYAH DSY BQ CHNR CCTG CGTL AZI CHAI BATL DAIC ANY BAOS BOXL BYSI CHOW DOGZ FRGT FXHO HCTI INM ITOC IVF JZXN KUST KXIN LGHL LICN LNAI LRHC LXEH MBRX MIMI MLEC MTEN NAII NCRA NEXR NIXX NUWE NVVE NXTS ODYS OFAL OMH OPTX ORIS PAVS PCLA PCSA PN PWCM RGNT RLYB RMAX RMSG RUBI RYOJ SAFX SBFM SDOT SFHG SILO SKYQ SLGB SLND SOAR SOBR SSM STG TDIC TRNR TURB TWG UK UPC VEEE VIVK VIVS".split()))
 GAP_DEEPDIVE_JOBS = {}
 GAP_DEEPDIVE_LOCK = threading.Lock()
 _GAP_DEEPDIVE_MANIFESTS = {}
@@ -51,6 +51,8 @@ _SEC_DILUTION_DATA_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_pref
 _SEC_DILUTION_JOB_LOCK = threading.Lock()
 _GAP_DEEPDIVE_DAILY_LOCK = threading.Lock()
 _GAP_DEEPDIVE_DAILY_PENDING = {}
+_GAP_CHART_CHUNK_LOCK = threading.Lock()
+_GAP_CHART_CHUNK_PENDING = {}
 
 
 class _SecFilingTextParser(HTMLParser):
@@ -1781,6 +1783,71 @@ def _gap_deepdive_daily_history(ticker, force=False):
     return pending.result()
 
 
+def _gap_chart_context_minute_chunk(ticker, first, last):
+    """Single-flight cache for calendar-week one-minute chunks."""
+    cache_key=f'{ticker}_{first}_{last}_context_1m_v3'
+    ttl=30 if last>=dt.date.today().isoformat() else 30*86400
+    cached=cget(cache_key,ttl)
+    if cached is not None:
+        return cached
+    with _GAP_CHART_CHUNK_LOCK:
+        pending=_GAP_CHART_CHUNK_PENDING.get(cache_key)
+        owner=pending is None
+        if owner:
+            pending=Future();_GAP_CHART_CHUNK_PENDING[cache_key]=pending
+    if not owner:
+        return pending.result()
+    try:
+        rows=(poly_get(f'/v2/aggs/ticker/{ticker}/range/1/minute/{first}/{last}',
+                       {'adjusted':'false','sort':'asc','limit':50000}).get('results') or [])
+        cput(cache_key,rows)
+        pending.set_result(rows)
+        return rows
+    except Exception as exc:
+        pending.set_exception(exc)
+        raise
+    finally:
+        with _GAP_CHART_CHUNK_LOCK:
+            _GAP_CHART_CHUNK_PENDING.pop(cache_key,None)
+
+
+@app.route('/api/chart-context/prefetch')
+def chart_context_prefetch():
+    """Warm a chart's selected session and two neighboring sessions on either side."""
+    user=(request.args.get('user') or '').strip().lower();token=(request.args.get('token') or '').strip()
+    ticker=(request.args.get('ticker') or '').strip().upper();day=(request.args.get('date') or '').strip()
+    if user not in _auth.ALLOWED_USERS or not _db_validate_session(user,token):
+        return jsonify({'error':'Unauthorized'}),401
+    if not re.fullmatch(r'[A-Z.\-]{1,10}',ticker):
+        return jsonify({'error':'Invalid ticker'}),400
+    try: dt.date.fromisoformat(day)
+    except ValueError: return jsonify({'error':'Invalid session date'}),400
+    contexts={}
+    try:
+        # Keep the initial view at one session. Cache the five-session ranges
+        # for every requested interval so panning can reveal them immediately.
+        for timeframe in ('1m','2m','5m'):
+            with app.test_request_context('/api/chart-context',query_string={
+                    'user':user,'token':token,'ticker':ticker,'date':day,
+                    'days':'5','tf':timeframe,'postmarket':'1'}):
+                g.gap_chart_context_session_validated=True
+                response=chart_context()
+                if isinstance(response,tuple):
+                    response,status=response[0],int(response[1])
+                else:
+                    status=int(getattr(response,'status_code',200))
+                payload=response.get_json(silent=True) if hasattr(response,'get_json') else None
+            if status<200 or status>=300 or not isinstance(payload,dict):
+                return jsonify({'error':(payload or {}).get('error') or
+                                f'Could not preload {timeframe} neighboring candles (HTTP {status}).'}),status if 400<=status<600 else 502
+            contexts[timeframe]={'bars':payload.get('bars') or {},'dates':payload.get('dates') or [],
+                                 'days':5,'daily':False}
+        return jsonify({'contexts':contexts,'preloaded_sessions':contexts.get('2m',{}).get('dates',[])})
+    except Exception as exc:
+        app.logger.exception('Gap chart neighboring-candle prefetch failed for %s %s',ticker,day)
+        return jsonify({'error':f'Could not preload neighboring candles ({type(exc).__name__}).'}),502
+
+
 @app.route("/api/chart-context")
 def chart_context():
     """Lazily load nearby daily or multi-session minute bars for a chart card."""
@@ -1790,7 +1857,7 @@ def chart_context():
     include_after_hours=request.args.get("postmarket", "1") != "0"
     try: count=int(request.args.get("days", "5"))
     except ValueError: count=5
-    if user not in _auth.ALLOWED_USERS or not _db_validate_session(user,token): return jsonify({"error":"Unauthorized"}),401
+    if user not in _auth.ALLOWED_USERS or (not getattr(g,'gap_chart_context_session_validated',False) and not _db_validate_session(user,token)): return jsonify({"error":"Unauthorized"}),401
     if not re.fullmatch(r"[A-Z.\-]{1,10}",ticker): return jsonify({"error":"Invalid ticker"}),400
     try: dt.date.fromisoformat(day)
     except ValueError: return jsonify({"error":"Invalid session date"}),400
@@ -1847,20 +1914,19 @@ def chart_context():
             cput(context_key,result)
             return jsonify(result)
         startday,endday=rows[0]["date"],rows[-1]["date"]
-        # Polygon caps aggregate responses. Fetch/cache in 25-session chunks so
-        # a 200-session context remains complete, including extended-hours bars.
-        chunks=[(rows[start]["date"],rows[min(len(rows)-1,start+24)]["date"])
-                for start in range(0,len(rows),25)]
+        # Stable calendar-week chunks let the +/- two-session prefetch be
+        # reused when a later pan requests a wider window, even as history rolls.
+        chunk_ranges={}
+        for row in rows:
+            session=dt.date.fromisoformat(row['date'])
+            first=session-dt.timedelta(days=session.weekday())
+            last=first+dt.timedelta(days=4)
+            chunk_ranges[first.isoformat()]=(first.isoformat(),last.isoformat())
+        chunks=list(chunk_ranges.values())
         from concurrent.futures import ThreadPoolExecutor
         def read_chunk(bounds):
             first,last=bounds
-            cache_key=f'{ticker}_{first}_{last}_context_1m_v2'
-            ttl=30 if last>=dt.date.today().isoformat() else 30*86400
-            raw=cget(cache_key,ttl)
-            if raw is None:
-                raw=(poly_get(f"/v2/aggs/ticker/{ticker}/range/1/minute/{first}/{last}",
-                              {"adjusted":"false","sort":"asc","limit":50000}).get("results") or [])
-                cput(cache_key,raw)
+            raw=_gap_chart_context_minute_chunk(ticker,first,last)
             return poly_frame(raw) if raw else pd.DataFrame()
         with ThreadPoolExecutor(max_workers=min(8,max(1,len(chunks)))) as pool:
             frames=list(pool.map(read_chunk,chunks))
