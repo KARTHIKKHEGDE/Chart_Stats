@@ -182,7 +182,13 @@ function drawGapDeepDiveNavigator(mainCv,baseChart,timeframe){
   const left=Math.max(pad,Math.min(W-pad,at(g.viewStart))),right=Math.max(left+10,Math.min(W-pad,at(g.viewStart+g.viewSpan)));nav._gapNav={left,right,pad,plotW,geometry:g};
   x.fillStyle='rgba(98,200,255,.17)';x.fillRect(left,2,right-left,H-4);x.strokeStyle='#62c8ff';x.lineWidth=1.5;x.strokeRect(left+.5,2.5,right-left-1,H-5);
   x.fillStyle='#d9f2ff';x.fillRect(left-3,2,6,H-4);x.fillRect(right-3,2,6,H-4);
-  if(!nav._gapNavBound){nav._gapNavBound=true;let drag=null;nav.addEventListener('pointerdown',e=>{const q=nav._gapNav;if(!q)return;const px=e.offsetX;drag={x:px,left:q.left,right:q.right,mode:px<q.left+9?'left':px>q.right-9?'right':px<q.right?'body':'jump'};nav.setPointerCapture(e.pointerId);nav.style.cursor=drag.mode==='body'?'grabbing':'ew-resize';e.preventDefault();});nav.addEventListener('pointermove',e=>{if(!drag||!nav._gapNav)return;const q=nav._gapNav,g=q.geometry,dx=e.offsetX-drag.x,unit=g.span/q.plotW;let left=drag.left,right=drag.right;if(drag.mode==='body'){left+=dx;right+=dx;}else if(drag.mode==='left')left+=dx;else if(drag.mode==='right')right+=dx;else{left=e.offsetX-(right-left)/2;right=e.offsetX+(right-left)/2;}left=Math.max(q.pad,Math.min(right-10,left));right=Math.min(nav.clientWidth-q.pad,Math.max(left+10,right));const newSpan=Math.max(1,(right-left)*g.span/q.plotW),zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,g.baseViewSpan/newSpan)),viewBase=g.viewBase,targetStart=g.fullStart+(left-q.pad)*g.span/q.plotW;mainCv._rangeZoom=zoom;mainCv._panOffset=targetStart-viewBase;mainCv._gapDeepDiveRedraw?.();e.preventDefault();});const end=()=>{drag=null;nav.style.cursor='grab';};nav.addEventListener('pointerup',end);nav.addEventListener('pointercancel',end);}
+  if(!nav._gapNavBound){
+    nav._gapNavBound=true;let drag=null;
+    nav.addEventListener('pointerdown',e=>{const q=nav._gapNav;if(!q)return;const px=e.offsetX;drag={x:px,left:q.left,right:q.right,mode:px<q.left+9?'left':px>q.right-9?'right':px<q.right?'body':'jump'};nav.setPointerCapture(e.pointerId);nav.style.cursor=drag.mode==='body'?'grabbing':'ew-resize';e.preventDefault();});
+    nav.addEventListener('pointermove',e=>{if(!drag||!nav._gapNav)return;const q=nav._gapNav,g=q.geometry,dx=e.offsetX-drag.x;let left=drag.left,right=drag.right;if(drag.mode==='body'){left+=dx;right+=dx;}else if(drag.mode==='left')left+=dx;else if(drag.mode==='right')right+=dx;else{left=e.offsetX-(right-left)/2;right=e.offsetX+(right-left)/2;}left=Math.max(q.pad,Math.min(right-10,left));right=Math.min(nav.clientWidth-q.pad,Math.max(left+10,right));const newSpan=Math.max(1,(right-left)*g.span/q.plotW),zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,g.baseViewSpan/newSpan)),viewBase=g.viewBase,targetStart=g.fullStart+(left-q.pad)*g.span/q.plotW;mainCv._rangeZoom=zoom;mainCv._panOffset=targetStart-viewBase;mainCv._onPanChange?.(mainCv._panOffset);mainCv._gapDeepDiveRedraw?.();e.preventDefault();});
+    const end=()=>{if(drag&&mainCv._panMinOffset!==undefined&&mainCv._panMaxOffset!==undefined){if(mainCv._panOffset<=mainCv._panMinOffset+1)mainCv._onPanEdge?.(-1);else if(mainCv._panOffset>=mainCv._panMaxOffset-1)mainCv._onPanEdge?.(1);}drag=null;nav.style.cursor='grab';};
+    nav.addEventListener('pointerup',end);nav.addEventListener('pointercancel',end);
+  }
 }
 function setGapDeepDiveMouseMode(mode,cv,ui={}){
   const measure=ui.measure||$('#gap_chart_measure'),pan=ui.pan||$('#gap_chart_pan');
@@ -280,7 +286,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   // Keep intraday zoom centered on the selected session.  Do not clamp zoom
   // to 1x: that made every zoom-out click a no-op.  The loaded date range is
   // still the upper limit, so zooming out reveals neighboring sessions.
-  const baseViewSpan=daily?span:sessionSpan;
+  const baseViewSpan=daily?Math.min(span,80):sessionSpan;
   const viewSpan=Math.min(span,baseViewSpan/Math.max(.01,zoom)),panLimit=Math.max(0,span-viewSpan)/2;
   let viewBase=fullStart+panLimit,panMin=-panLimit,panMax=panLimit;
   if(multi){const anchorIndex=dates.indexOf(cv._anchorDate||c.date);if(anchorIndex>=0){viewBase=fullStart+anchorIndex*sessionSpan+sessionSpan/2-viewSpan/2;panMin=fullStart-viewBase;panMax=fullStart+span-viewSpan-viewBase;}}
