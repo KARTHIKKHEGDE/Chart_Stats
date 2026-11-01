@@ -268,7 +268,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   let b,dates,multi;const cached=cv._seriesCache;
   if(cached?.source===source&&cached.tf===timeframe){b=cached.bars;dates=cached.dates;multi=cached.multi;}
   else{
-    b=daily?source:aggregateEvBars(source,tf);
+    b=daily||source?.timeframe===timeframe?source:aggregateEvBars(source,tf);
     dates=[...new Set(b?.d||[])];multi=!daily&&dates.length>1;
     if(multi){let last='',n=-1;b={...b,t:b.t.map((t,i)=>{if(b.d[i]!==last){last=b.d[i];n++;}return 240+n*sessionSpan+t-240;})};}
     cv._seriesCache={source,tf:timeframe,bars:b,dates,multi};

@@ -1570,6 +1570,37 @@ def session_chart():
         return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 502
 
 
+def _aggregate_gap_context_bars(source, timeframe):
+    """Aggregate 1-minute context bars and preserve the last indicator value per bucket."""
+    interval=60 if timeframe=='1h' else (int(timeframe[:-1]) if timeframe.endswith('m') else 1)
+    length=len(source.get('t') or [])
+    fields=('t','d','o','h','l','c','v','vw','tw','atw','avh')
+    if interval<=1:
+        return {**{field:list(source.get(field) or []) for field in fields if field in source},'timeframe':timeframe}
+    out={field:[] for field in fields if field in source or field in ('t','d','o','h','l','c','v')}
+    dates=source.get('d') or ['']*length
+    values={field:source.get(field) for field in ('o','h','l','c','v','vw','tw','atw','avh')}
+    last_key=None
+    for index in range(length):
+        minute=int(source['t'][index]);day=str(dates[index] or '')
+        bucket=minute//interval*interval;key=(day,bucket)
+        if key!=last_key:
+            out['t'].append(bucket);out['d'].append(day)
+            for field in ('o','h','l','c','v','vw','tw','atw','avh'):
+                if field in out:
+                    out[field].append(values[field][index] if values[field] is not None else None)
+            last_key=key
+        else:
+            out['h'][-1]=max(out['h'][-1],source['h'][index])
+            out['l'][-1]=min(out['l'][-1],source['l'][index])
+            out['c'][-1]=source['c'][index]
+            out['v'][-1]=(out['v'][-1] or 0)+(source['v'][index] or 0)
+            for field in ('vw','tw','atw','avh'):
+                if field in out and values[field] is not None: out[field][-1]=values[field][index]
+    out['timeframe']=timeframe
+    return out
+
+
 @app.route("/api/chart-context")
 def chart_context():
     """Lazily load nearby daily or multi-session minute bars for a chart card."""
@@ -1584,7 +1615,11 @@ def chart_context():
     try: dt.date.fromisoformat(day)
     except ValueError: return jsonify({"error":"Invalid session date"}),400
     if tf not in ("1m","2m","3m","5m","15m","30m","1h","1d"): return jsonify({"error":"Invalid timeframe"}),400
-    count=max(1,min(200 if tf=="1d" else 80,count))
+    count=max(1,min(400,count))
+    context_key=f'gap_chart_context_v2_{ticker}_{day}_{tf}_{count}_{int(include_after_hours)}'
+    context_ttl=30 if day==dt.date.today().isoformat() else 3600
+    cached_context=cget(context_key,context_ttl)
+    if cached_context is not None: return jsonify(cached_context)
     try:
         daily=load_daily(ticker); idx=next((i for i,r in enumerate(daily) if r["date"]==day),None)
         live=None
@@ -1621,14 +1656,30 @@ def chart_context():
                 "dollar_volume":float(row.get("vw") or row.get("c") or 0)*float(row.get("v") or 0),
             }
         if tf=="1d":
-            bars={"t":list(range(len(rows))),"d":[r["date"] for r in rows],"o":[r["o"] for r in rows],"h":[r["h"] for r in rows],"l":[r["l"] for r in rows],"c":[r["c"] for r in rows],"v":[r["v"] for r in rows],"vw":[None]*len(rows)}
-            return jsonify({"bars":bars,"dates":[r["date"] for r in rows],"daily":True,"metrics":daily_metrics})
+            bars={"t":list(range(len(rows))),"d":[r["date"] for r in rows],"o":[r["o"] for r in rows],"h":[r["h"] for r in rows],"l":[r["l"] for r in rows],"c":[r["c"] for r in rows],"v":[r["v"] for r in rows],"vw":[None]*len(rows),"timeframe":"1d"}
+            result={"bars":bars,"dates":[r["date"] for r in rows],"daily":True,"metrics":daily_metrics}
+            cput(context_key,result)
+            return jsonify(result)
         startday,endday=rows[0]["date"],rows[-1]["date"]
-        key=f"{ticker}_{startday}_{endday}_context_1m"; raw=cget(key)
-        if raw is None:
-            raw=(poly_get(f"/v2/aggs/ticker/{ticker}/range/1/minute/{startday}/{endday}",{"adjusted":"false","sort":"asc","limit":50000}).get("results") or [])
-            cput(key,raw)
-        frame=poly_frame(raw) if raw else pd.DataFrame()
+        # Polygon caps aggregate responses. Fetch/cache in 25-session chunks so
+        # a 200-session context remains complete, including extended-hours bars.
+        chunks=[(rows[start]["date"],rows[min(len(rows)-1,start+24)]["date"])
+                for start in range(0,len(rows),25)]
+        from concurrent.futures import ThreadPoolExecutor
+        def read_chunk(bounds):
+            first,last=bounds
+            cache_key=f'{ticker}_{first}_{last}_context_1m_v2'
+            ttl=30 if last>=dt.date.today().isoformat() else 30*86400
+            raw=cget(cache_key,ttl)
+            if raw is None:
+                raw=(poly_get(f"/v2/aggs/ticker/{ticker}/range/1/minute/{first}/{last}",
+                              {"adjusted":"false","sort":"asc","limit":50000}).get("results") or [])
+                cput(cache_key,raw)
+            return poly_frame(raw) if raw else pd.DataFrame()
+        with ThreadPoolExecutor(max_workers=min(8,max(1,len(chunks)))) as pool:
+            frames=list(pool.map(read_chunk,chunks))
+        frames=[part for part in frames if not part.empty]
+        frame=pd.concat(frames).sort_index() if frames else pd.DataFrame()
         chunks=[]
         for date in [r["date"] for r in rows]:
             if live is not None and date==day:
@@ -1637,10 +1688,20 @@ def chart_context():
                 dayframe=frame[frame.index.date==dt.date.fromisoformat(date)]
             else:
                 continue
-            packed=bars2(dayframe, include_after_hours=include_after_hours)
+            prepared_key=f'gap_chart_session_v2_{ticker}_{date}_{tf}_{int(include_after_hours)}'
+            prepared_ttl=30 if date>=dt.date.today().isoformat() else 30*86400
+            packed=cget(prepared_key,prepared_ttl)
+            if packed is None:
+                one_minute=bars2(dayframe,include_after_hours=include_after_hours)
+                packed=_aggregate_gap_context_bars(one_minute,tf) if one_minute else None
+                if packed: cput(prepared_key,packed)
             if packed:
                 packed["d"]=[date]*len(packed["t"]); chunks.append(packed)
         if not chunks: return jsonify({"error":"No intraday bars are available for this range"}),404
-        bars={k:sum((p[k] for p in chunks),[]) for k in ("t","d","o","h","l","c","v","vw")}
-        return jsonify({"bars":bars,"dates":[p["d"][0] for p in chunks],"daily":False,"metrics":daily_metrics,"after_hours":include_after_hours})
+        fields=tuple(dict.fromkeys(field for part in chunks for field in part if field!='timeframe'))
+        bars={field:sum((part.get(field,[]) for part in chunks),[]) for field in fields}
+        bars['timeframe']=tf
+        result={"bars":bars,"dates":[p["d"][0] for p in chunks],"daily":False,"metrics":daily_metrics,"after_hours":include_after_hours}
+        cput(context_key,result)
+        return jsonify(result)
     except Exception as exc: return jsonify({"error":f"{type(exc).__name__}: {exc}"}),502
