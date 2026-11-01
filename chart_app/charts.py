@@ -1914,22 +1914,29 @@ def chart_context():
             cput(context_key,result)
             return jsonify(result)
         startday,endday=rows[0]["date"],rows[-1]["date"]
-        # Stable calendar-week chunks let the +/- two-session prefetch be
-        # reused when a later pan requests a wider window, even as history rolls.
-        chunk_ranges={}
-        for row in rows:
-            session=dt.date.fromisoformat(row['date'])
-            first=session-dt.timedelta(days=session.weekday())
-            last=first+dt.timedelta(days=4)
-            chunk_ranges[first.isoformat()]=(first.isoformat(),last.isoformat())
-        chunks=list(chunk_ranges.values())
-        from concurrent.futures import ThreadPoolExecutor
-        def read_chunk(bounds):
-            first,last=bounds
-            raw=_gap_chart_context_minute_chunk(ticker,first,last)
-            return poly_frame(raw) if raw else pd.DataFrame()
-        with ThreadPoolExecutor(max_workers=min(8,max(1,len(chunks)))) as pool:
-            frames=list(pool.map(read_chunk,chunks))
+        from chart_app.market_data import _deepdive_candle_rows
+        bundled=[_deepdive_candle_rows(ticker,row['date']) for row in rows]
+        if all(bundled):
+            # The selected gap day and +/- two neighboring sessions are shipped
+            # as a private repo seed, so this path needs no cold Polygon request.
+            frames=[poly_frame(raw) for raw in bundled]
+        else:
+            # Stable calendar-week chunks let a wider pan reuse warmed data,
+            # even as the rolling daily history range advances.
+            chunk_ranges={}
+            for row in rows:
+                session=dt.date.fromisoformat(row['date'])
+                first=session-dt.timedelta(days=session.weekday())
+                last=first+dt.timedelta(days=4)
+                chunk_ranges[first.isoformat()]=(first.isoformat(),last.isoformat())
+            chunks=list(chunk_ranges.values())
+            from concurrent.futures import ThreadPoolExecutor
+            def read_chunk(bounds):
+                first,last=bounds
+                raw=_gap_chart_context_minute_chunk(ticker,first,last)
+                return poly_frame(raw) if raw else pd.DataFrame()
+            with ThreadPoolExecutor(max_workers=min(8,max(1,len(chunks)))) as pool:
+                frames=list(pool.map(read_chunk,chunks))
         frames=[part for part in frames if not part.empty]
         frame=pd.concat(frames).sort_index() if frames else pd.DataFrame()
         chunks=[]

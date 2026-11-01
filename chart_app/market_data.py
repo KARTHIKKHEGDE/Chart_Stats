@@ -1,6 +1,8 @@
 """Market Data calculations and formatting."""
 import json
+import gzip
 import threading
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -30,6 +32,9 @@ yf = app.yf
 _DEEPDIVE_CANDLE_PATH = Path(__file__).resolve().parent.parent / "data" / "gap_deepdive_candles_2026.json"
 _DEEPDIVE_CANDLE_CACHE = None
 _DEEPDIVE_CANDLE_LOCK = threading.Lock()
+_DEEPDIVE_NEIGHBOR_CANDLE_DIR = Path(__file__).resolve().parent.parent / "data" / "gap_deepdive_neighbor_candles_2026"
+_DEEPDIVE_NEIGHBOR_CANDLE_CACHE = OrderedDict()
+_DEEPDIVE_NEIGHBOR_CANDLE_LOCK = threading.Lock()
 _DAILY_CANDLE_SEED_PATH = Path(__file__).resolve().parent.parent / "data" / "gap_deepdive_daily_2026.json"
 _DAILY_CANDLE_SEED = None
 _DAILY_CANDLE_SEED_LOCK = threading.Lock()
@@ -48,7 +53,25 @@ def _deepdive_candle_rows(ticker, day):
                     _DEEPDIVE_CANDLE_CACHE = json.loads(_DEEPDIVE_CANDLE_PATH.read_text(encoding="utf-8")).get("sessions", {})
                 except Exception:
                     _DEEPDIVE_CANDLE_CACHE = {}
-    bars = _DEEPDIVE_CANDLE_CACHE.get(f"{ticker.upper()}|{day}") or []
+    ticker=str(ticker).upper()
+    bars = _DEEPDIVE_CANDLE_CACHE.get(f"{ticker}|{day}") or []
+    if not bars:
+        with _DEEPDIVE_NEIGHBOR_CANDLE_LOCK:
+            sessions=_DEEPDIVE_NEIGHBOR_CANDLE_CACHE.get(ticker)
+            if sessions is None:
+                path=_DEEPDIVE_NEIGHBOR_CANDLE_DIR/f"{ticker}.json.gz"
+                try:
+                    with gzip.open(path,"rt",encoding="utf-8") as source:
+                        payload=json.load(source)
+                    sessions=payload.get("sessions",{}) if isinstance(payload,dict) else {}
+                except Exception:
+                    sessions={}
+                _DEEPDIVE_NEIGHBOR_CANDLE_CACHE[ticker]=sessions
+                while len(_DEEPDIVE_NEIGHBOR_CANDLE_CACHE)>8:
+                    _DEEPDIVE_NEIGHBOR_CANDLE_CACHE.popitem(last=False)
+            else:
+                _DEEPDIVE_NEIGHBOR_CANDLE_CACHE.move_to_end(ticker)
+            bars=sessions.get(day) or []
     if not bars:
         return None
     return [{"t": t, "o": o, "h": h, "l": l, "c": c, "v": v} for t, o, h, l, c, v in bars]
