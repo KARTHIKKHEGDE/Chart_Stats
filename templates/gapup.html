@@ -858,14 +858,36 @@ async function requestDilutionHistory(ticker,asOfDate=''){
   const modal=$('#filing_explanation_modal'),status=$('#filing_explanation_status'),content=$('#filing_explanation_content');
   modal.style.display='flex';content.hidden=true;content.innerHTML='';$('#filing_explanation_title').textContent=`${ticker} · Dilution history`;
   status.textContent=`Reviewing filings and dilution status as of ${asOfDate||'today'}…`;
-  const readApiJson=async response=>{const raw=await response.text();let data;try{data=JSON.parse(raw);}catch{throw new Error(`Server returned a non-JSON response (HTTP ${response.status}). The analysis could not be started or completed.`);}if(!response.ok)throw new Error(data.error||`Analysis request failed (HTTP ${response.status}).`);return data;};
+  const apiRequest=async(url,payload,phase,retries=0)=>{
+    for(let attempt=0;;attempt++){
+      try{
+        const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        const raw=await response.text();let data;
+        try{data=JSON.parse(raw);}catch{const error=new Error(`${phase} returned a non-JSON response (HTTP ${response.status}).`);error.status=response.status;error.retryable=response.status>=500;throw error;}
+        if(!response.ok){const error=new Error(data.error||`${phase} failed (HTTP ${response.status}).`);error.status=response.status;error.retryable=response.status>=500;throw error;}
+        return data;
+      }catch(error){
+        if(attempt>=retries||(!error.retryable&&error.name!=='TypeError'))throw error;
+        await new Promise(resolve=>setTimeout(resolve,700*(attempt+1)));
+      }
+    }
+  };
   try{
-    const payload={user:currentUser||'',token:sessionToken||'',ticker,as_of:asOfDate||''};
-    const started=await readApiJson(await fetch('/api/sec-dilution-history/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}));
+    const payload={user:currentUser||'',token:sessionToken||'',ticker,as_of:asOfDate||'',request_id:crypto.randomUUID().replace(/-/g,'')};
+    const started=await apiRequest('/api/sec-dilution-history/start',payload,'Starting dilution analysis',2);
     const beganAt=Date.now();
+    let consecutivePollErrors=0;
     while(Date.now()-beganAt<10*60*1000){
       await new Promise(resolve=>setTimeout(resolve,1800));
-      const job=await readApiJson(await fetch('/api/sec-dilution-history/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,job_id:started.job_id})}));
+      let job;
+      try{job=await apiRequest('/api/sec-dilution-history/status',{...payload,job_id:started.job_id},'Checking dilution analysis',2);consecutivePollErrors=0;}
+      catch(error){
+        if(!error.retryable&&error.name!=='TypeError')throw error;
+        consecutivePollErrors++;
+        if(consecutivePollErrors>=8)throw new Error(`The server is still unavailable while checking the analysis (last response: HTTP ${error.status||'network error'}). Please retry; your request may still be running.`);
+        status.textContent=`Temporary server connection issue; retrying status check (${consecutivePollErrors}/8)…`;
+        continue;
+      }
       if(job.status==='complete'){renderDilutionHistory(job.result);return;}
       if(job.status==='error')throw new Error(job.error||'Could not analyze dilution history.');
       status.textContent=`Checking SEC filings and dilution status as of ${asOfDate||'today'}… ${Math.floor((Date.now()-beganAt)/1000)}s`;
