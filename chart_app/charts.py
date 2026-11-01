@@ -45,6 +45,7 @@ _GAP_DEEPDIVE_CHART_PAYLOAD_LOCK = threading.Lock()
 _FILING_AI_LOCK = threading.Lock()
 _FILING_AI_KEY_POS = {"groq": 0, "gemini": 0}
 _SEC_DILUTION_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix='sec-dilution')
+_SEC_DILUTION_DATA_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix='sec-dilution-data')
 
 
 class _SecFilingTextParser(HTMLParser):
@@ -1282,6 +1283,9 @@ def sec_dilution_history():
         candidate_keys={str(item.get('accession') or '') for item in candidates}
         candidates.extend(item for item in recent_ownership if str(item.get('accession') or '') not in candidate_keys)
         candidates=sorted(candidates,key=lambda item:item.get('filing_date',''),reverse=True)[:55]
+        # Start market/share lookups while the SEC filing downloads are running.
+        market_inputs_future=_SEC_DILUTION_DATA_EXECUTOR.submit(
+            _load_sec_dilution_market_inputs,ticker,asof_date,current_day)
         def dilution_excerpt(text,limit=8500):
             patterns=(r'at.the.market|\bATM\b|sales agreement',r'warrants?',r'convertible|conversion',
                      r'principal|accrued interest',r'shares? outstanding',r'subsequent events?',
@@ -1387,13 +1391,17 @@ def sec_dilution_history():
                         ticker,len(candidates),len(exhibit_jobs),time.monotonic()-request_started)
         if not sources:
             return jsonify({'error':'No readable SEC filings were found for this company.'}),404
+        market_inputs=market_inputs_future.result()
         market_snapshot={'market_date':None,'last_price':None,'shares_outstanding':None,
                          'shares_filed':None,'shares_as_of':None,'float_shares':None,
                          'float_as_of':None,'adtv_20d':None,'public_float_pricing_date':None,
                          'public_float_price':None,'requested_pricing_date':'latest completed trading session on or before as-of date',
                          'pricing_method':'Latest completed daily close (last sale)','notes':[]}
+        daily_rows=market_inputs['daily']
+        if market_inputs['errors']['daily']:
+            exc=market_inputs['errors']['daily']
+            market_snapshot['notes'].append(f'As-of price/volume data unavailable ({type(exc).__name__}).')
         try:
-            daily_rows=load_daily(ticker) or []
             # Ignore a still-forming daily bar for today's date; historical
             # dates already refer to completed sessions.
             cutoff=asof_date
@@ -1414,16 +1422,15 @@ def sec_dilution_history():
         except Exception as exc:
             market_snapshot['notes'].append(f'As-of price/volume data unavailable ({type(exc).__name__}).')
         try:
-            from chart_app.market_data import latest_security_stats, load_shares_out, load_splits
             # Keep SEC companyfacts and split data on their normal short cache
             # lifetimes (3 and 7 days). Forcing both caches cold on every report
             # added up to two avoidable SEC/market-data round trips.
-            facts=load_shares_out(ticker) or []
+            facts=market_inputs['shares']
             fact=max((row for row in facts if row.get('filed','')<=today),key=lambda row:row.get('filed',''),default=None)
             if fact:
                 shares=float(fact.get('val') or 0)
                 fact_end=str(fact.get('end') or fact.get('filed') or '')
-                for split in load_splits(ticker) or []:
+                for split in market_inputs['splits']:
                     try:
                         split_date=str(split.get('date') or '')
                         split_from=float(split.get('from') or 0);split_to=float(split.get('to') or 0)
@@ -1435,7 +1442,7 @@ def sec_dilution_history():
                 market_snapshot['shares_filed']=str(fact.get('filed') or '')
                 market_snapshot['shares_as_of']=fact_end
             if asof_date==current_day:
-                stats=latest_security_stats(ticker) or {}
+                stats=market_inputs['stats']
                 market_snapshot['float_shares']=stats.get('float_shares')
                 market_snapshot['float_as_of']=stats.get('float_asof')
                 market_snapshot['vendor_shares_outstanding']=stats.get('shares_outstanding')
@@ -1444,6 +1451,8 @@ def sec_dilution_history():
                 market_snapshot['notes'].append('Historical vendor float is unavailable; current vendor float is omitted for this as-of date.')
         except Exception as exc:
             market_snapshot['notes'].append(f'Share/float snapshot incomplete ({type(exc).__name__}).')
+        for name,error in market_inputs['errors'].items():
+            if error and name!='daily':market_snapshot['notes'].append(f'{name.title()} snapshot data unavailable ({type(error).__name__}).')
         def fmt(value):
             try:return f'{float(value):,.4f}'
             except (TypeError,ValueError):return 'not available'
@@ -1596,6 +1605,26 @@ def _run_sec_dilution_job(job_id, body):
     except Exception as exc:
         app.logger.exception('SEC dilution background job failed (%s)',job_id)
         cput(job_key,{'status':'error','error':f'Could not analyze dilution history ({type(exc).__name__}).'})
+
+
+def _load_sec_dilution_market_inputs(ticker, as_of_date, current_day):
+    """Fetch independent market/share inputs concurrently for a dilution report."""
+    from chart_app.market_data import latest_security_stats, load_shares_out, load_splits
+    def safe_call(function):
+        try:return function(),None
+        except Exception as exc:return None,exc
+    with ThreadPoolExecutor(max_workers=4,thread_name_prefix='dilution-input') as pool:
+        daily_future=pool.submit(safe_call,lambda:load_daily(ticker))
+        shares_future=pool.submit(safe_call,lambda:load_shares_out(ticker))
+        splits_future=pool.submit(safe_call,lambda:load_splits(ticker))
+        stats_future=(pool.submit(safe_call,lambda:latest_security_stats(ticker))
+                      if as_of_date==current_day else None)
+        daily,daily_error=daily_future.result()
+        shares,shares_error=shares_future.result()
+        splits,splits_error=splits_future.result()
+        stats,stats_error=stats_future.result() if stats_future else (None,None)
+    return {'daily':daily or [],'shares':shares or [],'splits':splits or [],'stats':stats or {},
+            'errors':{'daily':daily_error,'shares':shares_error,'splits':splits_error,'stats':stats_error}}
 
 
 @app.route('/api/sec-dilution-history/start',methods=['POST'])
