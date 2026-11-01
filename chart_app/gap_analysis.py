@@ -515,7 +515,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
              "Continuation: closed at/above it · Inside: traded inside the gap day's range. "
              "D2/D3/D5 = cumulative return vs Day-1 close. Squeeze/Drawdn 1/3/5d = max high / low after the Day-1 close within "
              "the next 1/3/5 sessions (e.g. +19/+25/+25). Day #: 1 = first gap day, 2+ = consecutive gapper.")
-    spike_cols = ["Date", "Premkt Spike %", "PM High Time (IST)", "O → H (RTH)", "H → L (RTH)", "$ Vol Till High", "Premkt Vol", "$ Vol Reg Hr / $ Premkt"]
+    spike_cols = ["Date", "Premkt Spike %", "Gap Up (RTH)", "PM High Time (IST)", "O → H (RTH)", "H → L (RTH)", "$ Vol Till High", "Premkt Vol", "$ Vol Reg Hr / $ Premkt"]
     spike_rows = []
     for e in events:
         pm_high_pct = e.get("pm_high_pct")
@@ -528,6 +528,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
         spike_rows.append([
             C(fdate(e["date"]), "w", e["date"]),
             C(pct(pm_high_pct, 0), "g", pm_high_pct),
+            C(pct(e.get("gap"), 0), sc(e.get("gap")), e.get("gap")),
             C(hhmm(e.get("pm_hi_min"), e["date"]), "w", e.get("pm_hi_min")),
             C(pct(e.get("o2h"), 0), sc(e.get("o2h")), e.get("o2h")),
             C(pct(e.get("o2l"), 0), sc(e.get("o2l")), e.get("o2l")),
@@ -537,9 +538,10 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
         ])
     if not spike_rows:
         spike_rows = [[C("—", "w", None), C("—", "w", None), C("—", "w", None), C("—", "w", None),
+                       C("—", "w", None),
                        C("—", "w", None), C("—", "w", None), C("—", "w", None), C("—", "w", None)]]
     tables = [
-        {"title": "[2A] PREMARKET SPIKE DAYS (>40% rise, >$10M premarket $ volume)", "cols": spike_cols, "rows": spike_rows, "dim": [], "foot": "Premarket spike = PM high versus previous close.  O→H and H→L use the RTH open-to-high and open-to-low relationships from the historical event set."},
+        {"title": "[2A] PREMARKET SPIKE DAYS (>40% rise, >$10M premarket $ volume)", "cols": spike_cols, "rows": spike_rows, "dim": [], "foot": "Premarket spike = PM high versus previous close. Gap Up (RTH) = RTH open versus previous close. O→H and H→L use the RTH open-to-high and open-to-low relationships from the historical event set."},
         {"title": f"[2] HISTORICAL GAP UPS (last 1 year, gap ≥ {GAP_MIN*100:.0f}%) — click headers to sort",
          "cols": cols2, "rows": R2, "dim": dim, "foot": foot2},
         {"title": "[3] PREMARKET ANALYSIS", "cols": cols3, "rows": R3, "dim": dim, "foot": foot3},

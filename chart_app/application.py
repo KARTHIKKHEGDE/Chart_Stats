@@ -894,7 +894,7 @@ def premarket_spikes_api():
         return jsonify({"error": "Session expired. Please sign in again."}), 401
     if not re.fullmatch(r"[A-Z.-]{1,10}", ticker):
         return jsonify({"error": "Invalid ticker."}), 400
-    cache_key = f"{ticker}_premarket_spikes_v2"
+    cache_key = f"{ticker}_premarket_spikes_v3"
     cached = cget(cache_key, 6 * 3600)
     if cached is not None:
         return jsonify({"days": cached, "cached": True})
@@ -941,6 +941,7 @@ def premarket_spikes_api():
                 dollar_volume = float((typical_price * premarket["v"]).sum())
                 rth = bars[(minutes >= 570) & (minutes < 960)]
                 rth_dollar_volume = 0.0
+                rth_open_gap = None
                 rth_open_high = None
                 rth_high_low = None
                 if not rth.empty:
@@ -950,6 +951,7 @@ def premarket_spikes_api():
                     rth_high = float(rth["h"].max())
                     rth_low = float(rth["l"].min())
                     if rth_open > 0:
+                        rth_open_gap = (rth_open / prior_close - 1) * 100
                         rth_open_high = (rth_high / rth_open - 1) * 100
                     if rth_high > 0:
                         rth_high_low = (rth_low / rth_high - 1) * 100
@@ -963,6 +965,7 @@ def premarket_spikes_api():
                         "date": day,
                         "pm_high_pct": round((high / prior_close - 1) * 100, 2),
                         "pm_high_time": high_index.tz_convert(IST).strftime("%H:%M"),
+                        "rth_open_gap_pct": round(rth_open_gap, 2) if rth_open_gap is not None else None,
                         "rth_open_high_pct": round(rth_open_high, 2) if rth_open_high is not None else None,
                         "rth_high_low_pct": round(rth_high_low, 2) if rth_high_low is not None else None,
                         "pm_dollar_volume_till_high": round(pm_high_dollar_volume, 2),

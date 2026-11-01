@@ -926,10 +926,11 @@ async function loadPremarketSpikeDays(tab,report){
     const days=data.days||[],compact=n=>new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(Number(n)||0);
     const cell=(value,sort=value)=>[value??'—','w',sort??''];
     const percent=value=>value==null?'—':`${Number(value)>=0?'+':''}${Number(value).toFixed(1)}%`;
-    const cols=['Date','Premkt Spike %','PM High Time (IST)','O → H (RTH)','H → L (RTH)','$ Vol Till High','Premarket Vol','$ Vol Reg Hr / $ Premkt'];
+    const cols=['Date','Premkt Spike %','Gap Up (RTH)','PM High Time (IST)','O → H (RTH)','H → L (RTH)','$ Vol Till High','Premarket Vol','$ Vol Reg Hr / $ Premkt'];
     const rows=days.map(item=>[
       cell(formatDateMDY(item.date),item.date),
       cell(percent(item.pm_high_pct),item.pm_high_pct),
+      cell(percent(item.rth_open_gap_pct),item.rth_open_gap_pct),
       cell(item.pm_high_time),
       cell(percent(item.rth_open_high_pct),item.rth_open_high_pct),
       cell(percent(item.rth_high_low_pct),item.rth_high_low_pct),
