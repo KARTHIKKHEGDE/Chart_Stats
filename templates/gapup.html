@@ -902,6 +902,7 @@ async function run(refresh){
         clearInterval(tab.timer);
         tab.isRunning = false;
         renderTabBar();
+        tab.container.innerHTML = `<span class="r">Could not load report: ${esc(e?.message || e)}</span>`;
       }
     };
 
@@ -1008,8 +1009,7 @@ function renderTab(tab, r, isRefresh){
   o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap"><span>${esc(T.p7)}</span><span style="display:flex;align-items:center;gap:12px;font-size:12px;font-weight:normal;color:#aaa"><span>Premarket gap: <b style="color:#e8e8e8">${esc(pmGapText)}</b></span><label for="path_norm">View <select id="path_norm" style="margin-left:5px"><option value="dev">Price vs VWAP (Dᵥ)</option><option value="dt">Price vs TWAP (Dₜ)</option><option value="spread">ln(VWAP / TWAP)</option><option value="vwap">Cumulative VWAP height</option><option value="twap">Clock-time TWAP height</option><option value="prev_close">Recomposed price from previous close</option><option value="gap">% of premarket gap retained</option></select></label></span></div><canvas id="cv"></canvas>`+
      `<div class="foot" id="path_norm_foot"><span class="b" data-tip="Historical median across VWAP-state-matched gap-up setups.">━ history median<\/span> &nbsp; <span style="color:#6c8" data-tip="Middle 50% range of similar setups.">▒ p25–p75<\/span> &nbsp; <span class="y">━ today<\/span> &nbsp; <span class="y">┅ expected path<\/span> &nbsp; <span class="d">━ each similar setup<\/span> &nbsp; Default Y = price / cumulative VWAP − 1; expected price = projected VWAP × (1 + deviation).<\/div><\/div>`;
 
-  o += `<div class="three recent-layout"><div class="panel recent-filings-panel"><div class="recent-filings-heading"><span><span style="color:#25cf91">●</span> LIVE FILINGS FEED</span><a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent" target="_blank" rel="noopener noreferrer">Full feed ↗</a></div><div class="recent-filings-list" id="recent_filings_feed"></div></div>`+
-     `<div class="panel"><div class="ttl">${esc(T.pc)}</div>${kv(r.pc)}</div></div>`;
+  o += `<div class="panel recent-filings-panel"><div class="recent-filings-heading"><span><span style="color:#25cf91">●</span> LIVE FILINGS FEED</span><a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent" target="_blank" rel="noopener noreferrer">Full feed ↗</a></div><div class="recent-filings-list" id="recent_filings_feed"></div></div>`;
   if(r.pd.rows.length) o += `<div class="panel"><div class="ttl">${esc(T.pd)}</div>${table(r.pd.cols,r.pd.rows,null,false)}</div>`;
 
   tab.container.innerHTML = o;
