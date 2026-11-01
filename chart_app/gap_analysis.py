@@ -275,10 +275,8 @@ def summary_text(st):
 
 def verdict_text(g, st):
     fr = rate(st["below_open"]) or 0
-    kind = "fade" if fr >= .6 else "mixed" if fr > .4 else "squeeze-prone"
-    p75 = st["p75_o2h"] or 0
-    risk = "low" if p75 < .2 else "moderate" if p75 < .45 else "high"
-    return f"{g['letter']} {kind}: {fr:.0%} red, median {pct(st['med_o2c'], 0)}, squeeze risk {risk}"
+    return (f"{fr:.0%} red · Median open→close: {pct(st['med_o2c'], 0)} · "
+            f"Median squeeze (open→high): {pct(st['med_o2h'], 0)}")
 
 
 def pct(x, d=1):
@@ -728,11 +726,8 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     }
     dilution_url = f"https://finviz.com/stock?b=2&p=m&t={quote(t, safe='')}&ta=1&ty=di"
     text = [f"Ticker: {t}  |  Finviz Dilution: {dilution_url}", f"Current Day: {day_display}", head["sub"], "=" * 42,
-            T["p1"], kv_text(left), kv_text(right)]
-    for tb in tables:
-        if "HISTORICAL GAP UPS" in tb["title"] or "PREMARKET SPIKE DAYS" in tb["title"]:
-            continue
-        text += ["", tb["title"], tbl_text(tb["cols"], tb["rows"]), tb["foot"]]
+            f"Chart-Based Fade Grade: {head['grade']} ({head['score']})",
+            f"Verdict: {head['verdict']}", "", T["p1"], kv_text(left), kv_text(right)]
     text += ["", T["p7"], kv_text(ptext, 40)]
     if mrows:
         text += ["", T["pd"], tbl_text(mcols, mrows)]

@@ -188,7 +188,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
       </header>
       <div id="gap_chart_modal_body" style="display:flex;flex-direction:column;position:relative;flex:1;min-height:0;padding:8px;background:#050607">
         <div id="gap_chart_plot_wrap" style="position:relative;flex:1;min-height:0"><canvas id="gap_chart_modal_canvas" style="display:block;width:100%;height:100%"></canvas><canvas id="gap_chart_range_overlay" style="position:absolute;inset:0;display:block;width:100%;height:100%;pointer-events:none"></canvas><div id="gap_chart_crosshair_v" hidden style="position:absolute;z-index:4;top:0;width:0;border-left:1px dashed rgba(220,232,244,.75);pointer-events:none"></div><div id="gap_chart_crosshair_h" hidden style="position:absolute;z-index:4;left:0;height:0;border-top:1px dashed rgba(220,232,244,.75);pointer-events:none"></div><div id="gap_chart_measure_box" hidden style="position:absolute;right:12px;top:12px;z-index:5;max-width:300px;padding:8px 10px;background:rgba(6,13,21,.96);border:1px solid #62c8ff;border-radius:4px;color:#edf6ff;font:13px/1.55 Consolas,monospace;white-space:pre-wrap;pointer-events:none"></div></div>
-        <div id="gap_chart_navigator_wrap" style="height:76px;flex:0 0 76px;margin-top:5px;border:1px solid #242b33;background:#090c10"><canvas id="gap_chart_navigator" style="display:block;width:100%;height:100%;touch-action:none;cursor:grab"></canvas></div>
+        <div id="gap_chart_navigator_wrap" style="height:76px;flex:0 0 76px;margin-top:5px;border:1px solid #242b33;background:#090c10;display:flex;flex-direction:column"><div id="gap_chart_hover_time" style="height:18px;flex:0 0 18px;padding:1px 8px;color:#9ba6b0;font:11px/16px Consolas,monospace">Hover a candle to see its time · IST</div><canvas id="gap_chart_navigator" style="display:block;width:100%;height:calc(100% - 18px);flex:1;min-height:0;touch-action:none;cursor:grab"></canvas></div>
       </div>
       <footer id="gap_chart_avwap_status" style="padding:8px 14px;border-top:1px solid #252b31;color:#aab4bf;font-size:12px">VWAP and TWAP are shown. Choose AVWAP to click anchor A, then anchor B.</footer>
     </section>
@@ -739,17 +739,24 @@ function recentFilingAge(value){
   if(elapsed<24*60*60*1000)return `${Math.floor(elapsed/3600000)} hr${elapsed>=2*3600000?'s':''} ago`;
   const days=Math.floor(elapsed/86400000);return `${days} day${days===1?'':'s'} ago`;
 }
-function renderRecentFilingsFeed(target,items,error=''){
+function renderRecentFilingsFeed(target,items,error='',ticker=''){
   if(!target)return;
   if(error){target.innerHTML=`<div style="padding:18px 0;color:#ff7777;font:12px Consolas,monospace">${esc(error)}</div>`;return;}
-  if(!items?.length){target.innerHTML='<div style="padding:18px 0;color:#8da6bd;font:12px Consolas,monospace">No recent public company filings found.</div>';return;}
+  if(!items?.length){target.innerHTML=`<div style="padding:18px 0;color:#8da6bd;font:12px Consolas,monospace">No recent public filings found for ${esc(ticker||'public companies')}.</div>`;return;}
   target.innerHTML=items.map(item=>`<div class="recent-filing-row"><div class="recent-filing-head">${item.ticker?`<strong class="recent-filing-ticker">${esc(item.ticker)}</strong>`:''}<span class="recent-filing-form">${esc(item.form)}</span><span class="recent-filing-company">${esc(item.company)}</span><a class="recent-filing-open" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open filing ↗</a></div><div class="recent-filing-foot"><span>${esc(item.description||item.title||item.form)}</span><time class="recent-filing-age" datetime="${esc(item.filed_at||'')}">${esc(formatDateMDY(item.filed_at))} · ${esc(recentFilingAge(item.filed_at))}</time></div></div>`).join('');
 }
-async function loadRecentFilingsFeed(target){
+async function loadRecentFilingsFeed(target,ticker=''){
   if(!target)return;
-  if(recentFilingsCache.items&&Date.now()-recentFilingsCache.savedAt<120000){renderRecentFilingsFeed(target,recentFilingsCache.items);return;}
-  target.innerHTML='<div style="padding:18px 0;color:#8da6bd;font:12px Consolas,monospace">Loading latest SEC filings…</div>';
-  if(!recentFilingsCache.pending){const query=new URLSearchParams({user:currentUser||'',token:sessionToken||''}),pending=(async()=>{const response=await fetch('/api/recent-filings?'+query.toString()),data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load SEC filings.');recentFilingsCache.items=data.filings||[];recentFilingsCache.savedAt=Date.now();return recentFilingsCache.items;})();recentFilingsCache.pending=pending;pending.then(()=>{if(recentFilingsCache.pending===pending)recentFilingsCache.pending=null;},()=>{if(recentFilingsCache.pending===pending)recentFilingsCache.pending=null;});}
+  if(!ticker&&recentFilingsCache.items&&Date.now()-recentFilingsCache.savedAt<120000){renderRecentFilingsFeed(target,recentFilingsCache.items);return;}
+  target.innerHTML=`<div style="padding:18px 0;color:#8da6bd;font:12px Consolas,monospace">Loading latest SEC filings${ticker?` for ${esc(ticker)}`:''}…</div>`;
+  const query=new URLSearchParams({user:currentUser||'',token:sessionToken||''});
+  if(ticker)query.set('ticker',ticker);
+  if(ticker){
+    try{const response=await fetch('/api/recent-filings?'+query.toString()),data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load SEC filings.');renderRecentFilingsFeed(target,data.filings||'','',ticker);}
+    catch(error){renderRecentFilingsFeed(target,[],error.message,ticker);}
+    return;
+  }
+  if(!recentFilingsCache.pending){const pending=(async()=>{const response=await fetch('/api/recent-filings?'+query.toString()),data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load SEC filings.');recentFilingsCache.items=data.filings||[];recentFilingsCache.savedAt=Date.now();return recentFilingsCache.items;})();recentFilingsCache.pending=pending;pending.then(()=>{if(recentFilingsCache.pending===pending)recentFilingsCache.pending=null;},()=>{if(recentFilingsCache.pending===pending)recentFilingsCache.pending=null;});}
   try{renderRecentFilingsFeed(target,await recentFilingsCache.pending);}catch(error){renderRecentFilingsFeed(target,[],error.message);}
 }
 
@@ -947,10 +954,16 @@ function renderPremarketSpikeDays(tab,report,days){
       cell(`${compact(item.pm_volume)} sh`,item.pm_volume),
       cell(item.rth_to_pm_dollar_volume==null?'—':`${Number(item.rth_to_pm_dollar_volume).toFixed(2)}x`,item.rth_to_pm_dollar_volume)
     ]);
-  panel.innerHTML=`<div class="ttl">Premarket Spike Days · PM high &gt; +40% · PM $ volume ≥ $10M · last year</div>`+
+  panel.innerHTML=`<div class="ttl">Premarket Spike Days · PM high &gt; +40% · PM $ volume &gt; $10M · last year</div>`+
     (rows.length?table(cols,rows,null,true):`<div class="foot">No sessions met both thresholds in the last year.</div>`);
   panel.querySelectorAll('table.sort').forEach(makeSortable);
   report.premarket_surge_days=days;
+  const fadeText=`Historical Premarket Spike Fade Results\n`+
+    `Premarket spike days faded (RTH close below RTH open): ${fades}/${fadeSample.length}${fadeSample.length?` (${(fades/fadeSample.length*100).toFixed(0)}%)`:''}\n`+
+    `RTH gap-up spike days faded: ${gapUpFades}/${gapUpSample.length}${gapUpSample.length?` (${(gapUpFades/gapUpSample.length*100).toFixed(0)}%)`:''}\n`+
+    `Fade = RTH close below RTH open; RTH gap-up = open above previous close.`;
+  report.text=(report.text||'').replace(/\n\nHistorical Premarket Spike Fade Results[\s\S]*$/,'')+`\n\n${fadeText}`;
+  tab.lastText=report.text;
 
   const existingDates=new Set(tab.EV.map(item=>item.date));
   const spikeCharts=days.filter(item=>item.date&&!existingDates.has(item.date));
@@ -999,7 +1012,7 @@ async function loadPremarketSpikeDays(tab,report){
   tab._premarketSpikeLoad=fetch('/api/premarket-spikes?'+query.toString()).then(async response=>{
     const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load premarket history.');
     if(tab.result===report)renderPremarketSpikeDays(tab,report,data.days||[]);
-  }).catch(error=>{if(tab.result===report){const panel=tab.container.querySelector('[data-premarket-spikes]'),status=panel?.querySelector('[data-surge-status]');if(status)status.textContent='Premarket history unavailable: '+error.message;}}).finally(()=>{const stale=tab.result!==report;tab._premarketSpikeLoad=null;if(stale&&tab.result?.head?.ticker===ticker)loadPremarketSpikeDays(tab,tab.result);});
+  }).catch(error=>{if(tab.result===report){const panel=tab.container.querySelector('[data-premarket-spikes]'),status=panel?.querySelector('[data-surge-status]');if(status)status.textContent='Premarket history unavailable: '+error.message;const statsPanel=tab.container.querySelector('[data-premarket-spike-stats]');if(statsPanel)statsPanel.innerHTML=`<div class="foot">Historical fade counts unavailable: ${esc(error.message)}</div>`;}}).finally(()=>{const stale=tab.result!==report;tab._premarketSpikeLoad=null;if(stale&&tab.result?.head?.ticker===ticker)loadPremarketSpikeDays(tab,tab.result);});
   return tab._premarketSpikeLoad;
 }
 
@@ -1024,16 +1037,9 @@ function renderTab(tab, r, isRefresh){
 
   o += `<div class="refresh_banner" style="display:none;background:#141414;border:1px solid #29a8ff;padding:8px 12px;margin-bottom:14px;color:#29a8ff;font-size:13px"></div>`;
   o += `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:14px"><span class="big">Ticker: <span class="c">${esc(h.ticker)}</span></span><a href="${esc(r.dilution_url)}" target="_blank" rel="noopener noreferrer" style="color:#d8b4fe;font-size:13px;font-weight:normal">Finviz Dilution ↗</a>${refreshBadge}</div><br>`;
-  o += `<div class="panel two"><div><div class="ttl">${esc(T.p1)}</div>${kv(r.p1.left)}</div><div>${kv(r.p1.right)}</div></div>`;
   o += `<div class="panel"><div class="ttl">Chart-Based Fade Grade</div>`+
-    `<div>Grade: <span class="badge ${esc(h.gcls)}">${esc(h.grade)}</span> <span class="c">${esc(h.score)}</span></div>`+
-    `<div class="${esc(h.gcls)}">${esc(h.verdict)}</div>`+
-    `<div class="foot">Based on ${Number(h.n)||0} similar historical gap-up setups.</div></div>`+
-    `<div class="panel" data-premarket-spike-stats><div class="ttl">Historical Premarket Spike Fade Results</div>`+
-    `<div class="foot">Loading historical fade counts…</div></div>`;
-  const surgeDays=Array.isArray(r.premarket_surge_days)?r.premarket_surge_days:null;
-  o += `<div class="panel" data-premarket-spikes><div class="ttl">Premarket Spike Days · PM high &gt; +40% · PM $ volume ≥ $10M · last year</div>`+
-    (surgeDays?`<div class="foot">Loading premarket spike days…</div>`:`<div class="foot" data-surge-status>Checking this history in the background…</div>`)+`</div>`;
+    `<div>Grade: <span class="badge ${esc(h.gcls)}">${esc(h.grade)}</span> <span class="c">${esc(h.score)}</span> <span class="${esc(h.gcls)}">· ${esc(h.verdict)}</span></div>`+
+    `<div class="foot">Based on ${Number(h.n)||0} similar historical gap-up setups.</div></div>`;
   const newsItems = r.news || [];
   o += `<div class="panel"><div class="ttl">Latest Press Releases · Yahoo Finance</div>`+
     (newsItems.length ? newsItems.map(item=>{
@@ -1052,9 +1058,12 @@ function renderTab(tab, r, isRefresh){
   const reverseSplits=r.reverse_splits||[];
   o += `<div class="panel"><div class="ttl">Reverse Splits · ${reverseSplits.length} ${reverseSplits.length===1?'event':'events'}</div>`+
     (reverseSplits.length?`<div class="kv">${reverseSplits.map(item=>`<span>Reverse split</span><span>${esc(formatDateMDY(item.date))} · ${esc(item.ratio)} reverse${item.price_conversion?` (${esc(item.price_conversion)})`:''}</span>`).join('')}</div>`:`<div class="foot">No reverse splits found in available split history.</div>`)+`</div>`;
-  (r.tables||[]).filter(t=>t.title.includes('PREMARKET SPIKE DAYS')).forEach(t=>{
-    o += `<div class="panel"><div class="ttl">${esc(t.title)}</div>${table(t.cols,t.rows,t.dim,true)}<div class="foot">${esc(t.foot||'')}</div></div>`;
-  });
+  o += `<div class="panel two"><div><div class="ttl">${esc(T.p1)}</div>${kv(r.p1.left)}</div><div>${kv(r.p1.right)}</div></div>`;
+  const surgeDays=Array.isArray(r.premarket_surge_days)?r.premarket_surge_days:null;
+  o += `<div class="panel" data-premarket-spike-stats><div class="ttl">Historical Premarket Spike Fade Results</div>`+
+    `<div class="foot">Loading historical fade counts…</div></div>`;
+  o += `<div class="panel" data-premarket-spikes><div class="ttl">Premarket Spike Days · PM high &gt; +40% · PM $ volume &gt; $10M · last year</div>`+
+    (surgeDays?`<div class="foot">Loading premarket spike days…</div>`:`<div class="foot" data-surge-status>Checking this history in the background…</div>`)+`</div>`;
   o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">`+
      `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:7px">${esc(T.p6)}<label style="font-size:11px;color:#aaa">All charts <select id="ev_all_tf" class="evtf"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label><select id="ev_all_days" class="evtf" title="Days for all charts"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="60">60 days</option></select><select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
      (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" checked style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/21 EMA cloud + BB)</label></div>`+
@@ -1067,13 +1076,13 @@ function renderTab(tab, r, isRefresh){
   o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap"><span>${esc(T.p7)}</span><span style="display:flex;align-items:center;gap:12px;font-size:12px;font-weight:normal;color:#aaa"><span>Premarket gap: <b style="color:#e8e8e8">${esc(pmGapText)}</b></span><label for="path_norm">View <select id="path_norm" style="margin-left:5px"><option value="dev">Price vs VWAP (Dᵥ)</option><option value="dt">Price vs TWAP (Dₜ)</option><option value="spread">ln(VWAP / TWAP)</option><option value="vwap">Cumulative VWAP height</option><option value="twap">Clock-time TWAP height</option><option value="prev_close">Recomposed price from previous close</option><option value="gap">% of premarket gap retained</option></select></label></span></div><canvas id="cv"></canvas>`+
      `<div class="foot" id="path_norm_foot"><span class="b" data-tip="Historical median across VWAP-state-matched gap-up setups.">━ history median<\/span> &nbsp; <span style="color:#6c8" data-tip="Middle 50% range of similar setups.">▒ p25–p75<\/span> &nbsp; <span class="y">━ today<\/span> &nbsp; <span class="y">┅ expected path<\/span> &nbsp; <span class="d">━ each similar setup<\/span> &nbsp; Default Y = price / cumulative VWAP − 1; expected price = projected VWAP × (1 + deviation).<\/div><\/div>`;
 
-  o += `<div class="panel recent-filings-panel"><div class="recent-filings-heading"><span><span style="color:#25cf91">●</span> LIVE FILINGS FEED</span><a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent" target="_blank" rel="noopener noreferrer">Full feed ↗</a></div><div class="recent-filings-list" id="recent_filings_feed"></div></div>`;
   if(r.pd.rows.length) o += `<div class="panel"><div class="ttl">${esc(T.pd)}</div>${table(r.pd.cols,r.pd.rows,null,false)}</div>`;
+  o += `<div class="panel recent-filings-panel"><div class="recent-filings-heading"><span><span style="color:#25cf91">●</span> LIVE FILINGS · ${esc(h.ticker)}</span><a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent" target="_blank" rel="noopener noreferrer">Full feed ↗</a></div><div class="recent-filings-list" id="recent_filings_feed"></div></div>`;
 
   tab.container.innerHTML = o;
   if(surgeDays) renderPremarketSpikeDays(tab,r,surgeDays);
   else loadPremarketSpikeDays(tab,r);
-  loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'));
+  loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker);
   tab.container.querySelectorAll('table.sort').forEach(makeSortable);
 
   const sigSelect = tab.container.querySelector('#sig');
@@ -1365,7 +1374,7 @@ function bindGapDeepDiveRangeInput(cv){
   },{capture:true,passive:false});
 }
 function drawGapDeepDiveNavigator(mainCv,baseChart,timeframe){
-  const nav=mainCv._navigator||$('#gap_chart_navigator');if(!nav||!mainCv._rangeGeometry)return;const g=mainCv._rangeGeometry,b=g.bars,parent=nav.parentElement,W=parent.clientWidth,H=parent.clientHeight,dpr=Math.min(2,window.devicePixelRatio||1);
+  const nav=mainCv._navigator||$('#gap_chart_navigator');if(!nav||!mainCv._rangeGeometry)return;const g=mainCv._rangeGeometry,b=g.bars,W=nav.clientWidth,H=nav.clientHeight,dpr=Math.min(2,window.devicePixelRatio||1);
   if(W<2||H<2)return;nav.width=Math.round(W*dpr);nav.height=Math.round(H*dpr);nav.style.width=W+'px';nav.style.height=H+'px';const x=nav.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);x.fillStyle='#090c10';x.fillRect(0,0,W,H);
   const pad=8,plotW=W-pad*2,lo=Math.min(...b.l),hi=Math.max(...b.h),range=hi-lo||1,at=t=>pad+plotW*(t-g.fullStart)/g.span;
   x.strokeStyle='#5c788e';x.lineWidth=1;x.beginPath();let started=false;for(let i=0;i<b.t.length;i++){const px=at(b.t[i]),py=H-7-(b.c[i]-lo)/(range)*(H-14);if(px<pad||px>W-pad)continue;if(!started){x.moveTo(px,py);started=true;}else x.lineTo(px,py);}x.stroke();
@@ -1472,7 +1481,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   cv._hoverItems=visible.map(i=>{const day=b.d?.[i]||c.date||'',dayIndex=multi?dates.indexOf(day):-1,minute=daily?0:b.t[i]-(dayIndex>=0?dayIndex*sessionSpan:0);return {key:`${day}|${b.t[i]}`,index:i,date:day,minute,x:X(b.t[i]+(daily?.5:tf/2)),label:daily?`${hoverStamp(day,0).split(' ').slice(0,1)[0]} · Daily IST`:hoverStamp(day,minute),o:b.o[i],h:b.h[i],l:b.l[i],c:b.c[i],prevC:i>0?b.c[i-1]:c.pc,v:b.v[i]||0};});
   cv._rangePointAt=(px,py)=>{if(px<L||px>W-R||py<T||py>T+ph)return null;const plotTime=viewStart+(px-L)/pw*viewSpan,price=hi-(py-T)/ph*(hi-lo);let date=c.date||'',minute=plotTime;if(daily){const index=Math.max(0,Math.min(b.d.length-1,Math.round(plotTime)));date=b.d?.[index]||date;minute=0;}else if(multi){const index=Math.max(0,Math.min(dates.length-1,Math.floor((plotTime-240)/sessionSpan)));date=dates[index]||date;minute=plotTime-index*sessionSpan;}return {date,minute,plotTime,price,label:`${formatDateMDY(date)} ${String(Math.floor(minute/60)).padStart(2,'0')}:${String(Math.floor(minute%60)).padStart(2,'0')} ET`};};
   cv._rangePointAtX=px=>{const p=cv._hoverItems?.reduce((best,item)=>Math.abs(item.x-px)<Math.abs(best.x-px)?item:best,cv._hoverItems?.[0]);return p?{date:p.date,minute:p.minute,price:p.c,label:p.label}:null;};
-  cv._showChartHover=(px,py)=>{if(px<L||px>W-R||!cv._hoverItems?.length){if(cv._hoverTip)cv._hoverTip.style.display='none';return}let item=cv._hoverItems.reduce((best,p)=>Math.abs(p.x-px)<Math.abs(best.x-px)?p:best,cv._hoverItems[0]);const tip=cv._hoverTip;if(!tip)return;const fmt=n=>Number.isFinite(Number(n))?Number(n).toFixed(Number(n)<1?4:2):'—';tip.textContent=cv._showOhlcTip?`O ${fmt(item.o)}  H ${fmt(item.h)}\nL ${fmt(item.l)}  C ${fmt(item.c)}  V ${Number(item.v||0).toLocaleString('en-US')}`:'';tip.style.whiteSpace=cv._showOhlcTip?'pre-line':'nowrap';tip.style.display=cv._showOhlcTip?'block':'none';if(cv._quoteLine){const change=item.c-Number(item.prevC||0),pct=item.prevC?change/Number(item.prevC)*100:0,tp=(item.h+item.l+item.c)/3,dv=tp*item.v,float=Number(cv._floatShares),compact=n=>Number.isFinite(n)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(n):'—',money=n=>Number.isFinite(n)?(Math.abs(n)>=1000?'$'+compact(Math.abs(n)):Math.abs(n)<1?'$'+Math.abs(n).toFixed(4):'$'+Math.abs(n).toFixed(2)):'—',signedMoney=n=>`${n>=0?'+':'-'}${money(change)}`;cv._quoteLine.textContent=`${item.label} · %Chg ${pct>=0?'+':''}${pct.toFixed(2)}% · $Chg ${signedMoney(change)} · Vol ${Number(item.v).toLocaleString('en-US')} · $Vol ${money(dv)} · Float ${Number.isFinite(float)?compact(float)+' sh':'unavailable'}`;cv._quoteLine.style.color=change>=0?'#64d99b':'#ff7777';}if(cv.id==='kwModalCanvas'){tip.style.left='' ;tip.style.top='' ;}else if(cv._showOhlcTip){tip.style.left=Math.min(W-210,Math.max(L,px+14))+'px';tip.style.top=(cv.offsetTop+8)+'px';}else{tip.style.left=Math.max(4,cv.offsetLeft+8)+'px';tip.style.top=(cv.offsetTop+cv.offsetHeight+2)+'px';}cv.removeAttribute('title');};
+  cv._showChartHover=(px,py)=>{if(px<L||px>W-R||!cv._hoverItems?.length){if(cv._hoverTip)cv._hoverTip.style.display='none';if(cv.id==='gap_chart_modal_canvas')$('#gap_chart_hover_time').textContent='Hover a candle to see its time · IST';return}let item=cv._hoverItems.reduce((best,p)=>Math.abs(p.x-px)<Math.abs(best.x-px)?p:best,cv._hoverItems[0]);if(cv.id==='gap_chart_modal_canvas')$('#gap_chart_hover_time').textContent=item.label;const tip=cv._hoverTip;if(!tip)return;const fmt=n=>Number.isFinite(Number(n))?Number(n).toFixed(Number(n)<1?4:2):'—';tip.textContent=cv._showOhlcTip?`O ${fmt(item.o)}  H ${fmt(item.h)}\nL ${fmt(item.l)}  C ${fmt(item.c)}  V ${Number(item.v||0).toLocaleString('en-US')}`:'';tip.style.whiteSpace=cv._showOhlcTip?'pre-line':'nowrap';tip.style.display=cv._showOhlcTip?'block':'none';if(cv._quoteLine){const change=item.c-Number(item.prevC||0),pct=item.prevC?change/Number(item.prevC)*100:0,tp=(item.h+item.l+item.c)/3,dv=tp*item.v,float=Number(cv._floatShares),compact=n=>Number.isFinite(n)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(n):'—',money=n=>Number.isFinite(n)?(Math.abs(n)>=1000?'$'+compact(Math.abs(n)):Math.abs(n)<1?'$'+Math.abs(n).toFixed(4):'$'+Math.abs(n).toFixed(2)):'—',signedMoney=n=>`${n>=0?'+':'-'}${money(change)}`;cv._quoteLine.textContent=`${item.label} · %Chg ${pct>=0?'+':''}${pct.toFixed(2)}% · $Chg ${signedMoney(change)} · Vol ${Number(item.v).toLocaleString('en-US')} · $Vol ${money(dv)} · Float ${Number.isFinite(float)?compact(float)+' sh':'unavailable'}`;cv._quoteLine.style.color=change>=0?'#64d99b':'#ff7777';}if(cv.id==='kwModalCanvas'){tip.style.left='' ;tip.style.top='' ;}else if(cv._showOhlcTip){tip.style.left=Math.min(W-210,Math.max(L,px+14))+'px';tip.style.top=(cv.offsetTop+8)+'px';}else{tip.style.left=Math.max(4,cv.offsetLeft+8)+'px';tip.style.top=(cv.offsetTop+cv.offsetHeight+2)+'px';}cv.removeAttribute('title');};
   cv._viewSpan=viewSpan;cv._panSpan=span;cv._plotWidth=pw;cv._drawEvArgs=[c,sel,bzChecked,targetH,timeframe,zoom];
   if(!cv._panBound){
     cv._panBound=true;cv.style.cursor='grab';

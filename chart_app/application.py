@@ -958,7 +958,7 @@ def premarket_spikes_api():
                         rth_faded = rth_close < rth_open
                     if rth_high > 0:
                         rth_high_low = (rth_low / rth_high - 1) * 100
-                if high / prior_close - 1 > 0.40 and dollar_volume >= 10_000_000:
+                if high / prior_close - 1 > 0.40 and dollar_volume > 10_000_000:
                     pm_through_high = premarket.loc[:high_index]
                     pm_high_dollar_volume = float(
                         (((pm_through_high["h"] + pm_through_high["l"] + pm_through_high["c"]) / 3)
