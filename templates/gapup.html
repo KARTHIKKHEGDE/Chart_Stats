@@ -25,6 +25,7 @@ select{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;f
 .recent-filings-panel{grid-column:span 2;background:#0b0f12;border:1px solid #263039;border-radius:10px;padding:14px 16px}
 .recent-filings-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;color:#8da6bd;font-size:12px;letter-spacing:.08em}
 .recent-filings-heading a,.recent-filing-open{color:#00e88b;text-decoration:none;font-size:11px;white-space:nowrap}
+.recent-filings-date{display:flex;align-items:center;gap:6px;color:#8da6bd;font:11px Consolas,monospace;letter-spacing:0}.recent-filings-date input{width:132px;height:27px;padding:2px 5px;background:#0d1115;border:1px solid #303a42;border-radius:3px;color:#dce5ec;font:11px Consolas,monospace}
 .recent-filings-list{max-height:420px;overflow:auto}
 .recent-filing-row{padding:9px 0;border-bottom:1px solid #20272c}.recent-filing-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.recent-filing-foot{display:flex;align-items:center;gap:12px;justify-content:space-between;padding-top:5px;color:#e8edf3;font-size:12px}.recent-filing-explain{height:auto;min-height:0;background:#101b20;border:1px solid #2e5960;border-radius:3px;color:#8de8e7;padding:3px 8px;font:11px Consolas,monospace;line-height:1.4;cursor:pointer}.recent-filing-explain:hover{background:#173036}.recent-filing-title{height:auto;min-height:0;background:transparent;border:0;color:#e8edf3;padding:0;font:inherit;text-align:left;cursor:pointer}.recent-filing-title:hover{color:#76d9ff;text-decoration:underline}
 .filingExplainOverlay{position:fixed;inset:0;z-index:100200;display:none;align-items:center;justify-content:center;padding:18px;background:rgba(0,0,0,.86)}.filingExplainDialog{width:min(760px,96vw);max-height:90vh;overflow:auto;background:#0a0d10;border:1px solid #35424c;border-radius:8px;padding:18px;color:#e8edf3;box-shadow:0 16px 60px #000}.filingExplainHeader{display:flex;align-items:flex-start;gap:12px;border-bottom:1px solid #263039;padding-bottom:12px}.filingExplainHeader h2{flex:1;margin:0;color:#e8edf3;font-size:17px;letter-spacing:0;text-transform:none;border:0;padding:0;overflow-wrap:anywhere}.filingExplainClose{background:#15191d;border:1px solid #39434c;color:#dce5ec;border-radius:4px;padding:4px 10px;cursor:pointer}.filingExplainSection{margin-top:16px}.filingExplainSection h3{font-size:12px;color:#67c6ff;letter-spacing:.08em;text-transform:uppercase;margin:0 0 6px}.filingExplainSection p,.filingExplainSection li{font:13px/1.6 Consolas,monospace;color:#dce5ec}.filingExplainSection ul{padding-left:20px;margin:6px 0}.filingExplainMeta{font-size:11px;color:#91a0ad;margin-top:5px}.filingExplainLinks{display:grid;gap:7px}.filingExplainRelatedRow{display:flex;align-items:center;gap:8px}.filingExplainLink{flex:1;display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px;text-align:left;background:#101519;border:1px solid #29343d;border-radius:4px;color:#91d5ff;cursor:pointer;font:12px Consolas,monospace}.filingExplainLink:hover{border-color:#5085a1;background:#151f26}.filingExplainStatus{white-space:pre-wrap;color:#bdc9d2;font:13px/1.55 Consolas,monospace;min-height:22px}
@@ -784,15 +785,17 @@ document.addEventListener('click',event=>{
   if(related){event.preventDefault();requestFilingExplanation({ticker:related.dataset.relatedTicker,url:related.dataset.relatedUrl,title:related.dataset.relatedTitle});return;}
   if(event.target.id==='filing_explanation_modal')closeFilingExplanation();
 });
-async function loadRecentFilingsFeed(target,ticker=''){
+async function loadRecentFilingsFeed(target,ticker='',asof=''){
   if(!target)return;
   if(!ticker&&recentFilingsCache.items&&Date.now()-recentFilingsCache.savedAt<120000){renderRecentFilingsFeed(target,recentFilingsCache.items);return;}
   target.innerHTML=`<div style="padding:18px 0;color:#8da6bd;font:12px Consolas,monospace">Loading latest SEC filings${ticker?` for ${esc(ticker)}`:''}…</div>`;
   const query=new URLSearchParams({user:currentUser||'',token:sessionToken||''});
   if(ticker)query.set('ticker',ticker);
+  if(asof)query.set('asof',asof);
   if(ticker){
-    try{const response=await fetch('/api/recent-filings?'+query.toString()),data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load SEC filings.');renderRecentFilingsFeed(target,data.filings||[],'',ticker);}
-    catch(error){renderRecentFilingsFeed(target,[],error.message,ticker);}
+    const requestId=(Number(target.dataset.requestId)||0)+1;target.dataset.requestId=String(requestId);
+    try{const response=await fetch('/api/recent-filings?'+query.toString()),data=await response.json();if(requestId!==Number(target.dataset.requestId))return;if(!response.ok)throw new Error(data.error||'Could not load SEC filings.');renderRecentFilingsFeed(target,data.filings||[],'',ticker);}
+    catch(error){if(requestId===Number(target.dataset.requestId))renderRecentFilingsFeed(target,[],error.message,ticker);}
     return;
   }
   if(!recentFilingsCache.pending){const pending=(async()=>{const response=await fetch('/api/recent-filings?'+query.toString()),data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load SEC filings.');recentFilingsCache.items=data.filings||[];recentFilingsCache.savedAt=Date.now();return recentFilingsCache.items;})();recentFilingsCache.pending=pending;pending.then(()=>{if(recentFilingsCache.pending===pending)recentFilingsCache.pending=null;},()=>{if(recentFilingsCache.pending===pending)recentFilingsCache.pending=null;});}
@@ -1117,12 +1120,14 @@ function renderTab(tab, r, isRefresh){
      `<div class="foot" id="path_norm_foot"><span class="b" data-tip="Historical median across VWAP-state-matched gap-up setups.">━ history median<\/span> &nbsp; <span style="color:#6c8" data-tip="Middle 50% range of similar setups.">▒ p25–p75<\/span> &nbsp; <span class="y">━ today<\/span> &nbsp; <span class="y">┅ expected path<\/span> &nbsp; <span class="d">━ each similar setup<\/span> &nbsp; Default Y = price / cumulative VWAP − 1; expected price = projected VWAP × (1 + deviation).<\/div><\/div>`;
 
   if(r.pd.rows.length) o += `<div class="panel"><div class="ttl">${esc(T.pd)}</div>${table(r.pd.cols,r.pd.rows,null,false)}<div class="foot">${esc(r.pd.foot||'')}</div></div>`;
-  o += `<div class="panel recent-filings-panel"><div class="recent-filings-heading"><span><span style="color:#25cf91">●</span> LIVE FILINGS · ${esc(h.ticker)}</span><a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent" target="_blank" rel="noopener noreferrer">Full feed ↗</a></div><div class="recent-filings-list" id="recent_filings_feed"></div></div>`;
+  o += `<div class="panel recent-filings-panel"><div class="recent-filings-heading"><span><span style="color:#25cf91">●</span> LIVE FILINGS · ${esc(h.ticker)}</span><span style="display:flex;align-items:center;gap:14px"><label class="recent-filings-date">Through date <input type="date" id="recent_filings_asof" aria-label="Show filings through date" title="Show filings filed on or before this date"></label><a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent" target="_blank" rel="noopener noreferrer">Full feed ↗</a></span></div><div class="recent-filings-list" id="recent_filings_feed"></div></div>`;
 
   tab.container.innerHTML = o;
   if(surgeDays) renderPremarketSpikeDays(tab,r,surgeDays);
   else loadPremarketSpikeDays(tab,r);
   loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker);
+  const filingsDate=tab.container.querySelector('#recent_filings_asof');
+  if(filingsDate)filingsDate.onchange=()=>loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker,filingsDate.value);
   tab.container.querySelectorAll('table.sort').forEach(makeSortable);
 
   const sigSelect = tab.container.querySelector('#sig');

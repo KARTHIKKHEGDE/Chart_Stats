@@ -115,7 +115,8 @@ def _call_filing_ai(prompt):
                         timeout=45,
                     )
                 else:
-                    model = os.getenv("GEMINI_FILING_MODEL", "gemini-3.5-flash-lite").strip()
+                    model = (os.getenv("GEMINI_FILING_MODEL") or os.getenv("GEMINI_MODEL")
+                             or "gemini-3.5-flash-lite").strip()
                     response = requests.post(
                         f"https://generativelanguage.googleapis.com/v1beta/models/{quote(model, safe='-.:')}:generateContent",
                         headers={"x-goog-api-key": key},
@@ -888,10 +889,14 @@ def recent_filings_feed():
     if user not in _auth.ALLOWED_USERS or not _db_validate_session(user,token):
         return jsonify({'error':'Unauthorized'}),401
     ticker=(request.args.get('ticker') or '').strip().upper()
+    asof=(request.args.get('asof') or '').strip()
+    if asof:
+        try: asof=dt.date.fromisoformat(asof).isoformat()
+        except ValueError: return jsonify({'error':'Invalid cutoff date'}),400
     if ticker:
         if not re.fullmatch(r'[A-Z.\-]{1,10}',ticker):
             return jsonify({'error':'Invalid ticker'}),400
-        ticker_cache_key=f'sec_recent_ticker_filings_feed_v2_{ticker}'
+        ticker_cache_key=f'sec_recent_ticker_filings_feed_v3_{ticker}_{asof or "latest"}'
         cached=cget(ticker_cache_key,120)
         if cached is not None:
             return jsonify({'filings':cached,'cached':True})
@@ -900,11 +905,14 @@ def recent_filings_feed():
                 {'ticker':ticker,'company':item.get('company',''),
                  'form':item.get('form',''),'description':item.get('title',''),
                  'filed_at':item.get('published_at') or item.get('filing_date',''),
+                 'filing_date':item.get('filing_date',''),
                  'url':item.get('url',''),'title':item.get('title',''),
                  'accession':item.get('accession',''),'cik':item.get('cik',''),
                  'document_url':item.get('document_url','')}
                 for item in _gap_deepdive_sec_filings(ticker)
             ]
+            if asof:
+                filings=[item for item in filings if (item.get('filing_date') or item.get('filed_at','')[:10]) <= asof]
             filings.sort(key=lambda item:item.get('filed_at',''),reverse=True)
             filings=filings[:24]
             cput(ticker_cache_key,filings)
