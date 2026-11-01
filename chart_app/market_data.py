@@ -30,6 +30,12 @@ yf = app.yf
 _DEEPDIVE_CANDLE_PATH = Path(__file__).resolve().parent.parent / "data" / "gap_deepdive_candles_2026.json"
 _DEEPDIVE_CANDLE_CACHE = None
 _DEEPDIVE_CANDLE_LOCK = threading.Lock()
+_DAILY_CANDLE_SEED_PATH = Path(__file__).resolve().parent.parent / "data" / "gap_deepdive_daily_2026.json"
+_DAILY_CANDLE_SEED = None
+_DAILY_CANDLE_SEED_LOCK = threading.Lock()
+_DAILY_CANDLE_REFRESH_LOCK = threading.Lock()
+_DAILY_CANDLE_REFRESH_PENDING = set()
+_DAILY_CANDLE_REFRESH_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="daily-candle-refresh")
 
 
 def _deepdive_candle_rows(ticker, day):
@@ -48,6 +54,56 @@ def _deepdive_candle_rows(ticker, day):
     return [{"t": t, "o": o, "h": h, "l": l, "c": c, "v": v} for t, o, h, l, c, v in bars]
 
 
+def _daily_candle_seed_rows(ticker):
+    """Read the repo-bundled daily candle seed, which survives service restarts."""
+    global _DAILY_CANDLE_SEED
+    if _DAILY_CANDLE_SEED is None:
+        with _DAILY_CANDLE_SEED_LOCK:
+            if _DAILY_CANDLE_SEED is None:
+                try:
+                    payload=json.loads(_DAILY_CANDLE_SEED_PATH.read_text(encoding="utf-8"))
+                    _DAILY_CANDLE_SEED=payload.get("tickers",{}) if isinstance(payload,dict) else {}
+                except Exception:
+                    _DAILY_CANDLE_SEED={}
+    rows=_DAILY_CANDLE_SEED.get(str(ticker).upper()) or []
+    return rows if rows and all("vw" in row for row in rows) else None
+
+
+def _fetch_daily_candles(ticker):
+    end=dt.date.today()+dt.timedelta(days=1)
+    start=end-dt.timedelta(days=HISTORY_DAYS)
+    result=poly_get(f"/v2/aggs/ticker/{ticker}/range/1/day/{start}/{end}",
+                    {"adjusted":"false","sort":"asc","limit":50000})
+    return [{"date":str(pd.to_datetime(row["t"],unit="ms",utc=True).tz_convert(ET).date()),
+             "o":row["o"],"h":row["h"],"l":row["l"],"c":row["c"],
+             "v":round(float(row["v"])),"vw":row.get("vw")}
+            for row in result.get("results",[])]
+
+
+def _refresh_daily_candle_cache(ticker):
+    try:
+        rows=_fetch_daily_candles(ticker)
+        if rows:
+            cput(f"{ticker}_daily3",rows)
+    except Exception as exc:
+        app.app.logger.info("Daily candle refresh failed for %s (%s)",ticker,type(exc).__name__)
+    finally:
+        with _DAILY_CANDLE_REFRESH_LOCK:
+            _DAILY_CANDLE_REFRESH_PENDING.discard(ticker)
+
+
+def _schedule_daily_candle_refresh(ticker):
+    with _DAILY_CANDLE_REFRESH_LOCK:
+        if ticker in _DAILY_CANDLE_REFRESH_PENDING:
+            return
+        _DAILY_CANDLE_REFRESH_PENDING.add(ticker)
+    try:
+        _DAILY_CANDLE_REFRESH_POOL.submit(_refresh_daily_candle_cache,ticker)
+    except Exception:
+        with _DAILY_CANDLE_REFRESH_LOCK:
+            _DAILY_CANDLE_REFRESH_PENDING.discard(ticker)
+
+
 def med(xs):
     values = sorted(x for x in xs if x is not None)
     if not values:
@@ -57,20 +113,26 @@ def med(xs):
 
 
 def load_daily(t, force=False):
-    key = f"{t}_daily3"
-    d = None if force else cget(key, 6 * 3600)
-    if d is not None and any("vw" not in row for row in d):
-        d = None
-    if d is None:
-        end = dt.date.today() + dt.timedelta(days=1)
-        start = end - dt.timedelta(days=HISTORY_DAYS)
-        j = poly_get(f"/v2/aggs/ticker/{t}/range/1/day/{start}/{end}",
-                     {"adjusted": "false", "sort": "asc", "limit": 50000})
-        d = [{"date": str(pd.to_datetime(r["t"], unit="ms", utc=True).tz_convert(ET).date()),
-              "o": r["o"], "h": r["h"], "l": r["l"], "c": r["c"], "v": round(float(r["v"])), "vw": r.get("vw")}
-             for r in j.get("results", [])]
-        cput(key, d)
-    return d
+    ticker=str(t).upper()
+    key = f"{ticker}_daily3"
+    if not force:
+        fresh=cget(key,6*3600)
+        if fresh is not None and all("vw" in row for row in fresh):
+            return fresh
+        # Serve a known-good local copy immediately, then refresh the runtime
+        # cache in the background so Render restarts do not force a cold wait.
+        stale=cget(key)
+        if stale is not None and all("vw" in row for row in stale):
+            _schedule_daily_candle_refresh(ticker)
+            return stale
+        seeded=_daily_candle_seed_rows(ticker)
+        if seeded:
+            cput(key,seeded)
+            _schedule_daily_candle_refresh(ticker)
+            return seeded
+    rows=_fetch_daily_candles(ticker)
+    cput(key,rows)
+    return rows
 
 
 def recent_open_hod_stats(daily):
