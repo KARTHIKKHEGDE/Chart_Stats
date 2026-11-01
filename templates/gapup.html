@@ -220,6 +220,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
           <button id="gap_chart_zoom_in" style="height:32px;padding:0 10px" title="Zoom in">+</button>
           <button id="gap_chart_zoom_reset" style="height:32px;padding:0 10px" title="Reset zoom and pan">Reset</button>
           <button id="gap_chart_copy" style="height:32px;padding:0 10px;font-size:12px">Copy PNG</button>
+          <button id="gap_chart_filings" type="button" onclick="openGapDeepDiveFilings()" style="height:32px;padding:0 12px;border:1px solid #25cf91;background:#092018;color:#50e5ae;font-weight:bold" title="Open this ticker's filings as of the gap-up date">Filings</button>
           <button onclick="closeGapDeepDiveChart()" style="height:32px;padding:0 10px">✕</button>
         </div>
       </header>
@@ -614,6 +615,7 @@ function _showApp(){
   if(!_canRename && !PWD_USERS.includes(cur)){
     _startSessionPoll();
   }
+  setTimeout(consumeGapDeepDiveFilingsJump,0);
 }
 
 function _showGate(){
@@ -777,6 +779,8 @@ function makeSortable(tb){
 
 let openTabs = {}; // ticker -> { ticker, result, lastText, lastChart, EV, container, timer, isRunning }
 let activeTab = null;
+window.gapDeepDiveFilingsJump=null;
+let gapDeepDiveFilingsJumpStarted=false;
 let recentFilingsCache={items:null,savedAt:0,pending:null};
 
 function recentFilingAge(value){
@@ -1200,6 +1204,8 @@ function renderTab(tab, r, isRefresh){
   else loadPremarketSpikeDays(tab,r);
   const filingsDate=tab.container.querySelector('#recent_filings_asof');
   if(filingsDate){const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()),part=k=>parts.find(x=>x.type===k)?.value||'00',today=`${part('year')}-${part('month')}-${part('day')}`;filingsDate.max=today;if(!filingsDate.value)filingsDate.value=today;filingsDate.onchange=()=>loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker,filingsDate.value);}
+  const filingsJump=window.gapDeepDiveFilingsJump;
+  if(filingsJump&&filingsJump.ticker===String(h.ticker).toUpperCase()&&filingsDate){filingsDate.value=filingsJump.date;window.gapDeepDiveFilingsJump=null;setTimeout(()=>tab.container.querySelector('.recent-filings-panel')?.scrollIntoView({behavior:'smooth',block:'center'}),250);}
   loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker,filingsDate?.value||'');
   tab.container.querySelectorAll('table.sort').forEach(makeSortable);
 
@@ -1722,6 +1728,20 @@ function openGapDeepDive(){
   $('#tabs_view').style.display='none';$('#tab_bar').style.display='none';$('#multiday_view').style.display='none';$('#gap_deepdive_view').style.display='block';
   if(!gapDeepDiveLoaded)loadGapDeepDive();
 }
+function consumeGapDeepDiveFilingsJump(){
+  if(gapDeepDiveFilingsJumpStarted||location.pathname==='/gap-deepdive')return;
+  const url=new URL(location.href),ticker=(url.searchParams.get('gap_filings_ticker')||'').trim().toUpperCase(),date=(url.searchParams.get('gap_filings_date')||'').trim();
+  if(!/^[A-Z.\-]{1,10}$/.test(ticker)||!/^\d{4}-\d{2}-\d{2}$/.test(date))return;
+  gapDeepDiveFilingsJumpStarted=true;
+  window.gapDeepDiveFilingsJump={ticker,date};
+  url.searchParams.delete('gap_filings_ticker');url.searchParams.delete('gap_filings_date');
+  history.replaceState({},'',url.pathname+url.search+url.hash);
+  document.body.classList.remove('deepdive-page');
+  $('#gap_deepdive_view').style.display='none';$('#multiday_view').style.display='none';
+  $('#tabs_view').style.display='block';
+  $('#t').value=ticker;
+  run(false);
+}
 async function gapDeepDiveJson(response){
   const type=response.headers.get('content-type')||'';
   if(!type.includes('application/json')){const body=(await response.text()).slice(0,100);throw new Error(`Scan API returned HTML instead of JSON (HTTP ${response.status}). Refresh the app after its server has updated. ${body}`);}
@@ -1976,6 +1996,14 @@ async function openGapDeepDiveChart(item,jobId){
   }catch(error){$('#gap_deepdive_status').textContent=`Could not load ${item.ticker} ${formatDateMDY(item.date)}: ${error.message}`;}
 }
 function closeGapDeepDiveChart(){ $('#gap_deepdive_chart_modal').style.display='none';const cv=$('#gap_chart_modal_canvas');cv._avwapSelectMode=false;gapDeepDiveCurrent=null; }
+function openGapDeepDiveFilings(){
+  const item=gapDeepDiveCurrent?.item;
+  if(!item?.ticker||!item?.date)return;
+  const target=new URL('/',location.origin);
+  target.searchParams.set('gap_filings_ticker',String(item.ticker).toUpperCase());
+  target.searchParams.set('gap_filings_date',String(item.date));
+  location.assign(target.toString());
+}
 $('#gap_chart_bz').onchange=renderGapDeepDiveModal;
 $('#gap_deepdive_tf').onchange=()=>{const timeframe=$('#gap_deepdive_tf').value,cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Interval changed. Select AVWAP again to choose new anchor points.';if(gapDeepDiveCurrent){$('#gap_chart_tf').value=timeframe;configureGapDeepDiveTimeframe(timeframe);}setGapDeepDiveTimeframe(timeframe);if(gapDeepDiveCurrent)loadGapDeepDiveContext();};
 $('#gap_chart_tf').onchange=()=>{const timeframe=$('#gap_chart_tf').value,cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Interval changed. Select AVWAP again to choose new anchor points.';configureGapDeepDiveTimeframe(timeframe);setGapDeepDiveTimeframe(timeframe);loadGapDeepDiveContext();};
