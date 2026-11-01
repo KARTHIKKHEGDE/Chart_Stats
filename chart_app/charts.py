@@ -1230,18 +1230,13 @@ def sec_dilution_history():
     user=str(body.get('user') or '').strip().lower()
     token=str(body.get('token') or '').strip()
     ticker=str(body.get('ticker') or '').strip().upper()
-    pricing_date=str(body.get('pricing_date') or '').strip()
     if user not in _auth.ALLOWED_USERS or not _db_validate_session(user,token):
         return jsonify({'error':'Unauthorized'}),401
     if not re.fullmatch(r'[A-Z.\-]{1,10}',ticker):
         return jsonify({'error':'Invalid ticker'}),400
-    today=pd.Timestamp.now(tz='America/New_York').date().isoformat()
-    if pricing_date:
-        try: pricing_date=dt.date.fromisoformat(pricing_date).isoformat()
-        except ValueError: return jsonify({'error':'Invalid public-float pricing date.'}),400
-        if pricing_date>(dt.date.fromisoformat(today)+dt.timedelta(days=1)).isoformat() or (dt.date.fromisoformat(today)-dt.date.fromisoformat(pricing_date)).days>60:
-            return jsonify({'error':'Choose a pricing date within the 60 days before today.'}),400
-    cache_key=f'sec_dilution_history_v4_{ticker}_{today}_{pricing_date or "latest"}'
+    now_et=pd.Timestamp.now(tz='America/New_York')
+    today=now_et.date().isoformat()
+    cache_key=f'sec_dilution_history_v5_{ticker}_{today}_latest_completed'
     cached=cget(cache_key,30*60)
     if cached is not None:
         return jsonify(cached)
@@ -1344,8 +1339,8 @@ def sec_dilution_history():
         market_snapshot={'market_date':None,'last_price':None,'shares_outstanding':None,
                          'shares_filed':None,'shares_as_of':None,'float_shares':None,
                          'float_as_of':None,'adtv_20d':None,'public_float_pricing_date':None,
-                         'public_float_price':None,'requested_pricing_date':pricing_date or 'latest available',
-                         'pricing_method':'Daily closing price (last sale)','notes':[]}
+                         'public_float_price':None,'requested_pricing_date':'latest completed trading session',
+                         'pricing_method':'Latest completed daily close (last sale)','notes':[]}
         try:
             snapshot=live_snapshot(ticker)
             market_snapshot['market_date']=str(snapshot.get('date') or '')
@@ -1355,7 +1350,12 @@ def sec_dilution_history():
             market_snapshot['notes'].append(f'Latest price/volume unavailable ({type(exc).__name__}).')
         try:
             daily_rows=load_daily(ticker) or []
-            requested=dt.date.fromisoformat(pricing_date) if pricing_date else dt.date.fromisoformat(today)
+            # Ignore a still-forming daily bar during regular hours. Once the
+            # regular session has closed, today's completed bar may be used.
+            cutoff=now_et.date()
+            if (now_et.hour,now_et.minute)<(16,5):
+                cutoff-=dt.timedelta(days=1)
+            requested=cutoff
             eligible=[row for row in daily_rows if row.get('date') and str(row.get('date'))<=requested.isoformat()]
             price_row=max(eligible,key=lambda row:str(row.get('date'))) if eligible else None
             if price_row:
@@ -1402,7 +1402,7 @@ def sec_dilution_history():
         snapshot_context=(
             f"As-of date: {today}\nLatest available market price: ${fmt(market_snapshot['last_price'])} "
             f"(market data date {market_snapshot['market_date'] or 'unavailable'}).\n"
-            f"Explicit public-float pricing input: requested date {market_snapshot['requested_pricing_date']}; "
+            f"Public-float pricing input: automatically selected latest completed trading session; "
             f"date actually used {market_snapshot['public_float_pricing_date'] or 'unavailable'}; "
             f"last-sale/closing price ${fmt(market_snapshot['public_float_price'])}; method {market_snapshot['pricing_method']}.\n"
             f"Latest SEC shares-outstanding fact: {fmt(market_snapshot['shares_outstanding'])} shares "
@@ -1429,9 +1429,9 @@ def sec_dilution_history():
             "List active ATMs by name/agent, original size, sold to date, remaining capacity, share count at current "
             "price, and constraints; include shelf remaining, effectiveness/expiration date, and any baby-shelf limit only when eligibility and "
             f"Registrant filing profile: {issuer_type}. If eligible for a baby shelf, use Form F-3 I.B.5 for foreign private issuers or Form S-3 I.B.6 for domestic issuers; cite the applicable instruction as {shelf_instruction}. If the issuer category is not confirmed, do not assert which test applies. "
-            "Use the explicit public-float pricing date and last-sale price supplied below; Form instructions allow the "
-            "last sale price or average bid/ask as of a date within 60 days before sale. Never choose an undisclosed "
-            "pricing date or silently substitute the highest close. Subtract applicable primary securities sold in the "
+            "Use the automatically selected latest completed trading session and last-sale price supplied below; "
+            "Form instructions allow the last sale price or average bid/ask as of a date within 60 days before sale. "
+            "Show the actual date and price used. Never silently substitute the highest close. Subtract applicable primary securities sold in the "
             "trailing 12 months. Keep the baby-shelf non-affiliate float separate from vendor trading float; only non-affiliate "
             "shares count for that test. Do not substitute the vendor trading-float number. List each warrant tranche with outstanding quantity (not originally issued), "
             "strike after splits/resets, expiry, exercisable-now status, cashless/pre-funded status, ITM status, required "
