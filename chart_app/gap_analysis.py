@@ -1,24 +1,7 @@
 """Gap Analysis calculations and formatting."""
-from chart_app.application import (
-    ET,
-    GAP_MIN,
-    GAP_REL_END,
-    GAP_REL_START,
-    IST,
-    LOOKBACK_DAYS,
-    MAX_EVENTS,
-    MIN_DAY_VOL,
-    MIN_PM_VOL,
-    MIN_PRICE,
-    NPTS,
-    PM_START,
-    RG_START,
-    STOP_PCT,
-    dt,
-    math,
-    np,
-    quote,
-)
+from typing import Any
+
+import chart_app.application as app
 from chart_app.market_data import (
     chart_pack,
     ctx_feats,
@@ -33,6 +16,25 @@ from chart_app.market_data import (
     twap_frame_paths,
     vwap_frame_paths,
 )
+
+ET = app.ET
+GAP_MIN = app.GAP_MIN
+GAP_REL_END = app.GAP_REL_END
+GAP_REL_START = app.GAP_REL_START
+IST = app.IST
+LOOKBACK_DAYS = app.LOOKBACK_DAYS
+MAX_EVENTS = app.MAX_EVENTS
+MIN_DAY_VOL = app.MIN_DAY_VOL
+MIN_PM_VOL = app.MIN_PM_VOL
+MIN_PRICE = app.MIN_PRICE
+NPTS = app.NPTS
+PM_START = app.PM_START
+RG_START = app.RG_START
+STOP_PCT = app.STOP_PCT
+dt = app.dt
+math = app.math
+np = app.np
+quote = app.quote
 
 def outcome(h2c, o2c, c, hod):
     if h2c <= -0.15 and o2c < 0:
@@ -68,7 +70,7 @@ def analyze_event(t, i, daily, ctx):
         "f5_ret": m["f5_ret"], "f5_red": m["f5_red"], "f5_l2c": m["f5_l2c"], "f5_rng": m["f5_rng"],
         "orl_broke": m["orl_broke"],
         "below_pm": (o < m["pm_high"]) if m["pm_high"] else None,
-        "pm_vol": m["pm_vol"], "pm_dv": m["pm_dv"], "pm_fade": (o / m["pm_high"] - 1) if m["pm_high"] else None,
+        "pm_vol": m["pm_vol"], "pm_dv": m["pm_dv"], "rg_dv": m.get("rg_dv"), "pm_fade": (o / m["pm_high"] - 1) if m["pm_high"] else None,
         "pm_range": m["pm_range"], "pm_spikes": m["pm_spikes"], "pm_dv_hi": m["pm_dv_hi"],
         "pm_vb": m["pm_vb"], "pm_vr": m["pm_vr"], "pm_vr_all": m["pm_vr_all"],
         "pmb_to_open": (o / m["pm_vb_price"] - 1) if m["pm_vb_price"] else None,
@@ -196,7 +198,7 @@ def rate(f):
 
 
 def stats(S):
-    st = {"n": len(S)}
+    st: dict[str, Any] = {"n": len(S)}
     for k in ("faded15", "below_open", "below_vwap", "early_hod", "vwap_never", "vwap_reject", "failed_bo",
               "consol_bd", "d1_red", "below_pm", "orl_broke", "f5_red", "pm_vb", "pm_vr", "pm_vr_all"):
         st[k] = frac(S, k)
@@ -230,11 +232,13 @@ def grade(st):
     n = st["n"]
     if n < 1:
         return None
-    s_fade = (rate(st["below_open"]) or 0) * 100
+    fade_rate = rate(st["below_open"])
+    s_fade = (fade_rate if fade_rate is not None else 0.0) * 100
     s_o2c = clamp(-(st["med_o2c"] or 0) / 0.20) * 100
     s_sq = clamp(1 - (st["p75_o2h"] or 0) / 0.60) * 100
     s_cons = (((rate(st["early_hod"]) or 0) + (rate(st["vwap_never"]) or 0)) / 2) * 100
-    s_d2 = (rate(st["d1_red"]) * 100) if rate(st["d1_red"]) is not None else 50
+    d1_rate = rate(st["d1_red"])
+    s_d2 = d1_rate * 100 if d1_rate is not None else 50
     s_n = min(n / 20, 1) * 100
     s_vwap = (rate(st.get("vwap_failed_reclaim", (0, 0))) or 0) * 100
     s_spread = clamp(((st.get("med_hod_vwap_twap_spread") or 0) + .02) / .08) * 100
@@ -416,9 +420,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
             dvol = vol * cur
     gap_live = ((open_ or cur) / pc - 1)
     rot_live = (vol / fl_now) if (fl_now and vol) else None
-    hod_rot_live = (lm["cum_to_hod"] / fl_now) if (fl_now and lm.get("cum_to_hod")) else rot_live
     mcap = live["mcap"] or ((live["so"] or fl_now or 0) * cur) or None
-    pm_rel_live = (lm["pm_vol"] / lctx["avgvol20"]) if (lctx.get("avgvol20") and lm.get("pm_vol")) else None
 
     day_obj = live["date"]
     day_str = str(day_obj)
@@ -513,7 +515,31 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
              "Continuation: closed at/above it · Inside: traded inside the gap day's range. "
              "D2/D3/D5 = cumulative return vs Day-1 close. Squeeze/Drawdn 1/3/5d = max high / low after the Day-1 close within "
              "the next 1/3/5 sessions (e.g. +19/+25/+25). Day #: 1 = first gap day, 2+ = consecutive gapper.")
+    spike_cols = ["Date", "Premkt Spike %", "PM High Time (IST)", "O → H (RTH)", "H → L (RTH)", "$ Vol Till High", "Premkt Vol", "$ Vol Reg Hr / $ Premkt"]
+    spike_rows = []
+    for e in events:
+        pm_high_pct = e.get("pm_high_pct")
+        pm_dv = e.get("pm_dv")
+        if pm_high_pct is None or pm_high_pct <= 0.50 or pm_dv is None or pm_dv <= 10_000_000:
+            continue
+        ratio = None
+        if e.get("pm_dv") and e.get("rg_dv") not in (None, 0):
+            ratio = e["rg_dv"] / e["pm_dv"]
+        spike_rows.append([
+            C(fdate(e["date"]), "w", e["date"]),
+            C(pct(pm_high_pct, 0), "g", pm_high_pct),
+            C(hhmm(e.get("pm_hi_min"), e["date"]), "w", e.get("pm_hi_min")),
+            C(pct(e.get("o2h"), 0), sc(e.get("o2h")), e.get("o2h")),
+            C(pct(e.get("o2l"), 0), sc(e.get("o2l")), e.get("o2l")),
+            C(dv(e.get("pm_dv_hi")), "b", e.get("pm_dv_hi")),
+            C(big(e.get("pm_vol")), "b", e.get("pm_vol")),
+            C(f"{ratio:.2f}x" if ratio is not None else "—", "b", ratio),
+        ])
+    if not spike_rows:
+        spike_rows = [[C("—", "w", None), C("—", "w", None), C("—", "w", None), C("—", "w", None),
+                       C("—", "w", None), C("—", "w", None), C("—", "w", None), C("—", "w", None)]]
     tables = [
+        {"title": "[2A] PREMARKET SPIKE DAYS (>50% rise, >$10M premarket $ volume)", "cols": spike_cols, "rows": spike_rows, "dim": [], "foot": "Premarket spike = PM high versus previous close.  O→H and H→L use the RTH open-to-high and open-to-low relationships from the historical event set."},
         {"title": f"[2] HISTORICAL GAP UPS (last 1 year, gap ≥ {GAP_MIN*100:.0f}%) — click headers to sort",
          "cols": cols2, "rows": R2, "dim": dim, "foot": foot2},
         {"title": "[3] PREMARKET ANALYSIS", "cols": cols3, "rows": R3, "dim": dim, "foot": foot3},
@@ -530,28 +556,15 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
         evch.append({"title": f"#{i}  {fdate(e['date'])}  gap {pct(e['gap'], 0)}  O→C {pct(e['o2c'], 0)}", "date": e["date"],
                      "sim": id(e) in simset, "chart": e["chart"]})
 
-    # ---- extras: stats / patterns / rating
+    # ---- extras: stats / patterns
     summary = summary_text(st)
     if g:
         verdict = verdict_text(g, st)
         gcls = "g" if g["letter"][0] in "AB" else "y" if g["letter"][0] == "C" else "r"
-        p5 = [["Chart-Based Fade Grade", f"{g['letter']}  ({g['score']}/100)", gcls],
-              ["Sample Size", f"{st['n']} similar of {len(events)} gap-ups", "b"],
-              ["Verdict", verdict, gcls]]
-        for name, w, s in g["comps"]:
-            p5.append([f"  {name} ({w}%)", f"{s:.0f}", "w"])
         head = {"grade": g["letter"], "score": f"{g['score']}/100", "gcls": gcls,
                 "verdict": verdict, "total": len(events)}
     else:
-        p5 = [["Chart-Based Fade Grade", "N/A (no similar gap-ups found)", "r"],
-              ["Sample Size", f"{st['n']} similar of {len(events)} gap-ups", "b"]]
         head = {"grade": "N/A", "score": "—", "gcls": "r", "verdict": "Not enough history.", "total": len(events)}
-    p5.append(["Key Takeaway", summary, "w"])
-    if hod_rot_live and st["p75_rot"]:
-        hot = hod_rot_live > st["p75_rot"]
-        p5.append(["Live rotation vs history",
-                   f"{hod_rot_live:.1f}x vs p75 {st['p75_rot']:.1f}x" + ("  EXHAUSTION ZONE" if hot else ""),
-                   "r" if hot else "w"])
 
     mcols = ["Entry (short, exit at close / stop)", "Trades", "Win %", "Avg win", "Avg loss", "Expectancy",
              f"Avg R (stop {STOP_PCT:.0%})", "Median squeeze", "Worst squeeze"]
@@ -578,7 +591,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     # Project V and price/VWAP deviation separately, weighting histories by today's as-of VWAP state.
     # Recompose expected price as P=V*(1+D), anchored to today's observed values.
     now_k = max((k for k, v in enumerate(lpath) if v is not None), default=None)
-    _live_p, live_v, live_d = vwap_frame_paths(live["df"], pc, False) if live.get("df") is not None else ([None]*(NPTS+1),)*3
+    _, live_v, live_d = vwap_frame_paths(live["df"], pc, False) if live.get("df") is not None else ([None]*(NPTS+1),)*3
     live_tw, live_dt, live_spread, live_active_tw = twap_frame_paths(live["df"], pc, False) if live.get("df") is not None else ([None]*(NPTS+1),)*4
     def vwap_state_weight(event):
         """Prefer analogs whose price/VWAP relationship matches today at the cutoff."""
@@ -663,13 +676,19 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     gap_today = gap_retention(lpath, live_gap_size, live_pm_high_min)
     gap_now_k = max((k for k, value in enumerate(gap_today) if value is not None), default=None)
     gap_proj = [None] * len(gap_offsets)
-    if live_gap_size and gap_now_k is not None:
-        gap_proj[gap_now_k] = gap_today[gap_now_k]
+    if live_gap_size is not None and gap_now_k is not None:
+        gap_value = gap_today[gap_now_k]
+        if gap_value is not None:
+            gap_proj[gap_now_k] = gap_value
         for k in range(gap_now_k + 1, len(gap_offsets)):
-            changes = [path[k] - path[gap_now_k] for path in historical_gap_paths
-                       if path[k] is not None and path[gap_now_k] is not None]
+            changes = []
+            for path in historical_gap_paths:
+                future_value, current_value = path[k], path[gap_now_k]
+                if future_value is not None and current_value is not None:
+                    changes.append(future_value - current_value)
             if changes:
-                gap_proj[k] = round(gap_today[gap_now_k] + float(np.median(changes)), 4)
+                if gap_value is not None:
+                    gap_proj[k] = round(gap_value + float(np.median(changes)), 4)
     gap_open_k = (round((RG_START - live_pm_high_min - GAP_REL_START) / 5)
                   if live_pm_high_min is not None else None)
     chart = {"labels": labels, "paths": [e["path"] for e in S], "med": band(50), "p25": band(25), "p75": band(75),
@@ -703,14 +722,11 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
         "p1": f"[1] CURRENT DAY SETUP ({day_display} — latest data)",
         "p6": "[6] 2-MIN CHARTS — premarket → close, volume + VWAP + TWAP + running-HOD AVWAP, SELL = short entry, BUY = cover",
         "p7": "[7] VWAP-CONDITIONED EXPECTED PATH",
-        "pc": "[C] FINAL RATING",
         "pd": "[D] ENTRY MODELS (similar setups)",
     }
     dilution_url = f"https://finviz.com/stock?b=2&p=m&t={quote(t, safe='')}&ta=1&ty=di"
     text = [f"Ticker: {t}  |  Finviz Dilution: {dilution_url}", f"Current Day: {day_display}", head["sub"], "=" * 42,
-            f"Final Fade Grade:  {head['grade']}   ({head['score']})",
-            f"Sample Size: {st['n']} similar setups of {len(events)} gap-ups",
-            f"Verdict: {head['verdict']}", f"Summary: {summary}", "",
+            f"Summary: {summary}", "",
             T["p1"], kv_text(left), kv_text(right)]
     for tb in tables:
         text += ["", tb["title"], tbl_text(tb["cols"], tb["rows"]), tb["foot"]]
@@ -722,8 +738,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
              f"High-volume days  {stat_line(open_hod['highvol'])}",
              f"HOD time (15m bars, {fdate(hod_times['date_from'])} to {fdate(hod_times['date_to'])})",
              f"All sessions  median {hod_times['median_time'] or '—'} IST ({len(hod_times['rows'])} days)",
-             "", T["p7"], kv_text(ptext, 40), "",
-             T["pc"], kv_text(p5)]
+             "", T["p7"], kv_text(ptext, 40)]
     if mrows:
         text += ["", T["pd"], tbl_text(mcols, mrows)]
     if notes:
@@ -733,7 +748,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
             "evcharts": evch, "session_dates": [r["date"] for r in daily] + [day_str, next_session.isoformat()],
             "model_names": ["Short at open", "PM high rejection", "5m low break",
                                               "First red 5m candle", "VWAP loss (post-HOD)"],
-            "pc": p5, "pd": {"cols": mcols, "rows": mrows},
+            "pd": {"cols": mcols, "rows": mrows},
             "chart": chart, "dilution_url": dilution_url, "text": "\n".join(text)}
 
 
