@@ -924,8 +924,22 @@ async function loadPremarketSpikeDays(tab,report){
     const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load premarket history.');
     if(tab.result!==report)return;
     const days=data.days||[],compact=n=>new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(Number(n)||0);
-    panel.innerHTML=`<div class="ttl">Premarket Spike Days · PM high ≥ +50% · PM $ volume ≥ $10M · last year</div>`+
-      (days.length?`<div class="kv">${days.map(item=>`<span>${esc(formatDateMDY(item.date))}</span><span>PM high +${Number(item.pm_high_pct).toFixed(2)}% · PM $Vol $${compact(item.pm_dollar_volume)} · PM Vol ${compact(item.pm_volume)} sh</span>`).join('')}</div>`:`<div class="foot">No sessions met both thresholds in the last year.</div>`);
+    const cell=(value,sort=value)=>[value??'—','w',sort??''];
+    const percent=value=>value==null?'—':`${Number(value)>=0?'+':''}${Number(value).toFixed(1)}%`;
+    const cols=['Date','Premkt Spike %','PM High Time (IST)','O → H (RTH)','H → L (RTH)','$ Vol Till High','Premarket Vol','$ Vol Reg Hr / $ Premkt'];
+    const rows=days.map(item=>[
+      cell(formatDateMDY(item.date),item.date),
+      cell(percent(item.pm_high_pct),item.pm_high_pct),
+      cell(item.pm_high_time),
+      cell(percent(item.rth_open_high_pct),item.rth_open_high_pct),
+      cell(percent(item.rth_high_low_pct),item.rth_high_low_pct),
+      cell(item.pm_dollar_volume_till_high==null?'—':`$${compact(item.pm_dollar_volume_till_high)}`,item.pm_dollar_volume_till_high),
+      cell(`${compact(item.pm_volume)} sh`,item.pm_volume),
+      cell(item.rth_to_pm_dollar_volume==null?'—':`${Number(item.rth_to_pm_dollar_volume).toFixed(2)}x`,item.rth_to_pm_dollar_volume)
+    ]);
+    panel.innerHTML=`<div class="ttl">Premarket Spike Days · PM high &gt; +40% · PM $ volume ≥ $10M · last year</div>`+
+      (rows.length?table(cols,rows,null,true):`<div class="foot">No sessions met both thresholds in the last year.</div>`);
+    panel.querySelectorAll('table.sort').forEach(makeSortable);
     report.premarket_surge_days=days;
   }).catch(error=>{if(tab.result===report&&panel.isConnected){const status=panel.querySelector('[data-surge-status]');if(status)status.textContent='Premarket history unavailable: '+error.message;}}).finally(()=>{const stale=tab.result!==report;tab._premarketSpikeLoad=null;if(stale&&tab.result?.head?.ticker===ticker)loadPremarketSpikeDays(tab,tab.result);});
   return tab._premarketSpikeLoad;
@@ -951,12 +965,11 @@ function renderTab(tab, r, isRefresh){
     : '';
 
   o += `<div class="refresh_banner" style="display:none;background:#141414;border:1px solid #29a8ff;padding:8px 12px;margin-bottom:14px;color:#29a8ff;font-size:13px"></div>`;
-  o += `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:14px"><span class="big">Ticker: <span class="c">${esc(h.ticker)}</span></span><a href="${esc(r.dilution_url)}" target="_blank" rel="noopener noreferrer" style="color:#d8b4fe;font-size:13px;font-weight:normal">Finviz Dilution ↗</a>${refreshBadge}</div><div class="w">${esc(h.sub)}</div><div>==========================================</div><br>`;
-  o += `<div>Final Fade Grade:<span class="badge ${h.gcls}">${esc(h.grade)}</span>(${esc(h.score)})</div>`;
-  o += `<div>Similar Setups: <span class="c">${h.n}</span> (${h.total ? 'of ' + h.total + ' gap-ups' : ''})</div>`;
-  o += `<div>Verdict: <span class="${h.gcls}">${esc(h.verdict)}</span></div>`;
-  o += `<div>Summary: ${esc(h.summary)}</div>`;
-  (h.notes||[]).forEach(n=>o+=`<div class="y">Note: ${esc(n)}</div>`);
+  o += `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:14px"><span class="big">Ticker: <span class="c">${esc(h.ticker)}</span></span><a href="${esc(r.dilution_url)}" target="_blank" rel="noopener noreferrer" style="color:#d8b4fe;font-size:13px;font-weight:normal">Finviz Dilution ↗</a>${refreshBadge}</div><br>`;
+  o += `<div class="panel two"><div><div class="ttl">${esc(T.p1)}</div>${kv(r.p1.left)}</div><div>${kv(r.p1.right)}</div></div>`;
+  const surgeDays=Array.isArray(r.premarket_surge_days)?r.premarket_surge_days:null;
+  o += `<div class="panel" data-premarket-spikes><div class="ttl">Premarket Spike Days · PM high &gt; +40% · PM $ volume ≥ $10M · last year</div>`+
+    (surgeDays?`<div class="foot">Loading premarket spike days…</div>`:`<div class="foot" data-surge-status>Checking this history in the background…</div>`)+`</div>`;
   const newsItems = r.news || [];
   o += `<div class="panel"><div class="ttl">Latest Press Releases · Yahoo Finance</div>`+
     (newsItems.length ? newsItems.map(item=>{
@@ -975,26 +988,7 @@ function renderTab(tab, r, isRefresh){
   const reverseSplits=r.reverse_splits||[];
   o += `<div class="panel"><div class="ttl">Reverse Splits · ${reverseSplits.length} ${reverseSplits.length===1?'event':'events'}</div>`+
     (reverseSplits.length?`<div class="kv">${reverseSplits.map(item=>`<span>Reverse split</span><span>${esc(formatDateMDY(item.date))} · ${esc(item.ratio)} reverse${item.price_conversion?` (${esc(item.price_conversion)})`:''}</span>`).join('')}</div>`:`<div class="foot">No reverse splits found in available split history.</div>`)+`</div>`;
-  const surgeDays=Array.isArray(r.premarket_surge_days)?r.premarket_surge_days:null,compact=n=>new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(Number(n)||0);
-  const surgeContent=days=>days.length?`<div class="kv">${days.map(item=>`<span>${esc(formatDateMDY(item.date))}</span><span>PM high +${Number(item.pm_high_pct).toFixed(2)}% · PM $Vol $${compact(item.pm_dollar_volume)} · PM Vol ${compact(item.pm_volume)} sh</span>`).join('')}</div>`:`<div class="foot">No sessions met both thresholds in the last year.</div>`;
-  o += `<div class="panel" data-premarket-spikes><div class="ttl">Premarket Spike Days · PM high ≥ +50% · PM $ volume ≥ $10M · last year</div>`+
-    (surgeDays?surgeContent(surgeDays):`<div class="foot" data-surge-status>Checking this history in the background…</div>`)+`</div>`;
-  o += `<div class="panel two"><div><div class="ttl">${esc(T.p1)}</div>${kv(r.p1.left)}</div><div>${kv(r.p1.right)}</div></div>`;
-  if(r.open_hod_stats){
-    const s=r.open_hod_stats, fmt=x=>x==null?'—':`${x>=0?'+':''}${(x*100).toFixed(0)}%`, line=x=>`${fmt(x.median)}   avg ${fmt(x.avg)}   (${x.n} ${x.n===1?'day':'days'})`;
-    o += `<div class="panel"><div class="ttl">Open → HOD (daily bars; 12 mo for gap-up / volume rows)</div>`+
-      `<div class="kv"><span>Last 30 sessions</span><span>${line(s.last30)}</span><span>Last 90 sessions</span><span>${line(s.last90)}</span>`+
-      `<span>Gap-up days ≥5%</span><span>${line(s.gapup5)}</span><span data-tip="High-volume days have daily volume at least 10× the average of the prior 20 sessions.">High-volume days</span><span>${line(s.highvol)}</span></div>`+
-      `<div class="foot">${esc(formatDateMDY(s.date_from||''))} to ${esc(formatDateMDY(s.date_to||''))} · high volume = ≥${s.volume_multiple}× prior 20-session average</div></div>`;
-  }
-  if(r.hod_times){
-    const h=r.hod_times;
-    o += `<div class="panel"><div class="ttl">HOD time (from chart, 15m bars, ${esc(formatDateMDY(h.date_from||''))} to ${esc(formatDateMDY(h.date_to||''))})</div>`+
-      `<div class="kv"><span>All sessions</span><span>median ${esc(h.median_time||'—')} IST (${(h.rows||[]).length} days)</span>`+
-      `${(h.rows||[]).length?`<span>Daily HOD times</span><span>${h.rows.map(x=>`${esc(formatDateMDY(x.date))} ${esc(x.time)}`).join(' · ')}</span>`:''}</div>`+
-      `${(h.rows||[]).length?'<div class="foot">Approximate HOD time is the timestamp of the 15-minute bar containing the session high.</div>':'<div class="foot">15-minute HOD bars are unavailable for this range.</div>'}</div>`;
-  }
-  (r.tables||[]).forEach(t=>{
+  (r.tables||[]).filter(t=>!t.title.includes('HISTORICAL GAP UPS')&&!t.title.includes('PREMARKET SPIKE DAYS')).forEach(t=>{
     o += `<div class="panel"><div class="ttl">${esc(t.title)}</div>${table(t.cols,t.rows,t.dim,true)}<div class="foot">${esc(t.foot||'')}</div></div>`;
   });
   o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">`+

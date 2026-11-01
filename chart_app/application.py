@@ -657,8 +657,6 @@ def run_job(job, t, refresh):
 
         report = clean(build_report(t, live, lm, lpath, lctx, events, S, notes, daily))
         report["premarket_surge_days"] = None
-        report["text"] += "\n\nPremarket high ≥ +50% and dollar volume ≥ $10M\n"
-        report["text"] += "This section loads after the main report."
         reverse_splits = []
         for split in splits or []:
             try:
@@ -896,7 +894,7 @@ def premarket_spikes_api():
         return jsonify({"error": "Session expired. Please sign in again."}), 401
     if not re.fullmatch(r"[A-Z.-]{1,10}", ticker):
         return jsonify({"error": "Invalid ticker."}), 400
-    cache_key = f"{ticker}_premarket_spikes_v1"
+    cache_key = f"{ticker}_premarket_spikes_v2"
     cached = cget(cache_key, 6 * 3600)
     if cached is not None:
         return jsonify({"days": cached, "cached": True})
@@ -919,7 +917,7 @@ def premarket_spikes_api():
                 high = float(row.get("h") or 0)
             except (TypeError, ValueError, KeyError):
                 continue
-            if day >= cutoff and row["date"] not in split_dates and prior_close > 0 and high / prior_close - 1 >= 0.50:
+            if day >= cutoff and row["date"] not in split_dates and prior_close > 0 and high / prior_close - 1 > 0.40:
                 candidates.append(index)
         if candidates:
             workers = min(len(_key_pool), max(4, len(candidates)))
@@ -938,12 +936,40 @@ def premarket_spikes_api():
                 if premarket.empty:
                     continue
                 high = float(premarket["h"].max())
+                high_index = premarket["h"].idxmax()
                 typical_price = (premarket["h"] + premarket["l"] + premarket["c"]) / 3
                 dollar_volume = float((typical_price * premarket["v"]).sum())
-                if high / prior_close - 1 >= 0.50 and dollar_volume >= 10_000_000:
-                    found.append({"date": day, "pm_high_pct": round((high / prior_close - 1) * 100, 2),
-                                  "pm_dollar_volume": round(dollar_volume, 2),
-                                  "pm_volume": round(float(premarket["v"].sum()))})
+                rth = bars[(minutes >= 570) & (minutes < 960)]
+                rth_dollar_volume = 0.0
+                rth_open_high = None
+                rth_high_low = None
+                if not rth.empty:
+                    rth_typical = (rth["h"] + rth["l"] + rth["c"]) / 3
+                    rth_dollar_volume = float((rth_typical * rth["v"]).sum())
+                    rth_open = float(rth.iloc[0]["o"])
+                    rth_high = float(rth["h"].max())
+                    rth_low = float(rth["l"].min())
+                    if rth_open > 0:
+                        rth_open_high = (rth_high / rth_open - 1) * 100
+                    if rth_high > 0:
+                        rth_high_low = (rth_low / rth_high - 1) * 100
+                if high / prior_close - 1 > 0.40 and dollar_volume >= 10_000_000:
+                    pm_through_high = premarket.loc[:high_index]
+                    pm_high_dollar_volume = float(
+                        (((pm_through_high["h"] + pm_through_high["l"] + pm_through_high["c"]) / 3)
+                         * pm_through_high["v"]).sum()
+                    )
+                    found.append({
+                        "date": day,
+                        "pm_high_pct": round((high / prior_close - 1) * 100, 2),
+                        "pm_high_time": high_index.tz_convert(IST).strftime("%H:%M"),
+                        "rth_open_high_pct": round(rth_open_high, 2) if rth_open_high is not None else None,
+                        "rth_high_low_pct": round(rth_high_low, 2) if rth_high_low is not None else None,
+                        "pm_dollar_volume_till_high": round(pm_high_dollar_volume, 2),
+                        "pm_dollar_volume": round(dollar_volume, 2),
+                        "pm_volume": round(float(premarket["v"].sum())),
+                        "rth_to_pm_dollar_volume": round(rth_dollar_volume / dollar_volume, 2) if dollar_volume else None,
+                    })
             except Exception:
                 continue
         found.sort(key=lambda item: item["date"], reverse=True)

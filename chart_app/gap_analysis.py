@@ -520,7 +520,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     for e in events:
         pm_high_pct = e.get("pm_high_pct")
         pm_dv = e.get("pm_dv")
-        if pm_high_pct is None or pm_high_pct <= 0.50 or pm_dv is None or pm_dv <= 10_000_000:
+        if pm_high_pct is None or pm_high_pct <= 0.40 or pm_dv is None or pm_dv <= 10_000_000:
             continue
         ratio = None
         if e.get("pm_dv") and e.get("rg_dv") not in (None, 0):
@@ -539,7 +539,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
         spike_rows = [[C("—", "w", None), C("—", "w", None), C("—", "w", None), C("—", "w", None),
                        C("—", "w", None), C("—", "w", None), C("—", "w", None), C("—", "w", None)]]
     tables = [
-        {"title": "[2A] PREMARKET SPIKE DAYS (>50% rise, >$10M premarket $ volume)", "cols": spike_cols, "rows": spike_rows, "dim": [], "foot": "Premarket spike = PM high versus previous close.  O→H and H→L use the RTH open-to-high and open-to-low relationships from the historical event set."},
+        {"title": "[2A] PREMARKET SPIKE DAYS (>40% rise, >$10M premarket $ volume)", "cols": spike_cols, "rows": spike_rows, "dim": [], "foot": "Premarket spike = PM high versus previous close.  O→H and H→L use the RTH open-to-high and open-to-low relationships from the historical event set."},
         {"title": f"[2] HISTORICAL GAP UPS (last 1 year, gap ≥ {GAP_MIN*100:.0f}%) — click headers to sort",
          "cols": cols2, "rows": R2, "dim": dim, "foot": foot2},
         {"title": "[3] PREMARKET ANALYSIS", "cols": cols3, "rows": R3, "dim": dim, "foot": foot3},
@@ -726,23 +726,14 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     }
     dilution_url = f"https://finviz.com/stock?b=2&p=m&t={quote(t, safe='')}&ta=1&ty=di"
     text = [f"Ticker: {t}  |  Finviz Dilution: {dilution_url}", f"Current Day: {day_display}", head["sub"], "=" * 42,
-            f"Summary: {summary}", "",
             T["p1"], kv_text(left), kv_text(right)]
     for tb in tables:
+        if "HISTORICAL GAP UPS" in tb["title"] or "PREMARKET SPIKE DAYS" in tb["title"]:
+            continue
         text += ["", tb["title"], tbl_text(tb["cols"], tb["rows"]), tb["foot"]]
-    stat_line = lambda x: f"median {pct(x['median'], 0)}  avg {pct(x['avg'], 0)}  ({x['n']} days)"
-    text += ["", "Open → HOD (daily bars; 12 mo for gap-up / volume rows)",
-             f"Last 30 sessions  {stat_line(open_hod['last30'])}",
-             f"Last 90 sessions  {stat_line(open_hod['last90'])}",
-             f"Gap-up days ≥5%  {stat_line(open_hod['gapup5'])}",
-             f"High-volume days  {stat_line(open_hod['highvol'])}",
-             f"HOD time (15m bars, {fdate(hod_times['date_from'])} to {fdate(hod_times['date_to'])})",
-             f"All sessions  median {hod_times['median_time'] or '—'} IST ({len(hod_times['rows'])} days)",
-             "", T["p7"], kv_text(ptext, 40)]
+    text += ["", T["p7"], kv_text(ptext, 40)]
     if mrows:
         text += ["", T["pd"], tbl_text(mcols, mrows)]
-    if notes:
-        text += [""] + [f"Note: {n}" for n in notes]
     return {"head": head, "titles": T, "p1": {"left": left, "right": right},
             "open_hod_stats": open_hod, "hod_times": hod_times, "tables": tables,
             "evcharts": evch, "session_dates": [r["date"] for r in daily] + [day_str, next_session.isoformat()],
