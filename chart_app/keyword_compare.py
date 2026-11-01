@@ -1,6 +1,5 @@
 """Keyword Compare feature module."""
 from chart_app.application import (
-    HTML,
     KEYWORD_HTML,
     NPTS,
     PM_START,
@@ -1354,18 +1353,4 @@ def api_keyword_compare():
 
 @app.route("/keyword-search")
 def keyword_search_page():
-    # Inject the exact Gap-Up event-chart renderer and its helpers into this
-    # standalone page so both chart screens use the same candle layout logic.
-    helper_start = HTML.index("const MC=")
-    helper_end = HTML.index("function drawEvAll", helper_start)
-    renderer_start = HTML.index("function aggregateEvBars", helper_end)
-    renderer_end = HTML.index("\nlet currentModalIndex", renderer_start)
-    shared_renderer = ("<script>(function(){\n" + HTML[helper_start:helper_end] +
-                       HTML[renderer_start:renderer_end] +
-                       "\nwindow.drawKeywordGapEv=drawEv;\n"
-                       "window.aggregateKeywordBars=aggregateEvBars;\n"
-                       "window.bindUnifiedChartFeatures=bindUnifiedChartFeatures;\n"
-                       "window.chartFeatureUi=chartFeatureUi;\n"
-                       "window.cancelUnifiedChartSelection=cancelUnifiedChartSelection;\n})();</script>")
-    page = KEYWORD_HTML.replace("<script>", shared_renderer + "<script>", 1)
-    return Response(page, mimetype="text/html")
+    return Response(KEYWORD_HTML, mimetype="text/html")

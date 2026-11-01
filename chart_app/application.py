@@ -706,7 +706,7 @@ def run_job(job, t, refresh):
 HTML = (Path(__file__).resolve().parent.parent / "templates" / "gapup.html").read_text(encoding="utf-8")
 KEYWORD_HTML = (Path(__file__).resolve().parent.parent / "templates" / "keyword_search.html").read_text(encoding="utf-8")
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder="../static")
 
 
 @app.route("/")
@@ -894,7 +894,7 @@ def premarket_spikes_api():
         return jsonify({"error": "Session expired. Please sign in again."}), 401
     if not re.fullmatch(r"[A-Z.-]{1,10}", ticker):
         return jsonify({"error": "Invalid ticker."}), 400
-    cache_key = f"{ticker}_premarket_spikes_v4"
+    cache_key = f"{ticker}_premarket_spikes_v5"
     cached = cget(cache_key, 6 * 3600)
     if cached is not None:
         return jsonify({"days": cached, "cached": True})
@@ -943,6 +943,7 @@ def premarket_spikes_api():
                 rth_dollar_volume = 0.0
                 rth_open_gap = None
                 rth_open_high = None
+                rth_open_close = None
                 rth_high_low = None
                 rth_faded = None
                 if not rth.empty:
@@ -955,6 +956,7 @@ def premarket_spikes_api():
                     if rth_open > 0:
                         rth_open_gap = (rth_open / prior_close - 1) * 100
                         rth_open_high = (rth_high / rth_open - 1) * 100
+                        rth_open_close = (rth_close / rth_open - 1) * 100
                         rth_faded = rth_close < rth_open
                     if rth_high > 0:
                         rth_high_low = (rth_low / rth_high - 1) * 100
@@ -970,6 +972,7 @@ def premarket_spikes_api():
                         "pm_high_time": high_index.tz_convert(IST).strftime("%H:%M"),
                         "rth_open_gap_pct": round(rth_open_gap, 2) if rth_open_gap is not None else None,
                         "rth_open_high_pct": round(rth_open_high, 2) if rth_open_high is not None else None,
+                        "rth_open_close_pct": round(rth_open_close, 2) if rth_open_close is not None else None,
                         "rth_high_low_pct": round(rth_high_low, 2) if rth_high_low is not None else None,
                         "rth_faded": rth_faded,
                         "pm_dollar_volume_till_high": round(pm_high_dollar_volume, 2),

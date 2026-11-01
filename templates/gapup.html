@@ -156,7 +156,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
     <header style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:16px">
       <strong style="font-size:20px;color:#ffe17d">Gap Up Deepdive</strong>
       <span style="color:#9ba3ad;font-size:13px">This year · Premarket high ≥ +70% vs prior close · Premarket dollar volume ≥ $10M</span>
-      <label style="display:flex;align-items:center;gap:6px;color:#ddd;font-size:13px">All charts interval <select id="gap_deepdive_tf" style="height:30px;margin:0"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option></select></label>
+      <label style="display:flex;align-items:center;gap:6px;color:#ddd;font-size:13px">All charts interval <select id="gap_deepdive_tf" style="height:30px;margin:0"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option></select></label>
       <label style="display:flex;align-items:center;gap:6px;color:#ddd;font-size:13px">Group by <select id="gap_deepdive_group_by" style="height:30px;margin:0"><option value="ticker" selected>Ticker</option><option value="player">Financing player</option></select></label>
       <span id="gap_deepdive_status" style="margin-left:auto;color:#aeb6c0;font-size:13px">Opening the saved scan…</span>
     </header>
@@ -169,7 +169,8 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
         <strong id="gap_chart_title" style="font-size:17px;color:#e7eef5"></strong><span id="gap_chart_date" style="padding:3px 8px;border:1px solid #655516;background:#211b05;color:#ffe17d;border-radius:3px;font-size:13px"></span>
         <span id="gap_chart_stats" style="color:#9ba6b0;font-size:12px"></span><span id="gap_chart_quote_line" style="color:#e8edf3;font-size:12px;font-family:Consolas,monospace;padding:4px 8px;border:1px solid #29313a;border-radius:3px">Hover a candle · change, volume, dollar volume, float</span><a id="gap_chart_player_tag" hidden target="_blank" rel="noopener noreferrer" style="padding:4px 9px;border:1px solid #8b74ff;background:#171127;color:#c8baff;border-radius:12px;font-size:12px;text-decoration:none" title="Named in an SEC filing as placement agent or underwriter"></a>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
-          <label style="font-size:12px;color:#ddd">Interval <select id="gap_chart_tf" style="height:30px;margin:0"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option></select></label>
+          <label style="font-size:12px;color:#ddd">Interval <select id="gap_chart_tf" style="height:30px;margin:0"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label>
+          <label style="font-size:12px;color:#ddd">Sessions <select id="gap_chart_days" style="height:30px;margin:0"><option value="1" selected>1</option><option value="3">3</option><option value="5">5</option><option value="10">10</option><option value="20">20</option><option value="60">60</option></select></label>
           <label style="font-size:12px;color:#d7ff6e"><input id="gap_chart_bz" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"> Bone Zone (9/21 EMA)</label>
           <label style="font-size:12px;color:#fff"><input id="gap_chart_vwap" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"> VWAP</label>
           <label style="font-size:12px;color:#c084fc"><input id="gap_chart_twap" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"> TWAP</label>
@@ -358,9 +359,9 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
       </div>
       <div id="cm_toolbar">
         <label>Interval<select id="cm_tf" title="Chart timeframe">
-          <option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option>
+          <option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option>
         </select>
-        <select id="cm_days" title="Sessions shown" hidden><option selected>1</option><option>3</option><option>5</option><option>10</option><option>20</option><option>60</option></select>
+        <label>Sessions<select id="cm_days" title="Sessions shown"><option value="1" selected>1</option><option value="3">3</option><option value="5">5</option><option value="10">10</option><option value="20">20</option><option value="60">60</option></select></label>
         <select id="cm_sig" hidden><option value="none" selected>No signals</option><option value="all">All entry models</option></select>
         <label style="color:#d7ff6e"><input type="checkbox" id="cm_bz" checked> Bone Zone (9/21 EMA)</label>
         <label><input type="checkbox" id="cm_vwap" checked> VWAP</label><label style="color:#c084fc"><input type="checkbox" id="cm_twap" checked> TWAP</label>
@@ -372,14 +373,16 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
 
     <!-- Canvas Body -->
     <div id="cm_body" style="flex:1;padding:8px 10px;position:relative;display:flex;flex-direction:column;overflow:hidden;background:#050505">
-      <div id="cm_plot_wrap" style="position:relative;flex:1;min-height:0"><canvas id="cm_canvas" style="display:block;width:100%;height:100%"></canvas><canvas id="cm_overlay" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas><div id="cm_crosshair_v" hidden style="position:absolute;z-index:4;top:0;width:0;border-left:1px dashed rgba(220,232,244,.75);pointer-events:none"></div><div id="cm_crosshair_h" hidden style="position:absolute;z-index:4;left:0;height:0;border-top:1px dashed rgba(220,232,244,.75);pointer-events:none"></div><div id="cm_measure_box" hidden style="position:absolute;z-index:5;max-width:300px;padding:8px 10px;background:rgba(6,13,21,.96);border:1px solid #62c8ff;border-radius:4px;color:#edf6ff;font:13px/1.55 Consolas,monospace;white-space:pre-wrap;pointer-events:none"></div></div><div id="cm_navigator_wrap" style="height:76px;flex:0 0 76px;margin-top:5px;border:1px solid #242b33;background:#090c10"><canvas id="cm_navigator" style="display:block;width:100%;height:100%;touch-action:none;cursor:grab"></canvas></div>
+      <div id="cm_plot_wrap" style="position:relative;flex:1;min-height:0"><canvas id="cm_canvas" style="display:block;width:100%;height:100%"></canvas><canvas id="cm_overlay" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas><div id="cm_crosshair_v" hidden style="position:absolute;z-index:4;top:0;width:0;border-left:1px dashed rgba(220,232,244,.75);pointer-events:none"></div><div id="cm_crosshair_h" hidden style="position:absolute;z-index:4;left:0;height:0;border-top:1px dashed rgba(220,232,244,.75);pointer-events:none"></div><div id="cm_measure_box" hidden style="position:absolute;z-index:5;max-width:300px;padding:8px 10px;background:rgba(6,13,21,.96);border:1px solid #62c8ff;border-radius:4px;color:#edf6ff;font:13px/1.55 Consolas,monospace;white-space:pre-wrap;pointer-events:none"></div></div><div id="cm_navigator_wrap" style="height:76px;flex:0 0 76px;margin-top:5px;border:1px solid #242b33;background:#090c10;display:flex;flex-direction:column"><div id="cm_hover_time" style="height:18px;flex:0 0 18px;padding:1px 8px;color:#9ba6b0;font:11px/16px Consolas,monospace">Hover a candle to see its time · IST</div><canvas id="cm_navigator" style="display:block;width:100%;height:calc(100% - 18px);flex:1;min-height:0;touch-action:none;cursor:grab"></canvas></div>
     </div>
 
     <div class="cmFooter"><div id="cm_status">Hold and drag on the chart to zoom. Choose Pan to drag the chart.</div></div>
   </div>
 </div>
+<script src="/static/stock_chart.js"></script>
 <script>
 const $=s=>document.querySelector(s);
+const {MC,MA,hm,tri,bone,aggregateEvBars,drawGapDeepDiveRangeOverlay,drawGapDeepDiveCrosshair,drawGapDeepDiveEventMarkers,bindGapDeepDiveRangeInput,drawGapDeepDiveNavigator,bindUnifiedChartFeatures,chartFeatureUi,cancelUnifiedChartSelection,setGapDeepDiveMouseMode,copyChartWithOverlays,drawEv}=window.SharedStockChart;
 // ---- Tooltip system ----
 (function(){
   const box = document.getElementById('ag_tip');
@@ -942,13 +945,14 @@ function renderPremarketSpikeDays(tab,report,days){
     `<div class="kv"><span>Historical premarket spikes faded</span><span>${formatCount(fades,fadeSample)}</span>`+
     `<span>RTH gap-up spike days faded</span><span>${formatCount(gapUpFades,gapUpSample)}</span></div>`+
     `<div class="foot">Fade = RTH close below RTH open. RTH gap-up = open above the previous close. Counts use days with available RTH data.</div>`;
-  const cols=['Date','Premkt Spike %','Gap Up (RTH)','PM High Time (IST)','O → H (RTH)','H → L (RTH)','$ Vol Till High','Premarket Vol','$ Vol Reg Hr / $ Premkt'];
+  const cols=['Date','Premkt Spike %','Gap Up (RTH)','PM High Time (IST)','O → H (RTH)','O → C (RTH)','H → L (RTH)','$ Vol Till High','Premarket Vol','$ Vol Reg Hr / $ Premkt'];
   const rows=days.map(item=>[
       cell(formatDateMDY(item.date),item.date),
       cell(percent(item.pm_high_pct),item.pm_high_pct),
       cell(percent(item.rth_open_gap_pct),item.rth_open_gap_pct),
       cell(item.pm_high_time),
       cell(percent(item.rth_open_high_pct),item.rth_open_high_pct),
+      cell(percent(item.rth_open_close_pct),item.rth_open_close_pct),
       cell(percent(item.rth_high_low_pct),item.rth_high_low_pct),
       cell(item.pm_dollar_volume_till_high==null?'—':`$${compact(item.pm_dollar_volume_till_high)}`,item.pm_dollar_volume_till_high),
       cell(`${compact(item.pm_volume)} sh`,item.pm_volume),
@@ -1076,7 +1080,7 @@ function renderTab(tab, r, isRefresh){
   o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap"><span>${esc(T.p7)}</span><span style="display:flex;align-items:center;gap:12px;font-size:12px;font-weight:normal;color:#aaa"><span>Premarket gap: <b style="color:#e8e8e8">${esc(pmGapText)}</b></span><label for="path_norm">View <select id="path_norm" style="margin-left:5px"><option value="dev">Price vs VWAP (Dᵥ)</option><option value="dt">Price vs TWAP (Dₜ)</option><option value="spread">ln(VWAP / TWAP)</option><option value="vwap">Cumulative VWAP height</option><option value="twap">Clock-time TWAP height</option><option value="prev_close">Recomposed price from previous close</option><option value="gap">% of premarket gap retained</option></select></label></span></div><canvas id="cv"></canvas>`+
      `<div class="foot" id="path_norm_foot"><span class="b" data-tip="Historical median across VWAP-state-matched gap-up setups.">━ history median<\/span> &nbsp; <span style="color:#6c8" data-tip="Middle 50% range of similar setups.">▒ p25–p75<\/span> &nbsp; <span class="y">━ today<\/span> &nbsp; <span class="y">┅ expected path<\/span> &nbsp; <span class="d">━ each similar setup<\/span> &nbsp; Default Y = price / cumulative VWAP − 1; expected price = projected VWAP × (1 + deviation).<\/div><\/div>`;
 
-  if(r.pd.rows.length) o += `<div class="panel"><div class="ttl">${esc(T.pd)}</div>${table(r.pd.cols,r.pd.rows,null,false)}</div>`;
+  if(r.pd.rows.length) o += `<div class="panel"><div class="ttl">${esc(T.pd)}</div>${table(r.pd.cols,r.pd.rows,null,false)}<div class="foot">${esc(r.pd.foot||'')}</div></div>`;
   o += `<div class="panel recent-filings-panel"><div class="recent-filings-heading"><span><span style="color:#25cf91">●</span> LIVE FILINGS · ${esc(h.ticker)}</span><a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent" target="_blank" rel="noopener noreferrer">Full feed ↗</a></div><div class="recent-filings-list" id="recent_filings_feed"></div></div>`;
 
   tab.container.innerHTML = o;
@@ -1119,23 +1123,6 @@ function renderTab(tab, r, isRefresh){
   if(cv) drawChart(r.chart, cv);
 }
 
-const MC={"Short at open":"#ff9f43","PM high rejection":"#e056fd","5m low break":"#ff5a5a","First red 5m candle":"#ffd23f","VWAP loss (post-HOD)":"#6cc4ff"};
-const MA={"Short at open":"Open","PM high rejection":"PMH","5m low break":"5mL","First red 5m candle":"R5","VWAP loss (post-HOD)":"VWAP"};
-const hm=(m,off)=>{m=((m+off)%1440+1440)%1440;return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0')};
-function tri(x,px,py,dir,col){x.fillStyle=col;x.beginPath();
-  if(dir==='down'){x.moveTo(px-5,py-9);x.lineTo(px+5,py-9);x.lineTo(px,py-1);}
-  else{x.moveTo(px-5,py+9);x.lineTo(px+5,py+9);x.lineTo(px,py+1);}
-  x.closePath();x.fill();}
-
-function bone(b){
-  const n=b.c.length,a9=2/10,a21=2/22,e9=[],e21=[],bu=[],bl=[];
-  for(let i=0;i<n;i++){
-    e9.push(i?a9*b.c[i]+(1-a9)*e9[i-1]:b.c[i]); e21.push(i?a21*b.c[i]+(1-a21)*e21[i-1]:b.c[i]);
-    if(i>=19){let s=0;for(let k=i-19;k<=i;k++)s+=b.c[k];const m=s/20;let v=0;for(let k=i-19;k<=i;k++)v+=(b.c[k]-m)**2;const sd=Math.sqrt(v/20);bu.push(m+2*sd);bl.push(m-2*sd);}
-    else{bu.push(null);bl.push(null);}
-  }
-  return {e9,e21,bu,bl};
-}
 function drawEvAll(evList, containerEl){
   const cEl = containerEl || (activeTab && openTabs[activeTab] ? openTabs[activeTab].container : document);
   const list = evList || (activeTab && openTabs[activeTab] ? openTabs[activeTab].EV : []);
@@ -1190,7 +1177,7 @@ async function loadChartContext(card,tab,anchorDate){
   if(days===1&&tf!=='1d'){card._contextChart=null;card._contextDates=[];card._contextDaily=false;card._contextError='';card._contextLoading=false;drawEvAll(tab.EV,tab.container);return;}
   card._contextLoading=true;card._contextError='';
   const requestId=(card._contextRequestId||0)+1;card._contextRequestId=requestId;
-  const query=new URLSearchParams({ticker:tab.result?.head?.ticker||'',date:anchorDate||card._sessionDate,days:String(days),tf,user:currentUser||'',token:sessionToken||''});
+  const query=new URLSearchParams({ticker:tab.result?.head?.ticker||'',date:anchorDate||card._sessionDate,days:String(days),tf,user:currentUser||'',token:sessionToken||'',postmarket:'1'});
   try{const response=await fetch('/api/chart-context?'+query.toString()),data=await response.json();if(requestId!==card._contextRequestId)return;if(!response.ok)throw new Error(data.error||'Could not load chart range');card._contextChart=data.bars;card._contextDates=data.dates;card._contextDaily=!!data.daily;if(anchorDate)card._sessionDate=anchorDate;}
   catch(error){card._contextChart=null;card._contextError=error.message;}
   card._contextLoading=false;
@@ -1227,454 +1214,6 @@ async function navigateEvCard(card, step, tab){
   if((card._chartDays||1)>1||card._chartTf==='1d')loadChartContext(card,tab);
   if($('#chart_modal').style.display==='flex'&&currentModalSlot===Number(card.dataset.evSlot))renderModalChart();
 }
-function aggregateEvBars(source, tf){
-  if(!source || !source.t || tf===1 || tf==='1d') return source;
-  const out={t:[],d:[],o:[],h:[],l:[],c:[],v:[],vw:[]}, groups=new Map();
-  for(let i=0;i<source.t.length;i++){
-    const start=Math.floor(source.t[i]/tf)*tf,day=source.d?.[i]||'';
-    const key=day+'|'+start;
-    if(!groups.has(key)) groups.set(key,[]);
-    groups.get(key).push(i);
-  }
-  for(const [key,ids] of groups){
-    const start=Number(key.split('|').pop());out.t.push(start);out.d.push(source.d?.[ids[0]]||'');out.o.push(source.o[ids[0]]);out.h.push(Math.max(...ids.map(i=>source.h[i])));
-    out.l.push(Math.min(...ids.map(i=>source.l[i])));out.c.push(source.c[ids[ids.length-1]]);
-    out.v.push(ids.reduce((sum,i)=>sum+(source.v[i]||0),0));out.vw.push(source.vw[ids[ids.length-1]]);
-  }
-  return out;
-}
-function gapRangeResolve(point,g){
-  if(!point||!g||!g.bars)return -1;const b=g.bars,n=b.t.length,dates=b.d||[];let first=0,last=n;
-  if(dates.length){let lo=0,hi=n;while(lo<hi){const mid=(lo+hi)>>1;if((dates[mid]||g.chart.date)<point.date)lo=mid+1;else hi=mid;}first=lo;lo=first;hi=n;while(lo<hi){const mid=(lo+hi)>>1;if((dates[mid]||g.chart.date)<=point.date)lo=mid+1;else hi=mid;}last=lo;}
-  if(first>=last)return -1;const dayIndex=g.multi?g.dates.indexOf(point.date):-1,minuteAt=i=>b.t[i]-(dayIndex>=0?dayIndex*g.sessionSpan:0);
-  let lo=first,hi=last;while(lo<hi){const mid=(lo+hi)>>1;if(minuteAt(mid)<point.minute)lo=mid+1;else hi=mid;}
-  if(lo>=last)return last-1;if(lo===first)return lo;return Math.abs(minuteAt(lo)-point.minute)<Math.abs(minuteAt(lo-1)-point.minute)?lo:lo-1;
-}
-function gapRangePointAtIndex(g,index){
-  const b=g.bars,day=b.d?.[index]||g.chart.date,dayIndex=g.multi?g.dates.indexOf(day):-1;
-  const minute=b.t[index]-(dayIndex>=0?dayIndex*g.sessionSpan:0),hh=String(Math.floor(minute/60)).padStart(2,'0'),mm=String(minute%60).padStart(2,'0');
-  return {date:day,minute,price:b.c[index],label:`${formatDateMDY(day)} ${hh}:${mm} ET`};
-}
-function gapRangeX(point,g){if(Number.isFinite(point.plotTime))return g.X(point.plotTime);const dayIndex=g.multi?g.dates.indexOf(point.date):-1;return g.X(point.minute+(dayIndex>=0?dayIndex*g.sessionSpan:0));}
-function gapRangeTimestamp(point,offsetForDay){
-  const [y,m,d]=point.date.split('-').map(Number),etOffset=330-offsetForDay(point.date);
-  return Date.UTC(y,m-1,d,0,point.minute-etOffset);
-}
-function gapRangeStats(measure,g){
-  const a=gapRangeResolve(measure.a,g),z=gapRangeResolve(measure.b,g);if(a<0||z<0)return null;
-  const from=Math.min(a,z),to=Math.max(a,z),b=g.bars,bars=to-from+1;let cache=b._rangeStatsCache;
-  if(!cache){const n=b.t.length,volumePrefix=new Float64Array(n+1),dollarPrefix=new Float64Array(n+1);
-    for(let i=0;i<n;i++){const v=Number(b.v[i])||0;volumePrefix[i+1]=volumePrefix[i]+v;dollarPrefix[i+1]=dollarPrefix[i]+(Number(b.c[i])||0)*v;}
-    cache=b._rangeStatsCache={volumePrefix,dollarPrefix};}
-  const volume=cache.volumePrefix[to+1]-cache.volumePrefix[from],dollarVolume=cache.dollarPrefix[to+1]-cache.dollarPrefix[from];
-  const change=measure.b.price-measure.a.price,pct=measure.a.price?change/measure.a.price*100:0;
-  return {a,z,from,to,bars,volume,dollarVolume,change,pct};
-}
-function drawGapDeepDiveRanges(cv,x,g){
-  const measures=cv._rangeMeasures||[],palette=['#62c8ff','#ffd23f','#ff78cb','#b8ff6e','#ff9f43'];cv._rangeScreenMeasures=[];
-  if(!measures.length){if(cv._rangeMeasureBox){cv._rangeMeasureBox.hidden=true;cv._rangeMeasureBox.textContent='';}return;}
-  x.save();x.beginPath();x.rect(g.L,g.T,g.plotW,g.plotH);x.clip();
-  for(let n=0;n<measures.length;n++){
-    const measure=measures[n],stats=gapRangeStats(measure,g);if(!stats)continue;
-    const a={x:gapRangeX(measure.a,g),y:g.Y(measure.a.price)},b={x:gapRangeX(measure.b,g),y:g.Y(measure.b.price)},color=palette[n%palette.length];
-    x.strokeStyle=color;x.lineWidth=cv._selectedRangeId===measure.id?2.8:1.8;x.beginPath();x.moveTo(a.x,a.y);x.lineTo(b.x,b.y);x.stroke();
-    [a,b].forEach(pt=>{x.fillStyle='#090c10';x.strokeStyle=color;x.lineWidth=2;x.beginPath();x.arc(pt.x,pt.y,5,0,Math.PI*2);x.fill();x.stroke();});
-    cv._rangeScreenMeasures.push({id:measure.id,a,b,color});
-  }
-  x.restore();
-  const selected=measures.find(m=>m.id===cv._selectedRangeId),stats=selected?gapRangeStats(selected,g):null,box=cv._rangeMeasureBox;
-  if(box&&stats){const sign=stats.change>=0?'+':'−',pctSign=stats.pct>=0?'+':'−',money=n=>'$'+Math.abs(n).toFixed(Math.abs(n)<1?4:2),millions=n=>(Number(n)/1e6).toFixed(2)+'M',float=Number(cv._floatShares??g.chart?.float_shares),compact=n=>Number.isFinite(n)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(n):'Unavailable',rotation=float>0?`${(stats.volume/float).toFixed(2)}x`:'Unavailable';
-    box.hidden=false;box.style.borderColor=stats.change>=0?'#3ddc84':'#ff5a5a';box.style.color=stats.change>=0?'#d8ffe8':'#ffe1e1';
-    box.textContent=`% Change  ${pctSign}${Math.abs(stats.pct).toFixed(2)}%\n$ Change  ${sign}${money(stats.change)}\nVolume  ${millions(stats.volume)} sh\n$ Volume  $${millions(stats.dollarVolume)}\nFloat  ${compact(float)} sh\nFloat rotation  ${rotation}`;
-    const line=cv._rangeScreenMeasures.find(item=>item.id===selected.id),wrap=box.parentElement;if(line&&wrap){const W=wrap.clientWidth,H=wrap.clientHeight,bw=box.offsetWidth,bh=box.offsetHeight,mx=(line.a.x+line.b.x)/2,my=(line.a.y+line.b.y)/2;let left=mx+14,top=my+14;if(left+bw>W-8)left=mx-bw-14;if(top+bh>H-8)top=my-bh-14;box.style.left=Math.max(8,Math.min(W-bw-8,left))+'px';box.style.top=Math.max(8,Math.min(H-bh-8,top))+'px';box.style.right='auto';}
-  }else if(box){box.hidden=true;box.textContent='';}
-}
-function drawGapDeepDiveRangeOverlay(cv){
-  const overlay=cv._rangeOverlay||$('#gap_chart_range_overlay'),g=cv._rangeGeometry;if(!overlay||!g)return;
-  const W=cv.clientWidth,H=cv.clientHeight;if(W<2||H<2)return;
-  if(overlay.width!==cv.width)overlay.width=cv.width;if(overlay.height!==cv.height)overlay.height=cv.height;if(overlay.style.width!==W+'px')overlay.style.width=W+'px';if(overlay.style.height!==H+'px')overlay.style.height=H+'px';
-  const x=overlay.getContext('2d');x.setTransform(overlay.width/W,0,0,overlay.height/H,0,0);x.clearRect(0,0,W,H);
-  drawGapDeepDiveRanges(cv,x,g);
-  const z=cv._zoomDrag;if(z){const left=Math.min(z.x0,z.x1),width=Math.abs(z.x1-z.x0),top=g.T,height=g.plotH;x.save();x.fillStyle='rgba(98,200,255,.14)';x.fillRect(left,top,width,height);x.strokeStyle='#62c8ff';x.lineWidth=1.5;x.setLineDash([5,4]);x.strokeRect(left,top,width,height);x.restore();}
-}
-function scheduleGapDeepDiveRangeOverlay(cv){if(cv._rangeOverlayFrame)return;cv._rangeOverlayFrame=requestAnimationFrame(()=>{cv._rangeOverlayFrame=0;drawGapDeepDiveRangeOverlay(cv);});}
-function drawGapDeepDiveCrosshair(cv){const g=cv._rangeGeometry,p=cv._crosshair,v=cv._crosshairV||$('#gap_chart_crosshair_v'),h=cv._crosshairH||$('#gap_chart_crosshair_h');if(!v||!h)return;if(!cv._showCrosshair||!g||!p||p.x<g.L||p.x>g.L+g.plotW||p.y<g.T||p.y>g.T+g.plotH){v.hidden=true;h.hidden=true;return;}v.hidden=false;h.hidden=false;v.style.left=p.x+'px';v.style.top=g.T+'px';v.style.height=((g.crosshairBottom||g.T+g.plotH)-g.T)+'px';h.style.left=g.L+'px';h.style.top=p.y+'px';h.style.width=g.plotW+'px';}
-function gapDeepDiveEventMarkerAt(cv,x,y){return (cv._eventMarkersScreen||[]).find(marker=>x>=marker.x&&x<=marker.x+marker.w&&y>=marker.y&&y<=marker.y+marker.h)||null;}
-function drawGapDeepDiveEventMarkers(cv,x,g){
-  const events=cv._marketEvents||[],b=g?.bars;if(!events.length||!b?.t?.length){cv._eventMarkersScreen=[];return;}
-  const placed=[],counts=new Map();x.save();x.font='bold 10px Consolas,monospace';x.textAlign='center';x.textBaseline='middle';
-  for(const event of events){
-    const eventStamp=Date.parse(`${event.chart_date}T00:00:00Z`)+Number(event.minute_et??570)*60000;
-    let best=-1,bestDistance=Infinity;
-    for(let i=0;i<b.t.length;i++){
-      const barDate=b.d?.[i]||g.chart.date;if(!barDate)continue;
-      const dayIndex=g.multi?Math.max(0,g.dates.indexOf(barDate)):0,minute=g.daily?720:(g.multi?b.t[i]-dayIndex*g.sessionSpan:b.t[i]);
-      const barStamp=Date.parse(`${barDate}T00:00:00Z`)+minute*60000,distance=Math.abs(barStamp-eventStamp);
-      if(distance<bestDistance){best=i;bestDistance=distance;}
-    }
-    if(best<0||!Number.isFinite(bestDistance)||bestDistance>72*60*60000)continue;
-      const barTime=g.daily?b.t[best]+.5:b.t[best]+g.tf/2,centerX=g.X(barTime);
-    if(centerX<g.L-10||centerX>g.L+g.plotW+10)continue;
-    const barHigh=Number(b.h[best])||g.yMax,baseY=Math.max(g.T+3,Math.min(g.T+g.plotH-18,g.Y(barHigh)-22)),stackKey=`${best}|${event.chart_date}`,stack=counts.get(stackKey)||0;counts.set(stackKey,stack+1);
-    const w=18,h=16,px=Math.max(g.L,Math.min(g.L+g.plotW-w,centerX-w/2+stack*20)),py=Math.max(g.T,baseY-stack*17),isNews=event.kind==='news'||String(event.kind||'').toLowerCase().includes('news'),color=isNews?'#ffd23f':'#62c8ff',label=isNews?'N':'S';
-    x.fillStyle='rgba(7,12,18,.97)';x.strokeStyle=color;x.lineWidth=1.2;x.beginPath();x.roundRect(px,py,w,h,3);x.fill();x.stroke();x.fillStyle=color;x.fillText(label,px+w/2,py+h/2+.5);
-    const time=event.time_exact?`${String(Math.floor(event.minute_et/60)).padStart(2,'0')}:${String(event.minute_et%60).padStart(2,'0')} ET`:'time unavailable · marker placed at session open';
-    placed.push({x:px,y:py,w,h,url:event.url,title:`${isNews?'Yahoo Finance news':'SEC '+(event.form||'filing')} · ${formatDateMDY(event.chart_date)} ${time}\n${event.title}`});
-  }
-  x.restore();cv._eventMarkersScreen=placed;
-}
-function scheduleGapDeepDiveHover(cv,x,y){cv._pendingHover={x,y};if(cv._hoverUpdateTimer)return;cv._hoverUpdateTimer=setTimeout(()=>{cv._hoverUpdateTimer=0;const p=cv._pendingHover;if(p)cv._showChartHover?.(p.x,p.y);},16);}
-function gapDeepDiveRangePoint(cv,x,y){return cv._rangePointAt?.(x,y)||cv._rangePointAtX?.(x)||null;}
-function bindGapDeepDiveRangeInput(cv){
-  if(cv._rangeInputBound)return;cv._rangeInputBound=true;
-  if(!cv._eventHoverTip&&cv.parentElement){const tip=document.createElement('div');tip.style.cssText='display:none;position:absolute;z-index:20;pointer-events:none;max-width:min(360px,70vw);white-space:pre-line;background:rgba(8,12,16,.97);border:1px solid #ffd23f;color:#f1f5f9;padding:6px 8px;border-radius:3px;font:11px/1.45 Consolas,monospace;box-shadow:0 2px 8px #000';cv.parentElement.appendChild(tip);cv._eventHoverTip=tip;}
-  const stop=e=>{e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();};
-  cv.addEventListener('pointerdown',e=>{
-    const eventMarker=gapDeepDiveEventMarkerAt(cv,e.offsetX,e.offsetY);if(eventMarker&&eventMarker.url){cv._eventMarkerPointer={marker:eventMarker,pointerId:e.pointerId};cv.setPointerCapture(e.pointerId);cv.style.cursor='pointer';stop(e);return;}
-    if(cv._zoomSelectMode&&e.button===0&&cv._rangeGeometry){const g=cv._rangeGeometry;if(e.offsetX<g.L||e.offsetX>g.L+g.plotW||e.offsetY<g.T||e.offsetY>g.T+g.plotH)return;cv._zoomDrag={x0:e.offsetX,y0:g.T,x1:e.offsetX,y1:g.T+g.plotH};cv.setPointerCapture(e.pointerId);stop(e);drawGapDeepDiveRangeOverlay(cv);return;}
-    if(!cv._rangeMeasureMode||e.button!==0||!cv._rangeGeometry)return;
-    const g=cv._rangeGeometry;if(e.offsetX<g.L||e.offsetX>g.L+g.plotW||e.offsetY<g.T||e.offsetY>g.T+g.plotH)return;
-    const hit=(cv._rangeScreenMeasures||[]).map(m=>({m,which:['a','b'].sort((u,v)=>Math.hypot(m[u].x-e.offsetX,m[u].y-e.offsetY)-Math.hypot(m[v].x-e.offsetX,m[v].y-e.offsetY))[0]})).find(({m,which})=>Math.hypot(m[which].x-e.offsetX,m[which].y-e.offsetY)<12);
-    let drag;
-    if(hit){const measure=cv._rangeMeasures.find(m=>m.id===hit.m.id);cv._selectedRangeId=hit.m.id;drag={kind:'endpoint',id:hit.m.id,which:hit.which,original:{...measure[hit.which]}};}
-    else{
-      const p=gapDeepDiveRangePoint(cv,e.offsetX,e.offsetY);if(!p)return;
-      const lineHit=(cv._rangeScreenMeasures||[]).find(m=>{const dx=m.b.x-m.a.x,dy=m.b.y-m.a.y,t=Math.max(0,Math.min(1,((e.offsetX-m.a.x)*dx+(e.offsetY-m.a.y)*dy)/(dx*dx+dy*dy||1)));return Math.hypot(e.offsetX-(m.a.x+t*dx),e.offsetY-(m.a.y+t*dy))<8;});
-      if(lineHit){const measure=cv._rangeMeasures.find(m=>m.id===lineHit.id),i=gapRangeResolve(p,g);cv._selectedRangeId=lineHit.id;drag={kind:'move',id:lineHit.id,index:i,price:p.price,a:{...measure.a},b:{...measure.b}};}
-      else{const measure={id:crypto.randomUUID(),a:p,b:p};cv._rangeMeasures||=[];cv._rangeMeasures.push(measure);cv._selectedRangeId=measure.id;drag={kind:'create',id:measure.id,which:'b'};}
-    }
-    cv._rangeDrag=drag;cv.setPointerCapture(e.pointerId);cv.style.cursor='crosshair';stop(e);drawGapDeepDiveRangeOverlay(cv);
-  },true);
-  cv.addEventListener('pointermove',e=>{const marker=gapDeepDiveEventMarkerAt(cv,e.offsetX,e.offsetY),tip=cv._eventHoverTip;if(marker){cv.style.cursor='pointer';cv.removeAttribute('title');if(tip){tip.textContent=marker.title;tip.style.display='block';const parent=cv.parentElement,w=tip.offsetWidth,h=tip.offsetHeight;tip.style.left=Math.max(4,Math.min(parent.clientWidth-w-4,cv.offsetLeft+e.offsetX+12))+'px';tip.style.top=Math.max(4,Math.min(parent.clientHeight-h-4,cv.offsetTop+e.offsetY+12))+'px';}}else{if(tip)tip.style.display='none';if(!cv._rangeDrag&&!cv._zoomDrag&&!cv._panActive)cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode)?'crosshair':'grab';}},true);
-  cv.addEventListener('pointermove',e=>{
-    if(cv._zoomDrag){cv._zoomDrag.x1=e.offsetX;cv._zoomDrag.y1=cv._rangeGeometry.T+cv._rangeGeometry.plotH;stop(e);scheduleGapDeepDiveRangeOverlay(cv);return;}
-    const drag=cv._rangeDrag,g=cv._rangeGeometry;if(!drag||!g)return;
-    const measure=cv._rangeMeasures.find(m=>m.id===drag.id),p=gapDeepDiveRangePoint(cv,e.offsetX,e.offsetY);if(!measure||!p)return;
-    if(drag.kind==='move'){
-      const idx=gapRangeResolve(p,g),delta=idx-drag.index,priceDelta=p.price-drag.price;
-      const movePoint=original=>{const old=gapRangeResolve(original,g),next=gapRangePointAtIndex(g,Math.max(0,Math.min(g.bars.t.length-1,old+delta)));return {...next,price:original.price+priceDelta};};
-      measure.a=movePoint(drag.a);measure.b=movePoint(drag.b);
-    }else measure[drag.which]=p;
-    cv._selectedRangeId=measure.id;stop(e);scheduleGapDeepDiveRangeOverlay(cv);
-  },true);
-  const finish=e=>{
-    if(cv._eventMarkerPointer){const {marker,pointerId}=cv._eventMarkerPointer;cv._eventMarkerPointer=null;cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode)?'crosshair':'grab';if(e.pointerId===pointerId&&e.offsetX>=marker.x&&e.offsetX<=marker.x+marker.w&&e.offsetY>=marker.y&&e.offsetY<=marker.y+marker.h)window.open(marker.url,'_blank','noopener,noreferrer');stop(e);return;}
-    if(cv._zoomDrag){const z=cv._zoomDrag;cv._zoomDrag=null;const g=cv._rangeGeometry,dx=Math.abs(z.x1-z.x0);if(dx>=12&&g){const left=Math.max(g.L,Math.min(z.x0,z.x1)),right=Math.min(g.L+g.plotW,Math.max(z.x0,z.x1)),ratio=(left-g.L)/g.plotW,newSpan=Math.max(1,(right-left)*g.viewSpan/g.plotW),minZoom=g.baseViewSpan/g.span;cv._rangeZoom=Math.max(minZoom,Math.min(24,g.baseViewSpan/newSpan));cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,g.viewStart+ratio*g.viewSpan-g.viewBase));cv._yZoom=1;cv._gapDeepDiveRedraw?.();}else drawGapDeepDiveRangeOverlay(cv);cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode)?'crosshair':'grab';stop(e);return;}
-    if(!cv._rangeDrag)return;cv._rangeDrag=null;cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode)?'crosshair':'grab';stop(e);drawGapDeepDiveRangeOverlay(cv);
-  };
-  cv.addEventListener('pointerup',finish,true);cv.addEventListener('pointercancel',finish,true);
-  cv.addEventListener('dblclick',e=>{if(!cv._fullFeatures)return;cv._rangeZoom=1;cv._panOffset=0;cv._yZoom=1;cv._gapDeepDiveRedraw?.();},true);
-  cv.addEventListener('wheel',e=>{
-  if(!cv._fullFeatures||!cv._wheelZoomEnabled||!cv._rangeGeometry)return;
-    const g=cv._rangeGeometry;if(e.offsetX<g.L||e.offsetX>g.L+g.plotW)return;
-    const ratio=(e.offsetX-g.L)/g.plotW,anchor=g.viewStart+ratio*g.viewSpan,zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,(cv._rangeZoom||1)*Math.exp(-Math.sign(e.deltaY)*.18)));
-    cv._rangeZoom=zoom;const nextSpan=Math.min(g.span,g.baseViewSpan/zoom),viewBase=g.viewBase;
-    cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,anchor-ratio*nextSpan-viewBase));
-    e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();cv._gapDeepDiveRedraw?.();
-  },{capture:true,passive:false});
-}
-function drawGapDeepDiveNavigator(mainCv,baseChart,timeframe){
-  const nav=mainCv._navigator||$('#gap_chart_navigator');if(!nav||!mainCv._rangeGeometry)return;const g=mainCv._rangeGeometry,b=g.bars,W=nav.clientWidth,H=nav.clientHeight,dpr=Math.min(2,window.devicePixelRatio||1);
-  if(W<2||H<2)return;nav.width=Math.round(W*dpr);nav.height=Math.round(H*dpr);nav.style.width=W+'px';nav.style.height=H+'px';const x=nav.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);x.fillStyle='#090c10';x.fillRect(0,0,W,H);
-  const pad=8,plotW=W-pad*2,lo=Math.min(...b.l),hi=Math.max(...b.h),range=hi-lo||1,at=t=>pad+plotW*(t-g.fullStart)/g.span;
-  x.strokeStyle='#5c788e';x.lineWidth=1;x.beginPath();let started=false;for(let i=0;i<b.t.length;i++){const px=at(b.t[i]),py=H-7-(b.c[i]-lo)/(range)*(H-14);if(px<pad||px>W-pad)continue;if(!started){x.moveTo(px,py);started=true;}else x.lineTo(px,py);}x.stroke();
-  const left=Math.max(pad,Math.min(W-pad,at(g.viewStart))),right=Math.max(left+10,Math.min(W-pad,at(g.viewStart+g.viewSpan)));nav._gapNav={left,right,pad,plotW,geometry:g};
-  x.fillStyle='rgba(98,200,255,.17)';x.fillRect(left,2,right-left,H-4);x.strokeStyle='#62c8ff';x.lineWidth=1.5;x.strokeRect(left+.5,2.5,right-left-1,H-5);
-  x.fillStyle='#d9f2ff';x.fillRect(left-3,2,6,H-4);x.fillRect(right-3,2,6,H-4);
-  if(!nav._gapNavBound){nav._gapNavBound=true;let drag=null;nav.addEventListener('pointerdown',e=>{const q=nav._gapNav;if(!q)return;const px=e.offsetX;drag={x:px,left:q.left,right:q.right,mode:px<q.left+9?'left':px>q.right-9?'right':px<q.right?'body':'jump'};nav.setPointerCapture(e.pointerId);nav.style.cursor=drag.mode==='body'?'grabbing':'ew-resize';e.preventDefault();});nav.addEventListener('pointermove',e=>{if(!drag||!nav._gapNav)return;const q=nav._gapNav,g=q.geometry,dx=e.offsetX-drag.x,unit=g.span/q.plotW;let left=drag.left,right=drag.right;if(drag.mode==='body'){left+=dx;right+=dx;}else if(drag.mode==='left')left+=dx;else if(drag.mode==='right')right+=dx;else{left=e.offsetX-(right-left)/2;right=e.offsetX+(right-left)/2;}left=Math.max(q.pad,Math.min(right-10,left));right=Math.min(nav.clientWidth-q.pad,Math.max(left+10,right));const newSpan=Math.max(1,(right-left)*g.span/q.plotW),zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,g.baseViewSpan/newSpan)),viewBase=g.viewBase,targetStart=g.fullStart+(left-q.pad)*g.span/q.plotW;mainCv._rangeZoom=zoom;mainCv._panOffset=targetStart-viewBase;mainCv._gapDeepDiveRedraw?.();e.preventDefault();});const end=()=>{drag=null;nav.style.cursor='grab';};nav.addEventListener('pointerup',end);nav.addEventListener('pointercancel',end);}
-}
-function bindUnifiedChartFeatures(cv,ui,persist,redraw){
-  cv._fullFeatures=true;cv._featureUi=ui;cv._featurePersist=persist;cv._featureRedraw=redraw;cv._rangeOverlay=ui.overlay;cv._crosshairV=ui.crosshairV;cv._crosshairH=ui.crosshairH;cv._rangeMeasureBox=ui.measureBox;cv._navigator=ui.navigator;cv._quoteLine=ui.quoteLine;cv._showCrosshair=true;cv._showOhlcTip=true;cv._wheelZoomEnabled=true;
-  cv._afterDraw=()=>{drawGapDeepDiveRangeOverlay(cv);drawGapDeepDiveCrosshair(cv);drawGapDeepDiveNavigator(cv,cv._chart,cv._timeframe);};
-  cv._gapDeepDiveRedraw=()=>{cv._zoom=cv._rangeZoom||cv._zoom||1;cv._featurePersist?.();cv._featureRedraw?.();};
-  cv._avwapOnChange=message=>{ui.status.textContent=message;cv._featurePersist?.();if(message.startsWith('AVWAP drawn'))setGapDeepDiveMouseMode('zoom',cv,ui);};
-  bindGapDeepDiveRangeInput(cv);
-  if(cv._featureControlsBound)return;cv._featureControlsBound=true;
-  ui.measure.onclick=()=>{const mode=cv._rangeMeasureMode?'zoom':'measure';setGapDeepDiveMouseMode(mode,cv,ui);ui.status.textContent=mode==='measure'?'Drag between any two chart points to measure.':'Hold and drag across the chart to zoom.';drawGapDeepDiveRangeOverlay(cv);};
-  ui.pan.onclick=()=>{const mode=cv._panToolMode?'zoom':'pan';setGapDeepDiveMouseMode(mode,cv,ui);ui.status.textContent=mode==='pan'?'Pan active · drag to move the chart.':'Pointer active · drag across the chart to zoom.';};
-  ui.avwap.onclick=()=>{setGapDeepDiveMouseMode('avwap',cv,ui);cv._avwapAnchors=null;cv._avwapSelectMode=true;ui.status.textContent='AVWAP tool active · click anchor A, then a later point B.';cv._featurePersist?.();cv._featureRedraw?.();};
-  ui.clearAvwap.onclick=()=>{cv._avwapAnchors=null;cv._avwapSelectMode=false;setGapDeepDiveMouseMode('zoom',cv,ui);ui.status.textContent='AVWAP cleared.';cv._featurePersist?.();cv._featureRedraw?.();};
-  ui.deleteMeasure.onclick=()=>{cv._rangeMeasures=(cv._rangeMeasures||[]).filter(m=>m.id!==cv._selectedRangeId);cv._selectedRangeId=cv._rangeMeasures.at(-1)?.id||null;cv._featurePersist?.();cv._featureRedraw?.();};
-  ui.clearMeasures.onclick=()=>{cv._rangeMeasures=[];cv._selectedRangeId=null;cv._featurePersist?.();cv._featureRedraw?.();};
-  const zoomBy=factor=>{const g=cv._rangeGeometry;if(!g)return;const zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,(cv._rangeZoom||1)*factor)),anchor=g.viewStart+g.viewSpan/2,nextSpan=Math.min(g.span,g.baseViewSpan/zoom);cv._rangeZoom=zoom;cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,anchor-nextSpan/2-g.viewBase));cv._gapDeepDiveRedraw?.();};ui.zoomIn.onclick=()=>zoomBy(1.25);ui.zoomOut.onclick=()=>zoomBy(.8);
-  ui.reset.onclick=()=>{cv._rangeZoom=1;cv._zoom=1;cv._panOffset=0;cv._yZoom=1;cv._featurePersist?.();cv._featureRedraw?.();};
-  ui.copy.onclick=async()=>{try{await copyChartWithOverlays(cv,ui.overlay,ui.measureBox);ui.copy.textContent='Copied ✓';setTimeout(()=>ui.copy.textContent='Copy PNG',1200);}catch(error){ui.status.textContent='PNG copy unavailable: '+error.message;}};
-  [ui.vwap,ui.twap].forEach((toggle,index)=>toggle.onchange=()=>{if(index===0)cv._showVWAP=toggle.checked;else cv._showTWAP=toggle.checked;cv._featurePersist?.();cv._featureRedraw?.();});
-}
-async function copyChartWithOverlays(cv,overlay,measureBox){
-  const width=Math.max(1,cv.clientWidth),height=Math.max(1,cv.clientHeight),out=document.createElement('canvas');out.width=cv.width;out.height=cv.height;
-  const x=out.getContext('2d');x.setTransform(out.width/width,0,0,out.height/height,0,0);x.fillStyle='#050607';x.fillRect(0,0,width,height);x.drawImage(cv,0,0,width,height);if(overlay)x.drawImage(overlay,0,0,width,height);
-  if(measureBox&&!measureBox.hidden&&measureBox.textContent.trim()){
-    const rect=measureBox.getBoundingClientRect(),parent=measureBox.parentElement?.getBoundingClientRect(),style=getComputedStyle(measureBox),left=rect.left-(parent?.left||0),top=rect.top-(parent?.top||0),padX=parseFloat(style.paddingLeft)||8,padY=parseFloat(style.paddingTop)||8;
-    x.fillStyle=style.backgroundColor||'rgba(6,13,21,.96)';x.fillRect(left,top,rect.width,rect.height);x.strokeStyle=style.borderTopColor||style.borderColor||'#62c8ff';x.lineWidth=parseFloat(style.borderTopWidth)||1;x.strokeRect(left+.5,top+.5,rect.width-1,rect.height-1);
-    x.fillStyle=style.color||'#edf6ff';x.font=`${style.fontWeight||'400'} ${style.fontSize||'13px'} ${style.fontFamily||'Consolas,monospace'}`;x.textBaseline='top';const lineHeight=parseFloat(style.lineHeight)||20;measureBox.textContent.split('\n').forEach((line,index)=>x.fillText(line,left+padX,top+padY+index*lineHeight));
-  }
-  const blob=await new Promise(resolve=>out.toBlob(resolve,'image/png'));if(!blob)throw Error('Could not render PNG');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
-}
-function chartFeatureUi(prefix){const by=name=>document.getElementById(prefix+name);return {overlay:by('_overlay'),crosshairV:by('_crosshair_v'),crosshairH:by('_crosshair_h'),measureBox:by('_measure_box'),navigator:by('_navigator'),quoteLine:by('_quote_line'),status:by('_status'),measure:by('_measure'),pan:by('_pan'),avwap:by('_avwap'),clearAvwap:by('_clear_avwap'),deleteMeasure:by('_delete_measure'),clearMeasures:by('_clear_measures'),zoomIn:by('_zoom_in'),zoomOut:by('_zoom_out'),reset:by('_zoom_reset'),copy:by('_copy'),vwap:by('_vwap'),twap:by('_twap')};}
-function cancelUnifiedChartSelection(cv,ui={}){
-  const drag=cv._rangeDrag,cancelAvwap=cv._avwapSelectMode,wasPanning=!!cv._panActive,keepMeasure=!!cv._rangeMeasureMode,selectedId=cv._selectedRangeId,removeId=drag?.id||selectedId;
-  if(!selectedId&&!keepMeasure&&!cv._panToolMode&&!cancelAvwap&&!cv._zoomDrag&&!drag&&!wasPanning)return false;
-  if(removeId)cv._rangeMeasures=(cv._rangeMeasures||[]).filter(item=>item.id!==removeId);
-  if(wasPanning){cv._panOffset=cv._panStartOffset||0;cv._yZoom=cv._panStartYZoom||1;cv._onPanChange?.(cv._panOffset);cv._onYZoomChange?.(cv._yZoom);}
-  cv._panActive=false;cv._selectedRangeId=null;cv._rangeDrag=null;cv._zoomDrag=null;cv._avwapSelectMode=false;
-  if(cancelAvwap)cv._avwapAnchors=null;
-  if(keepMeasure)setGapDeepDiveMouseMode('measure',cv,ui);else if(cv._panToolMode||cv._rangeMeasureMode)setGapDeepDiveMouseMode('zoom',cv,ui);
-  cv._featurePersist?.();
-  const box=ui.measureBox||$('#gap_chart_measure_box'),status=ui.status||$('#gap_chart_avwap_status');if(box)box.hidden=true;
-  if(status)status.textContent=removeId?(keepMeasure?'Drawing removed · Measure remains active.':'Drawing removed.'):drag?(keepMeasure?'Drawing cancelled · Measure remains active.':'Drawing cancelled.'):cancelAvwap?'AVWAP selection cancelled.':keepMeasure?'Measure remains active.':'Selection cleared. Hold and drag on the chart to zoom.';
-  cv._featureRedraw?.();cv._gapDeepDiveRedraw?.();drawGapDeepDiveRangeOverlay(cv);drawGapDeepDiveCrosshair(cv);return true;
-}
-function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
-  const parentW = (cv.parentElement && cv.parentElement.clientWidth) ? cv.parentElement.clientWidth : 0;
-  const dpr = Math.min(3,Math.max(window.devicePixelRatio||1,Number(cv._renderDpr)||2));
-  const W = Math.max(300, parentW - (targetH ? 0 : 16));
-  const H = targetH || 540;
-  cv.style.width = W + 'px';
-  cv.style.height = H + 'px';
-  cv.width = Math.round(W * dpr);
-  cv.height = Math.round(H * dpr);
-  const x = cv.getContext('2d');
-  x.setTransform(cv.width / W, 0, 0, cv.height / H, 0, 0);
-  x.clearRect(0, 0, W, H);
-  const isLarge = H > 450;
-  x.font = (isLarge ? '15px' : '12px') + ' Consolas,monospace';
-  const daily=timeframe==='1d', tf=parseInt(timeframe,10)||2, source=c.bars, sessionSpan=c.after_hours?960:720;
-  let b,dates,multi;const cached=cv._seriesCache;
-  if(cached?.source===source&&cached.tf===timeframe){b=cached.bars;dates=cached.dates;multi=cached.multi;}
-  else{
-    b=daily?source:aggregateEvBars(source,tf);
-    dates=[...new Set(b?.d||[])];multi=!daily&&dates.length>1;
-    if(multi){let last='',n=-1;b={...b,t:b.t.map((t,i)=>{if(b.d[i]!==last){last=b.d[i];n++;}return 240+n*sessionSpan+t-240;})};}
-    cv._seriesCache={source,tf:timeframe,bars:b,dates,multi};
-  }
-  if(!b || !b.t.length){
-    x.fillStyle = '#8a8a8a';
-    x.fillText('No intraday data', 10, 20);
-    return;
-  }
-  const L = isLarge ? 64 : 50, R = 12, T = 10;
-  const VH = Math.round(H * 0.18), B = isLarge ? 24 : 18;
-  const ph = H - T - VH - B - 6, pw = W - L - R, vy0 = T + ph + 6, vy1 = vy0 + VH;
-  const sg = sel === 'none' ? [] : (c.sig || []).filter(s => sel === 'all' || s.name === sel);
-  const span=daily?Math.max(1,b.t.length):multi?dates.length*sessionSpan:sessionSpan, fullStart=daily?-.5:240;
-  // Keep intraday zoom centered on the selected session.  Do not clamp zoom
-  // to 1x: that made every zoom-out click a no-op.  The loaded date range is
-  // still the upper limit, so zooming out reveals neighboring sessions.
-  const baseViewSpan=daily?span:sessionSpan;
-  const viewSpan=Math.min(span,baseViewSpan/Math.max(.01,zoom)),panLimit=Math.max(0,span-viewSpan)/2;
-  let viewBase=fullStart+panLimit,panMin=-panLimit,panMax=panLimit;
-  if(multi){const anchorIndex=dates.indexOf(cv._anchorDate||c.date);if(anchorIndex>=0){viewBase=fullStart+anchorIndex*sessionSpan+sessionSpan/2-viewSpan/2;panMin=fullStart-viewBase;panMax=fullStart+span-viewSpan-viewBase;}}
-  cv._panMinOffset=panMin;cv._panMaxOffset=panMax;
-  cv._panOffset=Math.max(panMin,Math.min(panMax,cv._panOffset||0));
-  const viewStart=viewBase+cv._panOffset,X=m=>L+pw*(m-viewStart)/viewSpan;
-  let visible=Array.from({length:b.t.length},(_,i)=>i).filter(i=>b.t[i]>=viewStart-tf&&b.t[i]<=viewStart+viewSpan+tf);
-  if(!visible.length){let nearest=0,distance=Infinity;for(let i=0;i<b.t.length;i++){const d=Math.abs(b.t[i]-(viewStart+viewSpan/2));if(d<distance){nearest=i;distance=d;}}visible=[nearest];}
-  let lo=Math.min(...visible.map(i=>b.l[i])),hi=Math.max(...visible.map(i=>b.h[i]));
-  const pad=(hi-lo)*0.05||hi*0.02;lo-=pad;hi+=pad;
-  const yMid=(lo+hi)/2,yHalf=(hi-lo)/(2*Math.max(.5,cv._yZoom||1));lo=yMid-yHalf;hi=yMid+yHalf;
-  const Y=v=>T+ph*(1-(v-lo)/(hi-lo));
-  const hoverOffsets=new Map(),etClock=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',timeZoneName:'shortOffset'}),istClock=new Intl.DateTimeFormat('en-US',{timeZone:'UTC',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
-  const hoverOffset=day=>{if(hoverOffsets.has(day))return hoverOffsets.get(day);let offset=Number(c.off)||0;try{const parts=etClock.formatToParts(new Date(day+'T12:00:00Z')),name=parts.find(p=>p.type==='timeZoneName')?.value||'',match=name.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/);if(match){const et=(match[1]==='-'?-1:1)*(Number(match[2])*60+Number(match[3]||0));offset=330-et;}}catch{}hoverOffsets.set(day,offset);return offset;};
-  const hoverStamp=(day,minute)=>{const [yy,mm,dd]=String(day||'').split('-').map(Number);if(!yy||!mm||!dd)return 'time unavailable';const at=new Date(Date.UTC(yy,mm-1,dd,0,Math.round(minute+hoverOffset(day)))),parts=istClock.formatToParts(at),v=Object.fromEntries(parts.map(p=>[p.type,p.value]));return `${v.month}/${v.day}/${v.year} ${v.hour}:${v.minute} IST`;};
-  cv._rangeGeometry={bars:b,chart:c,dates,multi,daily,sessionSpan,tf,X,Y,L,T,plotW:pw,plotH:ph,crosshairBottom:vy1,yMin:lo,yMax:hi,offsetForDay:hoverOffset,span,fullStart,viewStart,viewSpan,baseViewSpan,viewBase};
-  cv._hoverItems=visible.map(i=>{const day=b.d?.[i]||c.date||'',dayIndex=multi?dates.indexOf(day):-1,minute=daily?0:b.t[i]-(dayIndex>=0?dayIndex*sessionSpan:0);return {key:`${day}|${b.t[i]}`,index:i,date:day,minute,x:X(b.t[i]+(daily?.5:tf/2)),label:daily?`${hoverStamp(day,0).split(' ').slice(0,1)[0]} · Daily IST`:hoverStamp(day,minute),o:b.o[i],h:b.h[i],l:b.l[i],c:b.c[i],prevC:i>0?b.c[i-1]:c.pc,v:b.v[i]||0};});
-  cv._rangePointAt=(px,py)=>{if(px<L||px>W-R||py<T||py>T+ph)return null;const plotTime=viewStart+(px-L)/pw*viewSpan,price=hi-(py-T)/ph*(hi-lo);let date=c.date||'',minute=plotTime;if(daily){const index=Math.max(0,Math.min(b.d.length-1,Math.round(plotTime)));date=b.d?.[index]||date;minute=0;}else if(multi){const index=Math.max(0,Math.min(dates.length-1,Math.floor((plotTime-240)/sessionSpan)));date=dates[index]||date;minute=plotTime-index*sessionSpan;}return {date,minute,plotTime,price,label:`${formatDateMDY(date)} ${String(Math.floor(minute/60)).padStart(2,'0')}:${String(Math.floor(minute%60)).padStart(2,'0')} ET`};};
-  cv._rangePointAtX=px=>{const p=cv._hoverItems?.reduce((best,item)=>Math.abs(item.x-px)<Math.abs(best.x-px)?item:best,cv._hoverItems?.[0]);return p?{date:p.date,minute:p.minute,price:p.c,label:p.label}:null;};
-  cv._showChartHover=(px,py)=>{if(px<L||px>W-R||!cv._hoverItems?.length){if(cv._hoverTip)cv._hoverTip.style.display='none';if(cv.id==='gap_chart_modal_canvas')$('#gap_chart_hover_time').textContent='Hover a candle to see its time · IST';return}let item=cv._hoverItems.reduce((best,p)=>Math.abs(p.x-px)<Math.abs(best.x-px)?p:best,cv._hoverItems[0]);if(cv.id==='gap_chart_modal_canvas')$('#gap_chart_hover_time').textContent=item.label;const tip=cv._hoverTip;if(!tip)return;const fmt=n=>Number.isFinite(Number(n))?Number(n).toFixed(Number(n)<1?4:2):'—';tip.textContent=cv._showOhlcTip?`O ${fmt(item.o)}  H ${fmt(item.h)}\nL ${fmt(item.l)}  C ${fmt(item.c)}  V ${Number(item.v||0).toLocaleString('en-US')}`:'';tip.style.whiteSpace=cv._showOhlcTip?'pre-line':'nowrap';tip.style.display=cv._showOhlcTip?'block':'none';if(cv._quoteLine){const change=item.c-Number(item.prevC||0),pct=item.prevC?change/Number(item.prevC)*100:0,tp=(item.h+item.l+item.c)/3,dv=tp*item.v,float=Number(cv._floatShares),compact=n=>Number.isFinite(n)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(n):'—',money=n=>Number.isFinite(n)?(Math.abs(n)>=1000?'$'+compact(Math.abs(n)):Math.abs(n)<1?'$'+Math.abs(n).toFixed(4):'$'+Math.abs(n).toFixed(2)):'—',signedMoney=n=>`${n>=0?'+':'-'}${money(change)}`;cv._quoteLine.textContent=`${item.label} · %Chg ${pct>=0?'+':''}${pct.toFixed(2)}% · $Chg ${signedMoney(change)} · Vol ${Number(item.v).toLocaleString('en-US')} · $Vol ${money(dv)} · Float ${Number.isFinite(float)?compact(float)+' sh':'unavailable'}`;cv._quoteLine.style.color=change>=0?'#64d99b':'#ff7777';}if(cv.id==='kwModalCanvas'){tip.style.left='' ;tip.style.top='' ;}else if(cv._showOhlcTip){tip.style.left=Math.min(W-210,Math.max(L,px+14))+'px';tip.style.top=(cv.offsetTop+8)+'px';}else{tip.style.left=Math.max(4,cv.offsetLeft+8)+'px';tip.style.top=(cv.offsetTop+cv.offsetHeight+2)+'px';}cv.removeAttribute('title');};
-  cv._viewSpan=viewSpan;cv._panSpan=span;cv._plotWidth=pw;cv._drawEvArgs=[c,sel,bzChecked,targetH,timeframe,zoom];
-  if(!cv._panBound){
-    cv._panBound=true;cv.style.cursor='grab';
-    const hoverParent=cv.parentElement;if(hoverParent){if(getComputedStyle(hoverParent).position==='static')hoverParent.style.position='relative';const tip=document.createElement('div');tip.className='chartHoverTip';tip.style.cssText='display:none;position:absolute;z-index:9;pointer-events:none;background:rgba(8,12,16,.96);border:1px solid #465362;color:#e7eef5;padding:5px 7px;border-radius:3px;font:11px Consolas,monospace;white-space:nowrap;box-shadow:0 2px 8px #000';if(cv.id==='kwModalCanvas'){tip.style.position='static';tip.style.background='transparent';tip.style.border='0';tip.style.padding='0';document.querySelector('.kwModalLegend')?.appendChild(tip)}else hoverParent.appendChild(tip);cv._hoverTip=tip;}
-    cv.addEventListener('pointerdown',e=>{if(e.button!==0)return;if(cv._avwapSelectMode){if(e.offsetX<L||e.offsetX>W-R)return;const p=cv._hoverItems?.reduce((a,z)=>Math.abs(z.x-e.offsetX)<Math.abs(a.x-e.offsetX)?z:a,cv._hoverItems?.[0]);if(!p)return;if(cv._avwapAnchors?.a==null){cv._avwapAnchors={a:p.index,b:null};cv._avwapOnChange?.(`Anchor A selected · ${p.label} · ${p.c}`);}else if(p.index<=cv._avwapAnchors.a){cv._avwapOnChange?.('Choose point B after point A in time.');}else{cv._avwapAnchors={...cv._avwapAnchors,b:p.index};cv._avwapSelectMode=false;cv._avwapOnChange?.(`AVWAP drawn · A ${cv._hoverItems.find(z=>z.index===cv._avwapAnchors.a)?.label||''} → B ${p.label}`);}e.preventDefault();e.stopPropagation();drawEv(cv,...cv._drawEvArgs);return;}if(cv._measureMode&&e.offsetX>L&&e.offsetX<W-R){const p=cv._hoverItems?.reduce((a,z)=>Math.abs(z.x-e.offsetX)<Math.abs(a.x-e.offsetX)?z:a,cv._hoverItems?.[0]);if(p){cv._measureActive=true;cv._measureStartKey=p.key;cv._measureEndKey=p.key;cv.setPointerCapture(e.pointerId);drawEv(cv,...cv._drawEvArgs);}return;}cv._panActive=true;cv._panMode=e.offsetX<=L?'price':'time';cv._panStartX=e.clientX;cv._panStartY=e.clientY;cv._panStartOffset=cv._panOffset||0;cv._panStartYZoom=cv._yZoom||1;cv._panDidMove=false;cv.setPointerCapture(e.pointerId);cv.style.cursor=cv._panMode==='price'?'ns-resize':'grabbing';});
-    cv.addEventListener('pointermove',e=>{if(cv._measureActive){const p=cv._hoverItems?.reduce((a,z)=>Math.abs(z.x-e.offsetX)<Math.abs(a.x-e.offsetX)?z:a,cv._hoverItems?.[0]);if(p){cv._measureEndKey=p.key;drawEv(cv,...cv._drawEvArgs);}return;}if(!cv._panActive){cv.style.cursor=(cv._rangeMeasureMode||cv._avwapSelectMode||cv._zoomSelectMode)?'crosshair':(e.offsetX<=L?'ns-resize':'grab');if(cv._showCrosshair){cv._crosshair={x:e.offsetX,y:e.offsetY};drawGapDeepDiveCrosshair(cv);}scheduleGapDeepDiveHover(cv,e.offsetX,e.offsetY);return;}if(cv._hoverTip)cv._hoverTip.style.display='none';const dx=e.clientX-cv._panStartX,dy=e.clientY-cv._panStartY;if(Math.abs(dx)>3||Math.abs(dy)>3)cv._panDidMove=true;if(cv._panMode==='price'){cv._yZoom=Math.max(.5,Math.min(20,cv._panStartYZoom*Math.exp(-dy/140)));cv._onYZoomChange?.(cv._yZoom);}else{cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,cv._panStartOffset-dx*cv._viewSpan/Math.max(1,cv._plotWidth)));cv._onPanChange?.(cv._panOffset);}if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);});
-    cv.addEventListener('pointerleave',()=>{if(cv._hoverTip)cv._hoverTip.style.display='none';if(cv.id==='gap_chart_modal_canvas')$('#gap_chart_hover_time').textContent='Hover a candle to see its time · IST';cv._pendingHover=null;if(cv._hoverUpdateTimer){clearTimeout(cv._hoverUpdateTimer);cv._hoverUpdateTimer=0;}if(cv._showCrosshair&&cv._crosshair){cv._crosshair=null;drawGapDeepDiveCrosshair(cv);}});
-    cv.addEventListener('pointerup',e=>{if(cv._measureActive){cv._measureActive=false;return;}if(!cv._panActive)return;cv._panActive=false;cv.style.cursor='grab';if(cv._panDidMove&&cv._panMode==='time'){const dx=e.clientX-cv._panStartX;if(cv._panMinOffset===cv._panMaxOffset&&Math.abs(dx)>20)cv._onPanEdge?.(dx<0?1:-1);else if(cv._panOffset>=cv._panMaxOffset-1)cv._onPanEdge?.(1);else if(cv._panOffset<=cv._panMinOffset+1)cv._onPanEdge?.(-1);}});
-    cv.addEventListener('pointercancel',()=>{cv._panActive=false;cv.style.cursor='grab';});
-    cv.addEventListener('wheel',e=>{if(e.offsetX>L)return;e.preventDefault();cv._yZoom=Math.max(.5,Math.min(20,(cv._yZoom||1)*Math.exp(-Math.sign(e.deltaY)*.15)));cv._onYZoomChange?.(cv._yZoom);if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);},{passive:false});
-    cv.addEventListener('click',e=>{if(cv._panDidMove||cv._measureMode){e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();cv._panDidMove=false;}},true);
-  }
-  // Premarket light grey background
-  x.fillStyle = 'rgba(255, 255, 255, 0.085)';
-  if(!daily)for(let day=0;day<(multi?dates.length:1);day++)x.fillRect(X(240+day*sessionSpan),T,X(570+day*sessionSpan)-X(240+day*sessionSpan),ph+6+VH);
-  x.fillStyle = '#8e8e9e';
-  x.font = (isLarge?'bold 12px':'bold 10px')+' Consolas,monospace';
-  if(!daily){const anchorIndex=multi?Math.max(0,dates.indexOf(cv._anchorDate||c.date)):0;x.fillText('PRE-MARKET', X(240+anchorIndex*sessionSpan) + 6, T + 13);}
-  x.lineWidth = 1;
-  x.strokeStyle = '#292d32';
-  x.fillStyle = '#b3b8be';
-  for(let k = 0; k <= 5; k++){
-    const v = lo + (hi - lo) * k / 5, y = Y(v);
-    x.beginPath();
-    x.moveTo(L, y);
-    x.lineTo(W - R, y);
-    x.stroke();
-    x.fillText(v >= 1 ? v.toFixed(2) : v.toFixed(3), 2, y + 4);
-  }
-  const tickStep=daily?(b.t.length>12?Math.ceil(b.t.length/6):1):multi?180:(c.after_hours?120:60);
-  for(let m = daily?0:240; m <= (daily?b.t.length-1:240+span); m += tickStep){
-    const xx = X(daily?m+.5:m);
-    x.beginPath();
-    x.moveTo(xx, T);
-    x.lineTo(xx, vy1);
-    x.stroke();
-    x.fillText(daily?formatDateMDY(b.d?.[m]||''):multi?((m-240)%sessionSpan===0?formatDateMDY(dates[Math.min(dates.length-1,Math.floor((m-240)/sessionSpan))]||''):''):hm(m,c.off), xx - 14, H - 5);
-  }
-  x.strokeStyle = '#777';
-  x.setLineDash([2, 3]);
-  x.beginPath();
-  if(!daily&&!multi){x.moveTo(X(570), T);x.lineTo(X(570), vy1);if(c.after_hours){x.moveTo(X(960),T);x.lineTo(X(960),vy1);}}
-  x.stroke();
-  x.setLineDash([]);
-  const dash = (v, col) => {
-    if(v == null || v < lo || v > hi) return;
-    x.strokeStyle = col;
-    x.setLineDash([4, 4]);
-    x.beginPath();
-    x.moveTo(L, Y(v));
-    x.lineTo(W - R, Y(v));
-    x.stroke();
-    x.setLineDash([]);
-  };
-  if(!daily){dash(c.pc, '#888');dash(c.pmh, '#ffd23f');}
-  // ---- bone zone: 9/21 EMA cloud + Bollinger Bands (21, 2) on the selected interval
-  const BZ = bzChecked ? bone(b) : null;
-  const clipP = () => { x.save(); x.beginPath(); x.rect(L, T, pw, ph); x.clip(); };
-  const poly = (a, col, w) => {
-    x.strokeStyle = col;
-    x.lineWidth = w;
-    x.beginPath();
-    let on = false;
-    for(let i = 0; i < a.length; i++){
-      if(a[i] == null){ on = false; continue; }
-      const xx = X(b.t[i] + tf / 2), yy = Y(a[i]);
-      if(!on){ x.moveTo(xx, yy); on = true; } else x.lineTo(xx, yy);
-    }
-    x.stroke();
-    x.lineWidth = 1;
-  };
-  if(BZ){
-    clipP();
-    for(let i = 1; i < b.t.length; i++){
-      x.fillStyle = BZ.e9[i] > BZ.e21[i] ? 'rgba(0,255,0,0.30)' : 'rgba(255,0,0,0.30)';
-      x.beginPath();
-      x.moveTo(X(b.t[i-1] + 1), Y(BZ.e9[i-1]));
-      x.lineTo(X(b.t[i] + 1), Y(BZ.e9[i]));
-      x.lineTo(X(b.t[i] + 1), Y(BZ.e21[i]));
-      x.lineTo(X(b.t[i-1] + 1), Y(BZ.e21[i-1]));
-      x.closePath();
-      x.fill();
-    }
-    poly(BZ.bu, '#7a7a7a', 1);
-    poly(BZ.bl, '#7a7a7a', 1);
-    x.restore();
-  }
-  const bw = daily?Math.max(3,Math.min(24,pw/b.t.length*.65)):Math.max(1.4, pw / (viewSpan / tf) * 0.84), vmax = Math.max(...visible.map(i=>b.v[i]||0)) || 1;
-  for(let i = 0; i < b.t.length; i++){
-    if(b.t[i]<viewStart-tf||b.t[i]>viewStart+viewSpan+tf)continue;
-    const xx = X(b.t[i] + (daily?.5:tf / 2)), up = b.c[i] >= b.o[i], col = up ? '#3ddc84' : '#ff5a5a';
-    x.fillStyle = up ? 'rgba(61,220,132,0.55)' : 'rgba(255,90,90,0.55)';
-    const vh = VH * b.v[i] / vmax;
-    x.fillRect(xx - bw / 2, vy1 - vh, bw, vh);
-    x.strokeStyle = col;
-    x.lineWidth = Math.max(1.1, Math.min(1.8, tf / 2));
-    x.beginPath();
-    x.moveTo(xx, Y(b.h[i]));
-    x.lineTo(xx, Y(b.l[i]));
-    x.stroke();
-    x.fillStyle = col;
-    const yt = Y(Math.max(b.o[i], b.c[i]));
-    x.fillRect(xx - bw / 2, yt, bw, Math.max(1.5, Math.abs(Y(b.o[i]) - Y(b.c[i]))));
-    x.lineWidth = 1;
-  }
-  if(BZ){
-    clipP();
-    poly(BZ.e9, 'rgb(215,255,110)', isLarge ? 1.6 : 1.2);
-    poly(BZ.e21, 'rgb(255,165,0)', isLarge ? 1.6 : 1.2);
-    x.restore();
-  }
-  if(cv._showVWAP!==false){
-    x.strokeStyle = '#ffffff';
-    x.lineWidth = isLarge ? 2 : 1.4;
-    x.beginPath();
-    let on = false, lastVwapDate=null;
-    for(let i = 0; i < b.t.length; i++){
-      const v = b.vw[i];
-      if(v == null){ on = false; continue; }
-      if(multi&&b.d?.[i]!==lastVwapDate)on=false;
-      const xx = X(b.t[i] + tf / 2), yy = Y(Math.min(hi, Math.max(lo, v)));
-      if(!on){ x.moveTo(xx, yy); on = true; } else x.lineTo(xx, yy);
-      lastVwapDate=b.d?.[i]||null;
-    }
-    x.stroke();
-  }
-  if(!daily){
-    const twap=[], activeTwap=[], avh=[]; let dayKey=null, count=0, timeSum=0, activeCount=0, activeSum=0;
-    let prevT=null, prevTp=null, anchorDollar=0, anchorVol=0;
-    const hodByDay=new Map();for(let i=0;i<b.t.length;i++){const day=b.d?.[i]||c.date||'';if(!hodByDay.has(day)||b.h[i]>b.h[hodByDay.get(day)])hodByDay.set(day,i);}
-    for(let i=0;i<b.t.length;i++){
-      const day=b.d?.[i]||c.date||'', tp=(b.h[i]+b.l[i]+b.c[i])/3;
-      if(day!==dayKey){dayKey=day;count=0;timeSum=0;activeCount=0;activeSum=0;prevT=null;prevTp=null;anchorDollar=0;anchorVol=0;}
-      const steps=prevT==null?1:Math.max(1,Math.round((b.t[i]-prevT)/tf));
-      const fillTp=prevTp==null?tp:prevTp;
-      if(count){timeSum+=fillTp*(steps-1);count+=steps-1;}
-      timeSum+=tp;count++;twap.push(timeSum/count);
-      if((b.v[i]||0)>0){activeSum+=tp;activeCount++;}activeTwap.push(activeCount?activeSum/activeCount:null);
-      if(i>=hodByDay.get(day)){anchorDollar+=tp*(b.v[i]||0);anchorVol+=b.v[i]||0;avh.push(anchorVol?anchorDollar/anchorVol:null);}else avh.push(null);
-      prevT=b.t[i];prevTp=tp;
-    }
-    clipP();
-    if(cv._showTWAP!==false){poly(twap,'#c084fc',isLarge?1.9:1.4);x.setLineDash([2,3]);poly(activeTwap,'#e879f9',isLarge?1.5:1.1);x.setLineDash([]);}
-    if(cv._showHODAVWAP===true){x.setLineDash([5,3]);poly(avh,'#ffd23f',isLarge?2.2:1.5);x.setLineDash([]);}
-    const anchors=cv._avwapAnchors;
-    if(anchors&&Number.isInteger(anchors.a)&&Number.isInteger(anchors.b)&&anchors.b>anchors.a){
-      const anchored=new Array(b.t.length).fill(null);let vol=0,dollar=0;
-      for(let i=anchors.a;i<=anchors.b;i++){const v=Math.max(0,b.v[i]||0),tp=(b.h[i]+b.l[i]+b.c[i])/3;vol+=v;dollar+=tp*v;if(vol)anchored[i]=dollar/vol;}
-      poly(anchored,'#ffe45c',isLarge?2.6:1.8);
-      [[anchors.a,'A'],[anchors.b,'B']].forEach(([i,label])=>{const px=X(b.t[i]+tf/2),py=Y(b.c[i]);x.fillStyle='#ffe45c';x.beginPath();x.arc(px,py,5,0,Math.PI*2);x.fill();x.font='bold 12px Consolas,monospace';x.fillText(label,px+7,py-7);});
-    }
-    x.restore();
-  }
-  x.lineWidth = 1;
-  x.fillStyle = '#8a8a8a';
-  x.fillText('vol', L + 2, vy0 + 10);
-  if(!multi&&!daily)sg.forEach((s, idx) => {
-    const col = MC[s.name] || '#fff', xs = X(s.m), ys = Y(s.p);
-    let xm, ym, pl;
-    if(s.stop_m != null){
-      xm = X(s.stop_m);
-      ym = Y(s.p * (1 + c.stop));
-      pl = -c.stop;
-    } else if(c.cover){
-      xm = X(c.cover.m);
-      ym = Y(c.cover.p);
-      pl = s.pnl;
-    } else return;
-    x.strokeStyle = col;
-    x.setLineDash([3, 3]);
-    x.beginPath();
-    x.moveTo(xs, ys);
-    x.lineTo(xm, ym);
-    x.stroke();
-    x.setLineDash([]);
-    tri(x, xs, ys, 'down', col);
-    tri(x, xm, ym, 'up', '#3ddc84');
-    x.fillStyle = col;
-    x.fillText('SELL ' + (MA[s.name] || ''), xs + 6, ys - 8 - idx * 0);
-    x.fillStyle = pl >= 0 ? '#3ddc84' : '#ff5a5a';
-    x.fillText('BUY ' + (pl * 100 >= 0 ? '+' : '') + (pl * 100).toFixed(0) + '%', xm + 6, ym + 16);
-  });
-  if(cv._measureStartKey&&cv._measureEndKey){
-    const a=cv._hoverItems?.find(p=>p.key===cv._measureStartKey),z=cv._hoverItems?.find(p=>p.key===cv._measureEndKey);
-    const ia=cv._hoverItems?.findIndex(p=>p.key===cv._measureStartKey),iz=cv._hoverItems?.findIndex(p=>p.key===cv._measureEndKey);
-    if(a&&z&&ia>=0&&iz>=0){const left=Math.min(a.x,z.x),right=Math.max(a.x,z.x),from=Math.min(a.index,z.index),to=Math.max(a.index,z.index);let vol=0,dv=0;for(let i=from;i<=to;i++){const v=Number(b.v[i])||0;vol+=v;dv+=((Number(b.h[i])+Number(b.l[i])+Number(b.c[i]))/3)*v;}
-      x.save();x.fillStyle='rgba(72,183,255,.14)';x.fillRect(left,T,Math.max(2,right-left),vy1-T);x.strokeStyle='#62c8ff';x.lineWidth=2;x.beginPath();x.moveTo(left,T);x.lineTo(left,vy1);x.moveTo(right,T);x.lineTo(right,vy1);x.stroke();
-      const float=Number(cv._floatShares??c.float_shares),rot=float>0?`${(vol/float).toFixed(2)}x`:'Unavailable',compact=n=>Number.isFinite(n)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(n):'Unavailable';const lines=[`${a.label} to ${z.label}`,`Volume ${vol.toLocaleString('en-US',{maximumFractionDigits:0})}`,`Dollar volume ~$${dv.toLocaleString('en-US',{maximumFractionDigits:0})}`,`Float ${compact(float)} sh`,`Float rotation ${rot}${float>0?' (float may be stale)':''}`];
-      x.font='bold 11px Consolas,monospace';const boxW=Math.min(W-L-R,Math.max(...lines.map(t=>x.measureText(t).width))+16),boxH=lines.length*16+12,bx=Math.min(W-R-boxW,Math.max(L,left+6)),by=T+5;x.fillStyle='rgba(6,13,21,.96)';x.fillRect(bx,by,boxW,boxH);x.strokeStyle='#62c8ff';x.strokeRect(bx,by,boxW,boxH);lines.forEach((line,k)=>{x.fillStyle=k===0?'#8cb8d6':'#edf6ff';x.fillText(line,bx+8,by+16+k*16)});x.restore();}
-  }
-  drawGapDeepDiveEventMarkers(cv,x,cv._rangeGeometry);
-  cv._afterDraw?.();
-}
 
 let currentModalIndex = 0;
 let currentModalSlot = 0;
@@ -1686,7 +1225,9 @@ window.openChartModal = function(i){
   currentModalSlot = i;
   const card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${i}"]`);
   currentModalIndex = card && Number.isInteger(card._sessionPos) ? card._sessionPos : i;
-  const featureCanvas=$('#cm_canvas');featureCanvas._rangeMeasureMode=false;featureCanvas._zoomSelectMode=true;featureCanvas._panToolMode=false;featureCanvas._zoomDrag=null;featureCanvas._rangeDrag=null;$('#cm_status').textContent='Hold and drag on the chart to zoom. Choose Pan to drag the chart.';
+  const featureCanvas=$('#cm_canvas');featureCanvas._rangeMeasureMode=false;featureCanvas._zoomSelectMode=true;featureCanvas._panToolMode=false;featureCanvas._avwapSelectMode=false;featureCanvas._panActive=false;featureCanvas._measureActive=false;featureCanvas._zoomDrag=null;featureCanvas._rangeDrag=null;$('#cm_status').textContent='Hold and drag on the chart to zoom. Choose Pan to drag the chart.';
+  $('#cm_hover_time').textContent='Hover a candle to see its time · IST';
+  $('#cm_quote_line').textContent='Hover a candle · change, volume, dollar volume, float';
 
   const mainBz = openTabs[activeTab].container.querySelector('#bz');
   $('#cm_sig').innerHTML = '<option value="none">No signals</option>';
@@ -1700,6 +1241,10 @@ window.openChartModal = function(i){
   setTimeout(renderModalChart, 30);
 };
 
+function syncGapDeepDiveMouseMode(cv,ui){
+  const mode=cv._rangeMeasureMode?'measure':cv._panToolMode?'pan':cv._avwapSelectMode?'avwap':'zoom';
+  setGapDeepDiveMouseMode(mode,cv,ui);
+}
 window.renderModalChart = function(){
   if(!activeTab || !openTabs[activeTab]) return;
   const tab=openTabs[activeTab], list=tab.EV||[];
@@ -1714,6 +1259,9 @@ window.renderModalChart = function(){
     : '<span style="color:#777;font-size:11px">(not in similar set)</span>';
   const sessionCount=(tab.sessionDates||[]).length, sessionPos=card?card._sessionPos:-1;
   const cv = $('#cm_canvas');
+  cv._hoverTimeReadout=$('#cm_hover_time');
+  cv._quoteLine=$('#cm_quote_line');
+  cv._showOhlcTip=true;
   const body = $('#cm_plot_wrap');
   const targetH = Math.max(300, body.clientHeight || 600);
   const sel = 'none';
@@ -1724,6 +1272,7 @@ window.renderModalChart = function(){
   cv._chart=chart;cv._event=item;cv._marketEvents=sourceCanvas?._marketEvents||[];cv._timeframe=$('#cm_tf').value||(card?card._chartTf:'2m');cv._anchorDate=card?._sessionDate||item.date;cv._activeDate=cv._anchorDate;cv._chartDays=card?._chartDays||1;cv._panOffset=card?._panOffset||0;cv._yZoom=card?._yZoom||1;cv._zoom=card?._zoom||1;cv._rangeZoom=cv._zoom;cv._rangeMeasures=card?._rangeMeasures||(card._rangeMeasures=[]);cv._selectedRangeId=card?._selectedRangeId||null;cv._avwapAnchors=card?._avwapAnchors||null;cv._showVWAP=card?._showVWAP!==false;cv._showTWAP=card?._showTWAP!==false;cv._floatShares=Number(item.float_shares??chart.float_shares)||null;
   cv._onPanChange=value=>{if(card)card._panOffset=value;};cv._onYZoomChange=value=>{if(card)card._yZoom=value;};cv._onPanEdge=card?._onPanEdge?side=>{card._panOffset=cv._panOffset;card._onPanEdge(side);}:null;
   const ui=chartFeatureUi('cm');bindUnifiedChartFeatures(cv,ui,()=>{if(!card)return;card._panOffset=cv._panOffset||0;card._yZoom=cv._yZoom||1;card._zoom=cv._rangeZoom||1;card._avwapAnchors=cv._avwapAnchors;card._rangeMeasures=cv._rangeMeasures||[];card._selectedRangeId=cv._selectedRangeId;card._showVWAP=cv._showVWAP;card._showTWAP=cv._showTWAP;},renderModalChart);
+  syncGapDeepDiveMouseMode(cv,ui);
   drawEv(cv, chart, sel, bzChecked, targetH, cv._timeframe,cv._zoom);
 };
 
@@ -2152,7 +1701,7 @@ function renderGapDeepDiveGroups(items,jobId,mode=gapDeepDiveGroupBy){
     const playerObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(!entry.isIntersecting)return;const group=entry.target;playerObserver.unobserve(group);const groupSessions=[...group.querySelectorAll('.gap-session-card')].map(card=>{const item=items[Number(card.querySelector('.gap-copy-png').dataset.index)];return {item,card,_playerData:item._gapPlayerData};});let next=0,finished=0;const worker=async()=>{while(next<groupSessions.length){const session=groupSessions[next++];if(!session._playerData)session._playerData=await loadGapDeepDivePlayer(session.item,jobId);session.item._gapPlayerData=session._playerData;finished++;renderGapDeepDivePlayerSummary(group,groupSessions,finished>=groupSessions.length);}};Promise.all(Array.from({length:Math.min(3,groupSessions.length)},worker));}),{rootMargin:'450px 0px'});
     gapDeepDiveViewObservers.push(playerObserver);grid.querySelectorAll('.gap-ticker-group').forEach(group=>playerObserver.observe(group));
   }
-  const lazyCharts=new IntersectionObserver(entries=>entries.forEach(async entry=>{if(!entry.isIntersecting)return;const canvas=entry.target;lazyCharts.unobserve(canvas);const i=Number(canvas.dataset.index),item=items[i],key=gapDeepDiveKey(item);canvas.dataset.key=key;canvas._gapDeepDiveState={days:1,dates:[],bars:null,panOffset:0,loading:false};try{const chart=await loadGapDeepDiveChart(item,jobId);canvas._showHODAVWAP=false;drawGapDeepDiveCanvas(canvas,chart,$('#gap_deepdive_tf').value||'2m',540);canvas.dataset.chartLoaded='1';canvas.closest('.gap-session-card').querySelector('.gap-copy-png').disabled=false;canvas.parentElement.querySelector('.gap-chart-loading').remove();canvas.onclick=()=>openGapDeepDiveChart(item,jobId);loadGapDeepDiveEvents(item,jobId,[item.date],true).then(events=>{if(canvas.dataset.key!==key||canvas.dataset.chartLoaded!=='1')return;canvas._marketEvents=events;drawGapDeepDiveCanvas(canvas,chart,$('#gap_deepdive_tf').value||'2m',540);});}catch(error){canvas.parentElement.querySelector('.gap-chart-loading').textContent=error.message;}}),{rootMargin:'1200px 0px'});
+  const lazyCharts=new IntersectionObserver(entries=>entries.forEach(async entry=>{if(!entry.isIntersecting)return;const canvas=entry.target;lazyCharts.unobserve(canvas);const i=Number(canvas.dataset.index),item=items[i],key=gapDeepDiveKey(item),timeframe=$('#gap_deepdive_tf').value||'2m';canvas.dataset.key=key;canvas._gapDeepDiveState={days:1,dates:[],bars:null,panOffset:0,loading:false,timeframe};try{const chart=await loadGapDeepDiveChart(item,jobId);canvas._showHODAVWAP=false;drawGapDeepDiveCanvas(canvas,chart,timeframe,540);canvas.dataset.chartLoaded='1';canvas.closest('.gap-session-card').querySelector('.gap-copy-png').disabled=false;canvas.parentElement.querySelector('.gap-chart-loading').remove();canvas.onclick=()=>openGapDeepDiveChart(item,jobId);loadGapDeepDiveEvents(item,jobId,[item.date],true).then(events=>{if(canvas.dataset.key!==key||canvas.dataset.chartLoaded!=='1')return;canvas._marketEvents=events;drawGapDeepDiveCanvas(canvas,chart,$('#gap_deepdive_tf').value||'2m',540);});}catch(error){canvas.parentElement.querySelector('.gap-chart-loading').textContent=error.message;}}),{rootMargin:'1200px 0px'});
   gapDeepDiveViewObservers.push(lazyCharts);
   grid.querySelectorAll('canvas[data-index]').forEach(canvas=>{const item=items[Number(canvas.dataset.index)];canvas.onclick=()=>openGapDeepDiveChart(item,jobId);lazyCharts.observe(canvas);});
   grid.querySelectorAll('.gap-copy-png').forEach(btn=>btn.onclick=async()=>{const canvas=btn.closest('.gap-session-card').querySelector('canvas');try{const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw new Error('Could not render PNG');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);btn.textContent='Copied ✓';setTimeout(()=>btn.textContent='Copy PNG',1300);}catch(error){$('#gap_deepdive_status').textContent='PNG copy unavailable: '+error.message;}});
@@ -2181,18 +1730,33 @@ function drawGapDeepDiveCanvas(cv,baseChart,timeframe,targetH){
   const state=cv._gapDeepDiveState,chart=state?.bars?{...baseChart,bars:state.bars,after_hours:true}:baseChart;
   cv._renderDpr=cv.id==='gap_chart_modal_canvas'?3:2;
   if(state){cv._anchorDate=baseChart.date;if(cv.id!=='gap_chart_modal_canvas'||!cv._modalPanInitialized){cv._panOffset=state.panOffset||0;if(cv.id==='gap_chart_modal_canvas')cv._modalPanInitialized=true;}if(cv.id==='gap_chart_modal_canvas')state.panOffset=cv._panOffset||0;cv._onPanChange=value=>{state.panOffset=value;};cv._onPanEdge=side=>loadGapDeepDiveAdjacent(cv,baseChart,side);}
-  if(cv.id==='gap_chart_modal_canvas'){cv._fullFeatures=true;cv._quoteLine=$('#gap_chart_quote_line');cv._floatShares=gapDeepDiveCurrent?.float_shares??baseChart.float_shares??null;cv._rangeMeasureBox=$('#gap_chart_measure_box');cv._rangeOverlay=$('#gap_chart_range_overlay');cv._crosshairV=$('#gap_chart_crosshair_v');cv._crosshairH=$('#gap_chart_crosshair_h');cv._navigator=$('#gap_chart_navigator');cv._rangeMeasures||=[];cv._rangeZoom||=1;cv._wheelZoomEnabled=true;cv._afterDraw=()=>{drawGapDeepDiveRangeOverlay(cv);drawGapDeepDiveCrosshair(cv);drawGapDeepDiveNavigator(cv,chart,timeframe);};cv._gapDeepDiveRedraw=()=>{if(gapDeepDiveCurrent){if(cv._gapDeepDiveState)cv._gapDeepDiveState.panOffset=cv._panOffset||0;renderGapDeepDiveModal();}};bindGapDeepDiveRangeInput(cv);}
+  if(cv.id==='gap_chart_modal_canvas'){
+    cv._hoverTimeReadout=$('#gap_chart_hover_time');cv._quoteLine=$('#gap_chart_quote_line');
+    cv._floatShares=gapDeepDiveCurrent?.float_shares??baseChart.float_shares??null;
+    cv._rangeMeasures||=[];cv._rangeZoom||=1;
+    const ui=chartFeatureUi('gap_chart');
+    bindUnifiedChartFeatures(cv,ui,()=>{
+      if(!cv._gapDeepDiveState)return;
+      cv._gapDeepDiveState.panOffset=cv._panOffset||0;
+      cv._gapDeepDiveState.rangeZoom=cv._rangeZoom||1;
+      cv._gapDeepDiveState.avwapAnchors=cv._avwapAnchors;
+      cv._gapDeepDiveState.rangeMeasures=cv._rangeMeasures||[];
+      cv._gapDeepDiveState.selectedRangeId=cv._selectedRangeId;
+    },()=>renderGapDeepDiveModal());
+  }
   drawEv(cv,chart,'none',cv.id==='gap_chart_modal_canvas'?$('#gap_chart_bz').checked:true,targetH,timeframe,cv.id==='gap_chart_modal_canvas'?(cv._rangeZoom||1):1);
 }
 async function loadGapDeepDiveAdjacent(cv,baseChart,side){
   const state=cv._gapDeepDiveState;if(!state||state.loading)return;
   const dates=state.dates||[],anchor=dates.length?dates[side>0?dates.length-1:0]:baseChart.date;
   state.days=state.days>=60?60:Math.min(60,state.days+2);if(state.days<3)state.days=3;state.loading=true;
+  if(cv.id==='gap_chart_modal_canvas')$('#gap_chart_days').value=String(state.days);
   const item=gapDeepDiveCurrent?.item||{ticker:baseChart.ticker};
-  const query=new URLSearchParams({ticker:item.ticker,date:anchor,days:String(state.days),tf:$('#gap_deepdive_tf').value||'2m',user:currentUser||'',token:sessionToken||'',postmarket:'1'});
+  const timeframe=cv.id==='gap_chart_modal_canvas'?$('#gap_chart_tf').value:$('#gap_deepdive_tf').value||'2m';
+  const query=new URLSearchParams({ticker:item.ticker,date:anchor,days:String(state.days),tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1'});
   try{
     const response=await fetch('/api/chart-context?'+query.toString()),data=await gapDeepDiveJson(response);
-    state.bars=data.bars;state.dates=data.dates||[];const anchorIndex=state.dates.indexOf(baseChart.date);state.panOffset=anchorIndex<0?0:(side>0?(state.dates.length-anchorIndex-1)*960:-anchorIndex*960);
+    state.bars=data.bars;state.dates=data.dates||[];state.timeframe=timeframe;const anchorIndex=state.dates.indexOf(baseChart.date);state.panOffset=anchorIndex<0?0:(side>0?(state.dates.length-anchorIndex-1)*960:-anchorIndex*960);
     $('#gap_deepdive_status').textContent=`Loaded ${state.dates.length} nearby sessions for ${item.ticker}.`;
   }catch(error){$('#gap_deepdive_status').textContent=`Could not load adjacent candles: ${error.message}`;}
   finally{state.loading=false;}
@@ -2208,6 +1772,24 @@ function renderGapDeepDiveModal(){
   cv._marketEvents=dates.flatMap(day=>gapDeepDiveEventDays.get(`${String(item.ticker).toUpperCase()}|${day}`)||[]);
   if(dates.length){const key=gapDeepDiveKey(item);loadGapDeepDiveEvents(item,jobId,dates,true).then(events=>{if(!gapDeepDiveCurrent||gapDeepDiveKey(gapDeepDiveCurrent.item)!==key)return;cv._marketEvents=events;drawGapDeepDiveCanvas(cv,gapDeepDiveCurrent.chart,$('#gap_chart_tf').value,Math.max(300,body.clientHeight));});}
   drawGapDeepDiveCanvas(cv,gapDeepDiveCurrent.chart,$('#gap_chart_tf').value,Math.max(300,body.clientHeight));
+}
+async function loadGapDeepDiveContext(){
+  if(!gapDeepDiveCurrent)return;
+  const {item,jobId}=gapDeepDiveCurrent,cv=$('#gap_chart_modal_canvas'),state=cv._gapDeepDiveState;
+  if(!state)return;
+  const timeframe=$('#gap_chart_tf').value||'2m',days=Number($('#gap_chart_days').value)||1;
+  const requestId=(state.contextRequestId||0)+1;state.contextRequestId=requestId;state.loading=true;
+  const query=new URLSearchParams({ticker:item.ticker,date:item.date,days:String(days),tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1'});
+  try{
+    const response=await fetch('/api/chart-context?'+query.toString()),data=await gapDeepDiveJson(response);
+    if(requestId!==state.contextRequestId)return;
+    state.bars=data.bars;state.dates=data.dates||[];state.days=days;state.timeframe=timeframe;state.panOffset=0;
+    cv._panOffset=0;cv._modalPanInitialized=true;
+    renderGapDeepDiveModal();
+    $('#gap_deepdive_status').textContent=`Loaded ${state.dates.length} session${state.dates.length===1?'':'s'} for ${item.ticker}.`;
+  }catch(error){
+    if(requestId===state.contextRequestId)$('#gap_deepdive_status').textContent=`Could not load chart range: ${error.message}`;
+  }finally{if(requestId===state.contextRequestId)state.loading=false;}
 }
 function setGapDeepDiveTimeframe(timeframe){
   const globalSelect=$('#gap_deepdive_tf'),modalSelect=$('#gap_chart_tf');
@@ -2225,27 +1807,16 @@ async function openGapDeepDiveChart(item,jobId){
     $('#gap_chart_title').textContent=item.ticker;$('#gap_chart_date').textContent=formatDateMDY(item.date);$('#gap_chart_stats').textContent=`PM high +${(item.move*100).toFixed(1)}% · $${(item.pm_dollar_volume/1e6).toFixed(1)}M premarket`;
     $('#gap_chart_player_tag').hidden=true;$('#gap_chart_player_tag').removeAttribute('href');loadGapDeepDivePlayer(item,jobId);
     $('#gap_chart_tf').value=$('#gap_deepdive_tf').value||'2m';$('#gap_chart_bz').checked=true;$('#gap_chart_vwap').checked=true;$('#gap_chart_twap').checked=true;
-    const cv=$('#gap_chart_modal_canvas'),gridCv=[...$('#gap_deepdive_grid').querySelectorAll('canvas[data-key]')].find(node=>node.dataset.key===gapDeepDiveKey(item));cv.dataset.key=gapDeepDiveKey(item);cv._gapDeepDiveState=gridCv?._gapDeepDiveState||{days:1,dates:[],bars:null,panOffset:0,loading:false};cv._avwapAnchors=null;cv._avwapSelectMode=false;cv._rangeMeasures=[];cv._selectedRangeId=null;cv._rangeZoom=1;cv._panOffset=cv._gapDeepDiveState.panOffset||0;cv._modalPanInitialized=true;cv._yZoom=1;cv._rangeMeasureMode=false;cv._zoomSelectMode=true;cv._panToolMode=false;cv._zoomDrag=null;cv.style.cursor='crosshair';$('#gap_chart_measure_box').hidden=true;$('#gap_chart_measure').dataset.active='';$('#gap_chart_measure').style.borderColor='';$('#gap_chart_measure').textContent='Measure range';$('#gap_chart_pan').dataset.active='';$('#gap_chart_pan').style.borderColor='';$('#gap_chart_avwap_status').textContent='Hold and drag on the chart to zoom. Choose Pan to drag the chart.';
+    const cv=$('#gap_chart_modal_canvas'),gridCv=[...$('#gap_deepdive_grid').querySelectorAll('canvas[data-key]')].find(node=>node.dataset.key===gapDeepDiveKey(item)),timeframe=$('#gap_deepdive_tf').value||'2m';cv.dataset.key=gapDeepDiveKey(item);cv._gapDeepDiveState=gridCv?._gapDeepDiveState||{days:1,dates:[],bars:null,panOffset:0,loading:false,timeframe};if(cv._gapDeepDiveState.timeframe!==timeframe){cv._gapDeepDiveState.bars=null;cv._gapDeepDiveState.dates=[];cv._gapDeepDiveState.days=1;cv._gapDeepDiveState.panOffset=0;cv._gapDeepDiveState.timeframe=timeframe;}$('#gap_chart_tf').value=timeframe;$('#gap_chart_days').value=String(cv._gapDeepDiveState.days||1);cv._avwapAnchors=null;cv._avwapSelectMode=false;cv._rangeMeasures=[];cv._selectedRangeId=null;cv._rangeZoom=1;cv._panOffset=cv._gapDeepDiveState.panOffset||0;cv._modalPanInitialized=true;cv._yZoom=1;cv._rangeMeasureMode=false;cv._zoomSelectMode=true;cv._panToolMode=false;cv._zoomDrag=null;cv.style.cursor='crosshair';$('#gap_chart_measure_box').hidden=true;$('#gap_chart_measure').dataset.active='';$('#gap_chart_measure').style.borderColor='';$('#gap_chart_measure').textContent='Measure range';$('#gap_chart_pan').dataset.active='';$('#gap_chart_pan').style.borderColor='';$('#gap_chart_avwap_status').textContent='Hold and drag on the chart to zoom. Choose Pan to drag the chart.';
     $('#gap_chart_quote_line').textContent='Float loading · move the cursor over a candle for change and volume';$('#gap_chart_hover_time').textContent='Hover a candle to see its time · IST';$('#gap_deepdive_chart_modal').style.display='flex';setTimeout(renderGapDeepDiveModal,30);
     loadGapDeepDiveFloat(item,jobId).then(data=>{if(!gapDeepDiveCurrent||gapDeepDiveKey(gapDeepDiveCurrent.item)!==gapDeepDiveKey(item))return;gapDeepDiveCurrent.float_shares=data.float_shares;$('#gap_chart_modal_canvas')._floatShares=data.float_shares;const value=Number(data.float_shares);$('#gap_chart_quote_line').textContent=`Float ${Number.isFinite(value)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(value)+' shares':'unavailable'} · move the cursor over a candle for change and volume`;});
   }catch(error){$('#gap_deepdive_status').textContent=`Could not load ${item.ticker} ${formatDateMDY(item.date)}: ${error.message}`;}
 }
 function closeGapDeepDiveChart(){ $('#gap_deepdive_chart_modal').style.display='none';const cv=$('#gap_chart_modal_canvas');cv._avwapSelectMode=false;gapDeepDiveCurrent=null; }
-['gap_chart_bz','gap_chart_vwap','gap_chart_twap'].forEach(id=>$('#'+id).onchange=renderGapDeepDiveModal);
-$('#gap_deepdive_tf').onchange=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Interval changed. Select AVWAP again to choose new anchor points.';setGapDeepDiveTimeframe($('#gap_deepdive_tf').value);};
-$('#gap_chart_tf').onchange=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Interval changed. Select AVWAP again to choose new anchor points.';setGapDeepDiveTimeframe($('#gap_chart_tf').value);};
-$('#gap_chart_avwap').onclick=()=>{const cv=$('#gap_chart_modal_canvas');setGapDeepDiveMouseMode('avwap');cv._avwapAnchors=null;cv._avwapSelectMode=true;cv.style.cursor='crosshair';$('#gap_chart_avwap_status').textContent='AVWAP tool active · click point A, then click a later point B.';renderGapDeepDiveModal();cv.style.cursor='crosshair';};
-$('#gap_chart_clear_avwap').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;setGapDeepDiveMouseMode('zoom');cv.style.cursor='crosshair';$('#gap_chart_avwap_status').textContent='AVWAP cleared. VWAP, TWAP and Bone Zone remain on.';renderGapDeepDiveModal();};
-function setGapDeepDiveMouseMode(mode,cv=$('#gap_chart_modal_canvas'),ui={}){const measure=ui.measure||$('#gap_chart_measure'),pan=ui.pan||$('#gap_chart_pan');cv._rangeMeasureMode=mode==='measure';cv._zoomSelectMode=mode!=='measure'&&mode!=='pan'&&mode!=='avwap';cv._panToolMode=mode==='pan';if(mode!=='avwap')cv._avwapSelectMode=false;if(measure){measure.dataset.active=cv._rangeMeasureMode?'1':'';measure.style.borderColor=cv._rangeMeasureMode?'#62c8ff':'';measure.textContent=cv._rangeMeasureMode?'Measure active':'Measure range';}if(pan){pan.dataset.active=cv._panToolMode?'1':'';pan.style.borderColor=cv._panToolMode?'#62c8ff':'';}cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode||mode==='avwap')?'crosshair':'grab';}
-$('#gap_chart_measure').onclick=()=>{const cv=$('#gap_chart_modal_canvas'),next=cv._rangeMeasureMode?'zoom':'measure';setGapDeepDiveMouseMode(next);$('#gap_chart_avwap_status').textContent=next==='measure'?'Hold the left mouse button and drag between candles; release to keep the measurement.':'Hold and drag on the chart to select an area and zoom.';drawGapDeepDiveRangeOverlay(cv);};
-$('#gap_chart_pan').onclick=()=>{const cv=$('#gap_chart_modal_canvas'),next=cv._panToolMode?'zoom':'pan';setGapDeepDiveMouseMode(next);$('#gap_chart_avwap_status').textContent=next==='pan'?'Pan active · hold and drag to move the chart.':'Pointer active · hold and drag over the chart to zoom.';};
-$('#gap_chart_delete_measure').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._rangeMeasures=(cv._rangeMeasures||[]).filter(m=>m.id!==cv._selectedRangeId);cv._selectedRangeId=cv._rangeMeasures.at(-1)?.id||null;renderGapDeepDiveModal();};
-$('#gap_chart_clear_measures').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._rangeMeasures=[];cv._selectedRangeId=null;renderGapDeepDiveModal();};
-function gapDeepDiveZoom(factor,cv=$('#gap_chart_modal_canvas')){const g=cv._rangeGeometry;if(!g)return;const zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,(cv._rangeZoom||1)*factor)),anchor=g.viewStart+g.viewSpan/2,nextSpan=Math.min(g.span,g.baseViewSpan/zoom);cv._rangeZoom=zoom;cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,anchor-nextSpan/2-g.viewBase));if(cv._gapDeepDiveRedraw)cv._gapDeepDiveRedraw();else renderGapDeepDiveModal();}
-$('#gap_chart_zoom_in').onclick=()=>gapDeepDiveZoom(1.25);
-$('#gap_chart_zoom_out').onclick=()=>gapDeepDiveZoom(.8);
-$('#gap_chart_zoom_reset').onclick=()=>{const cv=$('#gap_chart_modal_canvas');cv._rangeZoom=1;cv._panOffset=0;cv._yZoom=1;renderGapDeepDiveModal();};
-$('#gap_chart_copy').onclick=async()=>{const cv=$('#gap_chart_modal_canvas'),overlay=$('#gap_chart_range_overlay');try{await copyChartWithOverlays(cv,overlay,$('#gap_chart_measure_box'));$('#gap_chart_copy').textContent='Copied ✓';setTimeout(()=>$('#gap_chart_copy').textContent='Copy PNG',1200);}catch(error){$('#gap_chart_avwap_status').textContent='PNG copy unavailable: '+error.message;}};
+$('#gap_chart_bz').onchange=renderGapDeepDiveModal;
+$('#gap_deepdive_tf').onchange=()=>{const cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Interval changed. Select AVWAP again to choose new anchor points.';setGapDeepDiveTimeframe($('#gap_deepdive_tf').value);if(gapDeepDiveCurrent){if(cv._gapDeepDiveState?.timeframe==='1d')$('#gap_chart_days').value='1';loadGapDeepDiveContext();}};
+$('#gap_chart_tf').onchange=()=>{const cv=$('#gap_chart_modal_canvas'),state=cv._gapDeepDiveState,timeframe=$('#gap_chart_tf').value;cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Interval changed. Select AVWAP again to choose new anchor points.';if(timeframe!=='1d')setGapDeepDiveTimeframe(timeframe);if(timeframe==='1d')$('#gap_chart_days').value='60';else if(state?.timeframe==='1d')$('#gap_chart_days').value='1';loadGapDeepDiveContext();};
+$('#gap_chart_days').onchange=loadGapDeepDiveContext;
 window.addEventListener('keydown',e=>{if(e.key!=='Escape'||$('#gap_deepdive_chart_modal').style.display!=='flex')return;const cv=$('#gap_chart_modal_canvas');if(cancelUnifiedChartSelection(cv,cv._featureUi)){e.preventDefault();e.stopImmediatePropagation();return;}closeGapDeepDiveChart();},true);
 function gapDeepDivePatternSample(item,chart){
   const b=chart?.bars;if(!b?.t?.length)return null;const openAt=570,closeAt=960,slots=20;let first=-1,base=0;

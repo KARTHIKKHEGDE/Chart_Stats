@@ -827,7 +827,6 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
 
     # ================= PANEL 1 =================
     p1 = [
-        ["Leg", "0 legs drawn", "Draw legs on 15min chart below (click or drag)"],
         ["Float (before rally)", big(flt), flt_src],
         ["Market cap (before rally)", usd(mcap_before), f"{dstr(pre['d'])} close {px(pre['c'])}"],
         ["Float rotation (start -> high)", rot(div(rally_vol, flt)), f"{big(rally_vol)} sh over {ndays}d"],
@@ -895,7 +894,6 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
         ["FRD open -> HOD", rot(div(mb["o2h_vol"], flt)) if mb else "-"],
         ["FRD full day", rot(div(fv_tot, flt))],
     ]])
-# (legs are manually drawn by user on the interactive chart)
     if frd:
         p2.append(["First red day detail", [
             ["Date / gap", f"{dstr(frd['d'])}  /  {pct(mb['gap']) if mb else '-'}"],
@@ -957,7 +955,6 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
             "float_val": flt,
             "shares_out": shares,
             "mcap_before": mcap_before,
-            "legs": [],
         }
 
     frd_source = mb or frd or {}
@@ -993,4 +990,3 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
         table=dict(cols=["Date", "Open", "High", "Low", "Close", "Market Cap (close)", "Chg", "Volume", "$ Vol", "Cum float rot", ""], rows=trows),
         notes=notes,
     )
-

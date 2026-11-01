@@ -542,13 +542,19 @@ def bars2(df, include_after_hours=False):
             "tw": finite_round(tw), "atw": finite_round(atw), "avh": [round(x,4) if x is not None else None for x in avh]}
 
 
-def mdl(rg, start_ts, entry, entry_min, close):
-    """Short entry at `entry`, exit at close or at the STOP_PCT stop, whichever comes first."""
+def mdl(rg, start_ts, entry, entry_min, close, stop_price, exclude_entry_bar=False):
+    """Short entry, exiting at close or when the model-specific stop is reached."""
     seg = rg.loc[start_ts:]
-    hi = float(seg.h.max())
-    hit = seg[seg.h >= entry * (1 + STOP_PCT)]
+    if exclude_entry_bar:
+        seg = seg.iloc[1:]
+    hi = float(seg.h.max()) if not seg.empty else float(entry)
+    hit = seg[seg.h >= stop_price]
     stop_m = int(hit.index[0].hour * 60 + hit.index[0].minute) if len(hit) else None
-    return {"pnl": (entry - close) / entry, "mae": max(hi / entry - 1, 0.0),
+    risk = max(stop_price / entry - 1, 0.0)
+    stop_hit = bool(len(hit))
+    return {"pnl": -risk if stop_hit else (entry - close) / entry,
+            "mae": max(hi / entry - 1, 0.0), "stop_pct": risk,
+            "stop_price": float(stop_price), "stop_hit": stop_hit,
             "m": int(entry_min), "p": float(entry), "stop_m": stop_m}
 
 
@@ -708,28 +714,33 @@ def metrics(df, pc, full=True):
         if (base.h.max() - base.l.min()) / base.h.max() < 0.20:
             consol_bd = bool(after.iloc[40:].l.min() < base.l.min() * 0.99)
 
-    # entry models (short, exit at close or at the stop) -- each carries entry time/price for the chart
-    models = {"Short at open": mdl(rg, rg.index[0], o, mm[0], close)}
-    if orl_broke:
-        brk = rg.iloc[n5:]
-        brk = brk[brk.l < or_low]
-        bt = brk.index[0]
-        models["5m low break"] = mdl(rg, bt, or_low, bt.hour * 60 + bt.minute, close)
-    if lost_ts is not None:
-        models["VWAP loss (post-HOD)"] = mdl(rg, lost_ts, float(rg.c.loc[lost_ts]), lost_min, close)
-    if pm_high and o < pm_high:
-        x = rg[rg.h >= pm_high]
-        if len(x):
-            xt = x.index[0]
-            models["PM high rejection"] = mdl(rg, xt, pm_high, xt.hour * 60 + xt.minute, close)
-    grp = (mm - 570) // 5
-    g5 = rg.groupby(grp).agg(o=("o", "first"), c=("c", "last"))
-    red = g5[g5.c < g5.o]
-    if len(red):
-        k = int(red.index[0])
-        aft5 = rg[grp > k]
-        if len(aft5):
-            models["First red 5m candle"] = mdl(rg, aft5.index[0], float(red.c.iloc[0]), 570 + 5 * (k + 1), close)
+    # Opening-range breakdowns enter at the range low and use the highest RTH
+    # high observed before the breakdown candle; the open short uses max(20%, HOD).
+    open_short_stop = max(o * (1 + STOP_PCT), hod)
+    models = {
+        "Short at open": mdl(rg, rg.index[0], o, mm[0], close, open_short_stop),
+    }
+    for label, opening in (
+        ("2m ORB low break", first2),
+        ("5m ORB low break", first5),
+    ):
+        opening_end = opening.index[-1]
+        opening_low = float(opening.l.min())
+        later = rg.loc[rg.index > opening_end]
+        breakdown = later[later.l < opening_low]
+        if breakdown.empty:
+            continue
+        break_ts = breakdown.index[0]
+        prior_bars = rg.loc[:break_ts].iloc[:-1]
+        if prior_bars.empty:
+            continue
+        stop_price = float(prior_bars.h.max())
+        if stop_price <= opening_low:
+            continue
+        models[label] = mdl(
+            rg, break_ts, opening_low, break_ts.hour * 60 + break_ts.minute,
+            close, stop_price, exclude_entry_bar=True,
+        )
 
     rng = hod - lod
     downlegs = calc_downlegs(rg, hod_ts, th=0.12, min_drop=0.08)
@@ -771,9 +782,10 @@ def metrics(df, pc, full=True):
     return r
 
 
-def chart_pack(df, m, pc, day, float_shares=None, include_after_hours=False):
-    """Everything the browser needs for one 2-min chart (bars + VWAP + entry-model signals)."""
-    sig = [{"name": k, "m": v["m"], "p": v["p"], "stop_m": v["stop_m"], "pnl": v["pnl"]}
+def chart_pack(df, m, pc, day, float_shares=None, include_after_hours=True):
+    """Everything the browser needs for one chart, including postmarket bars."""
+    sig = [{"name": k, "m": v["m"], "p": v["p"], "stop_m": v["stop_m"],
+            "stop_price": v["stop_price"], "stop_pct": v["stop_pct"], "pnl": v["pnl"]}
            for k, v in (m.get("models") or {}).items()]
     return {"bars": bars2(df, include_after_hours), "date": str(day), "pc": pc, "open": m.get("open"), "pmh": m.get("pm_high"),
             "off": ist_off(day), "stop": STOP_PCT, "sig": sig, "float_shares": float_shares,

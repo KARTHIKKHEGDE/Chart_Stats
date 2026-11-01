@@ -377,19 +377,20 @@ def tbl_text(cols, rows):
 
 def model_rows(S):
     rows = []
-    for name in ["Short at open", "PM high rejection", "5m low break", "First red 5m candle", "VWAP loss (post-HOD)"]:
+    for name in ["2m ORB low break", "5m ORB low break", "Short at open"]:
         ms = [e["models"][name] for e in S if name in e["models"]]
         if not ms:
             continue
-        eff = [(-STOP_PCT if x["mae"] >= STOP_PCT else x["pnl"]) for x in ms]
+        eff = [x["pnl"] for x in ms]
         wins = [p for p in eff if p > 0]
         loss = [p for p in eff if p <= 0]
         wr = len(wins) / len(eff)
         exp = float(np.mean(eff))
         maes = [x["mae"] for x in ms]
+        avg_risk = float(np.mean([x["stop_pct"] for x in ms]))
         rows.append([C(name), C(str(len(ms))), C(f"{wr:.0%}", "g" if wr >= .55 else "y" if wr >= .45 else "r", wr),
                      C(pct(np.mean(wins)) if wins else "—", "g"), C(pct(np.mean(loss)) if loss else "—", "r"),
-                     C(pct(exp), sc(exp), exp), C(f"{exp / STOP_PCT:+.2f}R", sc(exp), exp),
+                     C(pct(exp), sc(exp), exp), C(f"{exp / avg_risk:+.2f}R" if avg_risk else "—", sc(exp), exp),
                      C(pct(med(maes), 0), "y", med(maes)), C(pct(max(maes), 0), "r", max(maes))])
     return rows
 
@@ -429,25 +430,17 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
         next_session += dt.timedelta(days=1)
 
     # ---- [1] current day
-    pm_fade = (open_ / lm["pm_high"] - 1) if open_ and lm.get("pm_high") else None
     left = [
         ["Current Day (session)", day_display, "c"],
         ["Gap %", pct(gap_live), sc(gap_live)],
-        ["VWAP / TWAP (session)", f"{usd(lm.get('vwap_close'))} / {usd(lm.get('twap_close'))}", "b"],
-        ["Price vs VWAP / TWAP", f"{pct(cur/lm['vwap_close']-1, 1) if lm.get('vwap_close') else '—'} / {pct(cur/lm['twap_close']-1, 1) if lm.get('twap_close') else '—'}", "b"],
-        ["ln(VWAP / TWAP)", pct(lm.get("vwap_twap_spread_close"), 1), sc(lm.get("vwap_twap_spread_close"))],
         ["Float Rotation (so far)", f"{rot_live:.2f}x" if (rot_live is not None and rot_live > 0) else "—", "b"],
         ["Volume (so far)", f"{big(vol)} shares" if vol else "0 shares", "b"],
         ["Dollar Volume (so far)", "$" + big(dvol) if dvol else "$0", "b"],
     ]
     right = [
-        ["Premarket High → Open Fade", pct(pm_fade) if pm_fade is not None else ("— (premarket)" if not open_ else "—"), sc(pm_fade) if pm_fade is not None else "d"],
-        ["Intraday volume source (VWAP)", live.get("volume_source", "Yahoo 1-minute volume"), "b"],
         ["Sector", live["sector"], "b"],
         ["Float", f"{big(fl_now)} shares" if fl_now else "—", "b"],
-        ["Float source / as of", live.get("float_source", "Unavailable"), "b"],
         ["Market Cap (latest price)", "$" + big(mcap) if mcap else "—", "b"],
-        ["Market cap basis", live.get("market_cap_source", "Unavailable"), "b"],
     ]
 
     # ---- [2] [3] [4] [5] per-event tables (all share the same row order / dim flags)
@@ -513,7 +506,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
              "Continuation: closed at/above it · Inside: traded inside the gap day's range. "
              "D2/D3/D5 = cumulative return vs Day-1 close. Squeeze/Drawdn 1/3/5d = max high / low after the Day-1 close within "
              "the next 1/3/5 sessions (e.g. +19/+25/+25). Day #: 1 = first gap day, 2+ = consecutive gapper.")
-    spike_cols = ["Date", "Premkt Spike %", "Gap Up (RTH)", "PM High Time (IST)", "O → H (RTH)", "H → L (RTH)", "$ Vol Till High", "Premkt Vol", "$ Vol Reg Hr / $ Premkt"]
+    spike_cols = ["Date", "Premkt Spike %", "Gap Up (RTH)", "PM High Time (IST)", "O → H (RTH)", "O → C (RTH)", "H → L (RTH)", "$ Vol Till High", "Premkt Vol", "$ Vol Reg Hr / $ Premkt"]
     spike_rows = []
     for e in events:
         pm_high_pct = e.get("pm_high_pct")
@@ -529,17 +522,16 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
             C(pct(e.get("gap"), 0), sc(e.get("gap")), e.get("gap")),
             C(hhmm(e.get("pm_hi_min"), e["date"]), "w", e.get("pm_hi_min")),
             C(pct(e.get("o2h"), 0), sc(e.get("o2h")), e.get("o2h")),
+            C(pct(e.get("o2c"), 0), sc(e.get("o2c")), e.get("o2c")),
             C(pct(e.get("o2l"), 0), sc(e.get("o2l")), e.get("o2l")),
             C(dv(e.get("pm_dv_hi")), "b", e.get("pm_dv_hi")),
             C(big(e.get("pm_vol")), "b", e.get("pm_vol")),
             C(f"{ratio:.2f}x" if ratio is not None else "—", "b", ratio),
         ])
     if not spike_rows:
-        spike_rows = [[C("—", "w", None), C("—", "w", None), C("—", "w", None), C("—", "w", None),
-                       C("—", "w", None),
-                       C("—", "w", None), C("—", "w", None), C("—", "w", None), C("—", "w", None)]]
+        spike_rows = [[C("—", "w", None) for _ in spike_cols]]
     tables = [
-        {"title": "[2A] PREMARKET SPIKE DAYS (>40% rise, >$10M premarket $ volume)", "cols": spike_cols, "rows": spike_rows, "dim": [], "foot": "Premarket spike = PM high versus previous close. Gap Up (RTH) = RTH open versus previous close. O→H and H→L use the RTH open-to-high and open-to-low relationships from the historical event set."},
+        {"title": "[2A] PREMARKET SPIKE DAYS (>40% rise, >$10M premarket $ volume)", "cols": spike_cols, "rows": spike_rows, "dim": [], "foot": "Premarket spike = PM high versus previous close. Gap Up (RTH) = RTH open versus previous close. O→H, O→C, and H→L use RTH prices; O→C is the RTH close versus RTH open."},
         {"title": f"[2] HISTORICAL GAP UPS (last 1 year, gap ≥ {GAP_MIN*100:.0f}%) — click headers to sort",
          "cols": cols2, "rows": R2, "dim": dim, "foot": foot2},
         {"title": "[3] PREMARKET ANALYSIS", "cols": cols3, "rows": R3, "dim": dim, "foot": foot3},
@@ -566,9 +558,11 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     else:
         head = {"grade": "N/A", "score": "—", "gcls": "r", "verdict": "Not enough history.", "total": len(events)}
 
-    mcols = ["Entry (short, exit at close / stop)", "Trades", "Win %", "Avg win", "Avg loss", "Expectancy",
-             f"Avg R (stop {STOP_PCT:.0%})", "Median squeeze", "Worst squeeze"]
+    mcols = ["Entry (short; exit at close / stop)", "Trades", "Win %", "Avg win", "Avg loss", "Expectancy",
+             "Avg R (per-model stop)", "Median squeeze", "Worst squeeze"]
     mrows = model_rows(S)
+    mfoot = ("2m/5m ORB shorts enter on a break below the opening-range low; stop = the highest RTH high observed "
+             "before the breakdown candle. Short at open stop = the greater of 20% above entry or the session high.")
 
     # ---- [7] aggregate path chart: premarket -> close, % from prev close, IST axis
     arr = np.array([[np.nan if v is None else v for v in e["path"]] for e in S], dtype=float) if S else np.zeros((0, NPTS + 1))
@@ -730,13 +724,12 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
             f"Verdict: {head['verdict']}", "", T["p1"], kv_text(left), kv_text(right)]
     text += ["", T["p7"], kv_text(ptext, 40)]
     if mrows:
-        text += ["", T["pd"], tbl_text(mcols, mrows)]
+        text += ["", T["pd"], tbl_text(mcols, mrows), mfoot]
     return {"head": head, "titles": T, "p1": {"left": left, "right": right},
             "open_hod_stats": open_hod, "hod_times": hod_times, "tables": tables,
             "evcharts": evch, "session_dates": [r["date"] for r in daily] + [day_str, next_session.isoformat()],
-            "model_names": ["Short at open", "PM high rejection", "5m low break",
-                                              "First red 5m candle", "VWAP loss (post-HOD)"],
-            "pd": {"cols": mcols, "rows": mrows},
+            "model_names": ["2m ORB low break", "5m ORB low break", "Short at open"],
+            "pd": {"cols": mcols, "rows": mrows, "foot": mfoot},
             "chart": chart, "dilution_url": dilution_url, "text": "\n".join(text)}
 
 
