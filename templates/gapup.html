@@ -1960,7 +1960,14 @@ async function loadGapDeepDiveContext(){
   const {item,jobId,chart}=gapDeepDiveCurrent,cv=$('#gap_chart_modal_canvas'),state=cv._gapDeepDiveState;
   if(!state)return;
   const timeframe=$('#gap_chart_tf').value||'2m',days=Number(state.days)||(timeframe==='1d'?200:1);
-  state.contextCache=state.contextCache||{};const saved=state.contextCache[timeframe];
+  state.contextCache=state.contextCache||{};
+  const prefetched=state.contextCache[`${timeframe}|5`];
+  if(timeframe!=='1d'&&prefetched?.bars?.t?.length&&prefetched.dates?.includes(item.date)){
+    state.bars=prefetched.bars;state.dates=prefetched.dates;state.days=5;state.loadedDays=5;state.timeframe=timeframe;state.contextLoaded=true;state.daysSelected=true;state.contextCache[timeframe]=prefetched;state.panOffset=0;cv._panOffset=0;cv._modalPanInitialized=true;renderGapDeepDiveModal();
+    $('#gap_deepdive_status').textContent=`Loaded ${state.dates.length} sessions around ${item.ticker}; the gap day stays centered.`;
+    return;
+  }
+  const saved=state.contextCache[timeframe];
   if(saved&&saved.days===days){state.bars=saved.bars;state.dates=saved.dates;state.days=saved.days;state.loadedDays=saved.days;state.timeframe=timeframe;state.contextLoaded=true;state.loading=false;renderGapDeepDiveModal();return;}
   const requestId=(state.contextRequestId||0)+1;state.contextRequestId=requestId;state.loading=true;
   const query=new URLSearchParams({ticker:item.ticker,date:item.date,days:String(days),tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1'});
@@ -1989,6 +1996,12 @@ async function prefetchGapDeepDiveContexts(item,state){
         if(context?.bars&&context.dates?.length)state.contextCache[`${timeframe}|5`]=context;
       }
       state.contextPrefetched=true;
+      const activeTimeframe=$('#gap_chart_tf').value||'2m',active=state.contextCache[`${activeTimeframe}|5`];
+      if(activeTimeframe!=='1d'&&active?.bars?.t?.length&&active.dates?.includes(item.date)&&state.timeframe===activeTimeframe){
+        state.bars=active.bars;state.dates=active.dates;state.days=5;state.loadedDays=5;state.timeframe=activeTimeframe;state.contextLoaded=true;state.daysSelected=true;state.contextCache[activeTimeframe]=active;state.panOffset=0;
+        const current=gapDeepDiveCurrent&&gapDeepDiveKey(gapDeepDiveCurrent.item)===gapDeepDiveKey(item),cv=$('#gap_chart_modal_canvas');
+        if(current){cv._panOffset=0;cv._modalPanInitialized=true;renderGapDeepDiveModal();$('#gap_deepdive_status').textContent=`Loaded ${state.dates.length} sessions around ${item.ticker}; the gap day stays centered.`;}
+      }
     }catch(error){console.debug(`Neighbor candle prefetch failed for ${item.ticker} ${item.date}:`,error.message);}
     finally{state.contextPrefetchPromise=null;}
   })();
