@@ -894,7 +894,7 @@ def premarket_spikes_api():
         return jsonify({"error": "Session expired. Please sign in again."}), 401
     if not re.fullmatch(r"[A-Z.-]{1,10}", ticker):
         return jsonify({"error": "Invalid ticker."}), 400
-    cache_key = f"{ticker}_premarket_spikes_v3"
+    cache_key = f"{ticker}_premarket_spikes_v4"
     cached = cget(cache_key, 6 * 3600)
     if cached is not None:
         return jsonify({"days": cached, "cached": True})
@@ -944,15 +944,18 @@ def premarket_spikes_api():
                 rth_open_gap = None
                 rth_open_high = None
                 rth_high_low = None
+                rth_faded = None
                 if not rth.empty:
                     rth_typical = (rth["h"] + rth["l"] + rth["c"]) / 3
                     rth_dollar_volume = float((rth_typical * rth["v"]).sum())
                     rth_open = float(rth.iloc[0]["o"])
+                    rth_close = float(rth.iloc[-1]["c"])
                     rth_high = float(rth["h"].max())
                     rth_low = float(rth["l"].min())
                     if rth_open > 0:
                         rth_open_gap = (rth_open / prior_close - 1) * 100
                         rth_open_high = (rth_high / rth_open - 1) * 100
+                        rth_faded = rth_close < rth_open
                     if rth_high > 0:
                         rth_high_low = (rth_low / rth_high - 1) * 100
                 if high / prior_close - 1 > 0.40 and dollar_volume >= 10_000_000:
@@ -968,6 +971,7 @@ def premarket_spikes_api():
                         "rth_open_gap_pct": round(rth_open_gap, 2) if rth_open_gap is not None else None,
                         "rth_open_high_pct": round(rth_open_high, 2) if rth_open_high is not None else None,
                         "rth_high_low_pct": round(rth_high_low, 2) if rth_high_low is not None else None,
+                        "rth_faded": rth_faded,
                         "pm_dollar_volume_till_high": round(pm_high_dollar_volume, 2),
                         "pm_dollar_volume": round(dollar_volume, 2),
                         "pm_volume": round(float(premarket["v"].sum())),

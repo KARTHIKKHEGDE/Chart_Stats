@@ -915,19 +915,28 @@ async function run(refresh){
   }
 }
 
-async function loadPremarketSpikeDays(tab,report){
-  const panel=tab.container.querySelector('[data-premarket-spikes]'),ticker=report?.head?.ticker;
-  if(!panel||!ticker)return;
-  if(tab._premarketSpikeLoad)return tab._premarketSpikeLoad;
-  const query=new URLSearchParams({ticker,user:currentUser||'',token:sessionToken||''});
-  tab._premarketSpikeLoad=fetch('/api/premarket-spikes?'+query.toString()).then(async response=>{
-    const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load premarket history.');
-    if(tab.result!==report)return;
-    const days=data.days||[],compact=n=>new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(Number(n)||0);
-    const cell=(value,sort=value)=>[value??'—','w',sort??''];
-    const percent=value=>value==null?'—':`${Number(value)>=0?'+':''}${Number(value).toFixed(1)}%`;
-    const cols=['Date','Premkt Spike %','Gap Up (RTH)','PM High Time (IST)','O → H (RTH)','H → L (RTH)','$ Vol Till High','Premarket Vol','$ Vol Reg Hr / $ Premkt'];
-    const rows=days.map(item=>[
+function premarketSpikeChartCard(index){
+  return `<div class="evc" data-ev-slot="${index}" onclick="openChartModal(${index})"><div class="evhead"><div class="evt" id="evtitle${index}"></div><span class="eventDateTag" data-event-date></span><div class="evcontrols"><select class="evtf" title="Timeframe"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select><select class="evdays" title="Sessions shown"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="60">60 days</option></select><button class="evzoom" data-zoom="out" title="Zoom out">−</button><button class="evzoom" data-zoom="in" title="Zoom in">+</button><button class="evmeasure" type="button" title="Drag across bars to measure volume, dollar volume, and float rotation">Measure</button><button class="evtoday" type="button" title="Return to today's live chart">Today</button></div></div><canvas id="ev${index}"></canvas></div>`;
+}
+
+function renderPremarketSpikeDays(tab,report,days){
+  const panel=tab.container.querySelector('[data-premarket-spikes]');
+  if(!panel||tab.result!==report)return;
+  const compact=n=>new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(Number(n)||0);
+  const cell=(value,sort=value)=>[value??'—','w',sort??''];
+  const percent=value=>value==null?'—':`${Number(value)>=0?'+':''}${Number(value).toFixed(1)}%`;
+  const fadeSample=days.filter(item=>typeof item.rth_faded==='boolean');
+  const gapUpSample=fadeSample.filter(item=>Number(item.rth_open_gap_pct)>0);
+  const fades=fadeSample.filter(item=>item.rth_faded).length;
+  const gapUpFades=gapUpSample.filter(item=>item.rth_faded).length;
+  const formatCount=(count,sample)=>`${count} / ${sample.length}${sample.length?` (${(count/sample.length*100).toFixed(0)}%)`:''}`;
+  const statsPanel=tab.container.querySelector('[data-premarket-spike-stats]');
+  if(statsPanel)statsPanel.innerHTML=
+    `<div class="kv"><span>Historical premarket spikes faded</span><span>${formatCount(fades,fadeSample)}</span>`+
+    `<span>RTH gap-up spike days faded</span><span>${formatCount(gapUpFades,gapUpSample)}</span></div>`+
+    `<div class="foot">Fade = RTH close below RTH open. RTH gap-up = open above the previous close. Counts use days with available RTH data.</div>`;
+  const cols=['Date','Premkt Spike %','Gap Up (RTH)','PM High Time (IST)','O → H (RTH)','H → L (RTH)','$ Vol Till High','Premarket Vol','$ Vol Reg Hr / $ Premkt'];
+  const rows=days.map(item=>[
       cell(formatDateMDY(item.date),item.date),
       cell(percent(item.pm_high_pct),item.pm_high_pct),
       cell(percent(item.rth_open_gap_pct),item.rth_open_gap_pct),
@@ -938,11 +947,59 @@ async function loadPremarketSpikeDays(tab,report){
       cell(`${compact(item.pm_volume)} sh`,item.pm_volume),
       cell(item.rth_to_pm_dollar_volume==null?'—':`${Number(item.rth_to_pm_dollar_volume).toFixed(2)}x`,item.rth_to_pm_dollar_volume)
     ]);
-    panel.innerHTML=`<div class="ttl">Premarket Spike Days · PM high &gt; +40% · PM $ volume ≥ $10M · last year</div>`+
-      (rows.length?table(cols,rows,null,true):`<div class="foot">No sessions met both thresholds in the last year.</div>`);
-    panel.querySelectorAll('table.sort').forEach(makeSortable);
-    report.premarket_surge_days=days;
-  }).catch(error=>{if(tab.result===report&&panel.isConnected){const status=panel.querySelector('[data-surge-status]');if(status)status.textContent='Premarket history unavailable: '+error.message;}}).finally(()=>{const stale=tab.result!==report;tab._premarketSpikeLoad=null;if(stale&&tab.result?.head?.ticker===ticker)loadPremarketSpikeDays(tab,tab.result);});
+  panel.innerHTML=`<div class="ttl">Premarket Spike Days · PM high &gt; +40% · PM $ volume ≥ $10M · last year</div>`+
+    (rows.length?table(cols,rows,null,true):`<div class="foot">No sessions met both thresholds in the last year.</div>`);
+  panel.querySelectorAll('table.sort').forEach(makeSortable);
+  report.premarket_surge_days=days;
+
+  const existingDates=new Set(tab.EV.map(item=>item.date));
+  const spikeCharts=days.filter(item=>item.date&&!existingDates.has(item.date));
+  const grid=tab.container.querySelector('.evgrid');
+  if(!grid||!spikeCharts.length)return;
+  const firstIndex=tab.EV.length;
+  const added=spikeCharts.map(item=>{
+    const spikeTitle=`PREMARKET SPIKE ${item.date} · PM high +${Number(item.pm_high_pct).toFixed(1)}%`;
+    const cached=tab.sessionChartCache[item.date];
+    return cached
+      ? {...cached,title:`${spikeTitle} · ${cached.title}`,sim:false}
+      : {date:item.date,title:`${spikeTitle} · loading chart`,sim:false,chart:{bars:{t:[]}},
+         premarketSpikeChart:true,premarketSpikePct:item.pm_high_pct};
+  });
+  tab.EV.push(...added);
+  grid.insertAdjacentHTML('beforeend',added.map((_,offset)=>premarketSpikeChartCard(firstIndex+offset)).join(''));
+  drawEvAll(tab.EV,tab.container);
+}
+
+async function loadPremarketSpikeChart(tab,card,item){
+  if(item._chartLoading||!item.premarketSpikeChart)return;
+  item._chartLoading=true;
+  const report=tab.result,query=new URLSearchParams({ticker:report?.head?.ticker||'',date:item.date,user:currentUser||'',token:sessionToken||''});
+  try{
+    const response=await fetch('/api/session-chart?'+query.toString()),data=await response.json();
+    if(!response.ok)throw new Error(data.error||'Could not load premarket spike chart.');
+    if(tab.result!==report||!card.isConnected)return;
+    const loaded={date:data.date,title:`PREMARKET SPIKE ${item.date} · PM high +${Number(item.premarketSpikePct).toFixed(1)}% · ${data.title}`,sim:false,chart:data.chart};
+    tab.sessionChartCache[item.date]=loaded;
+    tab.EV[Number(card.dataset.evSlot)]=loaded;
+    card._chartItem=loaded;
+  }catch(error){
+    if(tab.result!==report||!card.isConnected)return;
+    item.title=`PREMARKET SPIKE ${item.date} · chart unavailable: ${error.message}`;
+  }finally{
+    item._chartLoading=false;
+    if(tab.result===report&&card.isConnected)drawEvAll(tab.EV,tab.container);
+  }
+}
+
+async function loadPremarketSpikeDays(tab,report){
+  const ticker=report?.head?.ticker;
+  if(!tab.container.querySelector('[data-premarket-spikes]')||!ticker)return;
+  if(tab._premarketSpikeLoad)return tab._premarketSpikeLoad;
+  const query=new URLSearchParams({ticker,user:currentUser||'',token:sessionToken||''});
+  tab._premarketSpikeLoad=fetch('/api/premarket-spikes?'+query.toString()).then(async response=>{
+    const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load premarket history.');
+    if(tab.result===report)renderPremarketSpikeDays(tab,report,data.days||[]);
+  }).catch(error=>{if(tab.result===report){const panel=tab.container.querySelector('[data-premarket-spikes]'),status=panel?.querySelector('[data-surge-status]');if(status)status.textContent='Premarket history unavailable: '+error.message;}}).finally(()=>{const stale=tab.result!==report;tab._premarketSpikeLoad=null;if(stale&&tab.result?.head?.ticker===ticker)loadPremarketSpikeDays(tab,tab.result);});
   return tab._premarketSpikeLoad;
 }
 
@@ -968,6 +1025,12 @@ function renderTab(tab, r, isRefresh){
   o += `<div class="refresh_banner" style="display:none;background:#141414;border:1px solid #29a8ff;padding:8px 12px;margin-bottom:14px;color:#29a8ff;font-size:13px"></div>`;
   o += `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:14px"><span class="big">Ticker: <span class="c">${esc(h.ticker)}</span></span><a href="${esc(r.dilution_url)}" target="_blank" rel="noopener noreferrer" style="color:#d8b4fe;font-size:13px;font-weight:normal">Finviz Dilution ↗</a>${refreshBadge}</div><br>`;
   o += `<div class="panel two"><div><div class="ttl">${esc(T.p1)}</div>${kv(r.p1.left)}</div><div>${kv(r.p1.right)}</div></div>`;
+  o += `<div class="panel"><div class="ttl">Chart-Based Fade Grade</div>`+
+    `<div>Grade: <span class="badge ${esc(h.gcls)}">${esc(h.grade)}</span> <span class="c">${esc(h.score)}</span></div>`+
+    `<div class="${esc(h.gcls)}">${esc(h.verdict)}</div>`+
+    `<div class="foot">Based on ${Number(h.n)||0} similar historical gap-up setups.</div></div>`+
+    `<div class="panel" data-premarket-spike-stats><div class="ttl">Historical Premarket Spike Fade Results</div>`+
+    `<div class="foot">Loading historical fade counts…</div></div>`;
   const surgeDays=Array.isArray(r.premarket_surge_days)?r.premarket_surge_days:null;
   o += `<div class="panel" data-premarket-spikes><div class="ttl">Premarket Spike Days · PM high &gt; +40% · PM $ volume ≥ $10M · last year</div>`+
     (surgeDays?`<div class="foot">Loading premarket spike days…</div>`:`<div class="foot" data-surge-status>Checking this history in the background…</div>`)+`</div>`;
@@ -989,14 +1052,14 @@ function renderTab(tab, r, isRefresh){
   const reverseSplits=r.reverse_splits||[];
   o += `<div class="panel"><div class="ttl">Reverse Splits · ${reverseSplits.length} ${reverseSplits.length===1?'event':'events'}</div>`+
     (reverseSplits.length?`<div class="kv">${reverseSplits.map(item=>`<span>Reverse split</span><span>${esc(formatDateMDY(item.date))} · ${esc(item.ratio)} reverse${item.price_conversion?` (${esc(item.price_conversion)})`:''}</span>`).join('')}</div>`:`<div class="foot">No reverse splits found in available split history.</div>`)+`</div>`;
-  (r.tables||[]).filter(t=>!t.title.includes('HISTORICAL GAP UPS')&&!t.title.includes('PREMARKET SPIKE DAYS')).forEach(t=>{
+  (r.tables||[]).filter(t=>t.title.includes('PREMARKET SPIKE DAYS')).forEach(t=>{
     o += `<div class="panel"><div class="ttl">${esc(t.title)}</div>${table(t.cols,t.rows,t.dim,true)}<div class="foot">${esc(t.foot||'')}</div></div>`;
   });
   o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">`+
      `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:7px">${esc(T.p6)}<label style="font-size:11px;color:#aaa">All charts <select id="ev_all_tf" class="evtf"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label><select id="ev_all_days" class="evtf" title="Days for all charts"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="60">60 days</option></select><select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
      (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" checked style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/21 EMA cloud + BB)</label></div>`+
      `<span style="font-size:12px;color:#29a8ff;font-weight:normal">🔍 Click any chart to enlarge</span></div>`+
-  `<div class="evgrid">`+tab.EV.map((c,i)=>`<div class="evc" data-ev-slot="${i}" onclick="openChartModal(${i})"><div class="evhead"><div class="evt" id="evtitle${i}"></div><span class="eventDateTag" data-event-date></span><div class="evcontrols"><select class="evtf" title="Timeframe"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select><select class="evdays" title="Sessions shown"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="60">60 days</option></select><button class="evzoom" data-zoom="out" title="Zoom out">−</button><button class="evzoom" data-zoom="in" title="Zoom in">+</button><button class="evmeasure" type="button" title="Drag across bars to measure volume, dollar volume, and float rotation">Measure</button><button class="evtoday" type="button" title="Return to today's live chart">Today</button></div></div><canvas id="ev${i}"></canvas></div>`).join('')+
+  `<div class="evgrid">`+tab.EV.map((_,i)=>premarketSpikeChartCard(i)).join('')+
      `<\/div><div class="foot"><span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance.">━ VWAP<\/span> &nbsp; <span style="color:#c084fc">━ TWAP</span> &nbsp; <span style="color:#e879f9">┅ active-minute TWAP</span> &nbsp; <span style="color:#ffd23f">┅ HOD-anchored AVWAP</span> &nbsp; <span style="color:#ffd23f">N News</span> &nbsp; <span style="color:#62c8ff">S SEC filing</span>  <span class="y" data-tip="Pre-market High — highest price before the US market open. Common fade target.">┅ PM high<\/span>  <span class="d" data-tip="Previous Close — yesterday’s close. Gap % is measured from here.">┅ prev close<\/span> &nbsp; <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period EMA on 2-min closes. Fast trend line.">━ EMA9<\/span> <span style="color:#ffa500" data-tip="EMA 21 — 20-period EMA on 2-min closes. Slower trend line. Bearish when EMA9 drops below it.">━ EMA21<\/span> <span class="g" data-tip="Bone Zone cloud — shaded between EMA9 &amp; EMA21. Green = bullish. Red = bearish.">▒<\/span><span class="r">▒<\/span> cloud <span class="d" data-tip="Bollinger Bands (20-period, 2 std dev). Shows expected volatility range on the 2-min chart.">━ BB(20,2)<\/span> &nbsp; <span data-tip="SELL signal — short entry triggered by an entry model.">▼ SELL<\/span> &nbsp; <span data-tip="BUY / Cover signal — close the short here. P&amp;L % shown next to it.">▲ BUY<\/span>. <span data-tip="Lighter shaded background = pre-market session (before 9:30 ET / 19:00 IST).">Shaded = premarket<\/span>. X axis = IST. Measure: activate Measure, then drag across bars for volume, estimated dollar volume, and float rotation.<\/div><\/div>`;
 
   const pmGapText = Number.isFinite(r.chart.premarket_gap_pct)
@@ -1008,7 +1071,8 @@ function renderTab(tab, r, isRefresh){
   if(r.pd.rows.length) o += `<div class="panel"><div class="ttl">${esc(T.pd)}</div>${table(r.pd.cols,r.pd.rows,null,false)}</div>`;
 
   tab.container.innerHTML = o;
-  if(!surgeDays) loadPremarketSpikeDays(tab,r);
+  if(surgeDays) renderPremarketSpikeDays(tab,r,surgeDays);
+  else loadPremarketSpikeDays(tab,r);
   loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'));
   tab.container.querySelectorAll('table.sort').forEach(makeSortable);
 
@@ -1071,7 +1135,7 @@ function drawEvAll(evList, containerEl){
   const bzEl = cEl.querySelector('#bz');
   const bzChecked = bzEl ? bzEl.checked : false;
   const tabForCharts=Object.values(openTabs).find(tab=>tab.container===cEl);
-  if(!window.evLazyObserver)window.evLazyObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){entry.target._chartVisible=true;const t=Object.values(openTabs).find(x=>x.container.contains(entry.target));if(t)drawEvAll(t.EV,t.container);window.evLazyObserver.unobserve(entry.target);}}),{rootMargin:'450px 0px'});
+  if(!window.evLazyObserver)window.evLazyObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){entry.target._chartVisible=true;const t=Object.values(openTabs).find(x=>x.container.contains(entry.target));if(t){if(entry.target._chartItem?.premarketSpikeChart)loadPremarketSpikeChart(t,entry.target,entry.target._chartItem);drawEvAll(t.EV,t.container);}window.evLazyObserver.unobserve(entry.target);}}),{rootMargin:'450px 0px'});
   list.forEach((c,i)=>{
     const card=cEl.querySelector(`[data-ev-slot="${i}"]`), cv=cEl.querySelector('#ev'+i);
     if(!card || !cv) return;

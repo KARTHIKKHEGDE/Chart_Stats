@@ -722,7 +722,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
                 sub=f"Chart-Based Gap Up Analysis — Current Day: {day_display} · Times in IST", notes=notes)
     T = {
         "p1": f"[1] CURRENT DAY SETUP ({day_display} — latest data)",
-        "p6": "[6] 2-MIN CHARTS — premarket → close, volume + VWAP + TWAP + running-HOD AVWAP, SELL = short entry, BUY = cover",
+        "p6": "[6] 2-MIN CHARTS — today + historical premarket spike sessions, premarket → close, volume + VWAP + TWAP + running-HOD AVWAP",
         "p7": "[7] VWAP-CONDITIONED EXPECTED PATH",
         "pd": "[D] ENTRY MODELS (similar setups)",
     }
