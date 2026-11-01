@@ -34,6 +34,7 @@ import requests
 from pathlib import Path
 from html.parser import HTMLParser
 from urllib.parse import quote, urljoin, urlparse
+from concurrent.futures import ThreadPoolExecutor
 
 GAP_DEEPDIVE_TICKERS = list(dict.fromkeys("VIOT PPBT FAMI BIAF GELS RDAC GYGY WETO CLGN RDHL WHLR QNRX LGPS VNRX PPCB CELU BRNX SXTC VRAX SKK BIVI TNON CDTG ZSTK YJ EJH SGLY ONFO CIGL YMT DKI HKIT HUIZ GAUZ CELZ CLRO YXT ZYBT HYFM FCUV FFAI EDBL CJMB AKAN INLF GVH DXST EHGO ZBAO YMAT GMM YRD DXF CDT APWC IHT ICCM CIIT BEEM CRE CAST AIDX BYAH DSY BQ CHNR CCTG CGTL AZI CHAI BATL DAIC ANYBAOS BOXL BYSI CHOW DOGZ FRGT FXHO HCTI INM ITOC IVF JZXN KUST KXIN LGHL LICN LNAI LRHC LXEH MBRX MIMI MLEC MTEN NAII NCRA NEXR NIXX NUWE NVVE NXTS ODYS OFAL OMH OPTX ORIS PAVS PCLA PCSA PN PWCM RGNT RLYB RMAX RMSG RUBI RYOJ SAFX SBFM SDOT SFHG SILO SKYQ SLGB SLND SOAR SOBR SSM STG TDIC TRNR TURB TWG UK UPC VEEE VIVK VIVS".split()))
 GAP_DEEPDIVE_JOBS = {}
@@ -43,6 +44,7 @@ _GAP_DEEPDIVE_CHART_PAYLOADS = {}
 _GAP_DEEPDIVE_CHART_PAYLOAD_LOCK = threading.Lock()
 _FILING_AI_LOCK = threading.Lock()
 _FILING_AI_KEY_POS = {"groq": 0, "gemini": 0}
+_SEC_DILUTION_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix='sec-dilution')
 
 
 class _SecFilingTextParser(HTMLParser):
@@ -1573,6 +1575,61 @@ def sec_dilution_history():
     except Exception as exc:
         app.logger.exception('SEC dilution history failed for %s',ticker)
         return jsonify({'error':f'Could not analyze dilution history ({type(exc).__name__}).'}),502
+
+
+def _run_sec_dilution_job(job_id, body):
+    job_key=f'sec_dilution_job_{job_id}'
+    try:
+        # Reuse the validated report handler in an isolated request context;
+        # the browser-facing start request can return before SEC/AI work ends.
+        with app.test_request_context('/api/sec-dilution-history',method='POST',json=body):
+            result=sec_dilution_history()
+            if isinstance(result,tuple):
+                response,status=result[0],int(result[1])
+            else:
+                response,status=result,int(getattr(result,'status_code',200))
+            payload=response.get_json(silent=True) if hasattr(response,'get_json') else None
+        if 200<=status<300 and isinstance(payload,dict):
+            cput(job_key,{'status':'complete','result':payload})
+        else:
+            cput(job_key,{'status':'error','error':(payload or {}).get('error') or f'Analysis failed (HTTP {status}).'})
+    except Exception as exc:
+        app.logger.exception('SEC dilution background job failed (%s)',job_id)
+        cput(job_key,{'status':'error','error':f'Could not analyze dilution history ({type(exc).__name__}).'})
+
+
+@app.route('/api/sec-dilution-history/start',methods=['POST'])
+def sec_dilution_history_start():
+    body=request.get_json(silent=True) or {}
+    user=str(body.get('user') or '').strip().lower()
+    token=str(body.get('token') or '').strip()
+    if user not in _auth.ALLOWED_USERS or not _db_validate_session(user,token):
+        return jsonify({'error':'Unauthorized'}),401
+    job_id=uuid.uuid4().hex
+    cput(f'sec_dilution_job_{job_id}',{'status':'running'})
+    try:
+        _SEC_DILUTION_EXECUTOR.submit(_run_sec_dilution_job,job_id,body)
+    except Exception as exc:
+        app.logger.exception('Could not queue SEC dilution job for %s',body.get('ticker',''))
+        cput(f'sec_dilution_job_{job_id}',{'status':'error','error':f'Could not start the analysis ({type(exc).__name__}).'})
+        return jsonify({'error':'Could not start the dilution analysis.'}),503
+    return jsonify({'job_id':job_id,'status':'running'}),202
+
+
+@app.route('/api/sec-dilution-history/status',methods=['POST'])
+def sec_dilution_history_status():
+    body=request.get_json(silent=True) or {}
+    user=str(body.get('user') or '').strip().lower()
+    token=str(body.get('token') or '').strip()
+    if user not in _auth.ALLOWED_USERS or not _db_validate_session(user,token):
+        return jsonify({'error':'Unauthorized'}),401
+    job_id=str(body.get('job_id') or '').strip().lower()
+    if not re.fullmatch(r'[0-9a-f]{32}',job_id):
+        return jsonify({'error':'Invalid analysis job.'}),400
+    job=cget(f'sec_dilution_job_{job_id}',15*60)
+    if job is None:
+        return jsonify({'error':'The analysis job expired. Start the report again.'}),404
+    return jsonify(job)
 
 
 @app.route("/api/session-chart")

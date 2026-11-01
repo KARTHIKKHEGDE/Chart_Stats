@@ -859,7 +859,20 @@ async function requestDilutionHistory(ticker,asOfDate=''){
   const modal=$('#filing_explanation_modal'),status=$('#filing_explanation_status'),content=$('#filing_explanation_content');
   modal.style.display='flex';content.hidden=true;content.innerHTML='';$('#filing_explanation_title').textContent=`${ticker} · Dilution history`;
   status.textContent=`Reviewing filings and dilution status as of ${asOfDate||'today'}…`;
-  try{const response=await fetch('/api/sec-dilution-history',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:currentUser||'',token:sessionToken||'',ticker,as_of:asOfDate||''})}),data=await response.json();if(!response.ok)throw new Error(data.error||'Could not analyze dilution history.');renderDilutionHistory(data);}
+  const readApiJson=async response=>{const raw=await response.text();let data;try{data=JSON.parse(raw);}catch{throw new Error(`Server returned a non-JSON response (HTTP ${response.status}). The analysis could not be started or completed.`);}if(!response.ok)throw new Error(data.error||`Analysis request failed (HTTP ${response.status}).`);return data;};
+  try{
+    const payload={user:currentUser||'',token:sessionToken||'',ticker,as_of:asOfDate||''};
+    const started=await readApiJson(await fetch('/api/sec-dilution-history/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}));
+    const beganAt=Date.now();
+    while(Date.now()-beganAt<10*60*1000){
+      await new Promise(resolve=>setTimeout(resolve,1800));
+      const job=await readApiJson(await fetch('/api/sec-dilution-history/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,job_id:started.job_id})}));
+      if(job.status==='complete'){renderDilutionHistory(job.result);return;}
+      if(job.status==='error')throw new Error(job.error||'Could not analyze dilution history.');
+      status.textContent=`Checking SEC filings and dilution status as of ${asOfDate||'today'}… ${Math.floor((Date.now()-beganAt)/1000)}s`;
+    }
+    throw new Error('The analysis is still running on the server. Please wait a little and try again.');
+  }
   catch(error){status.textContent=error.message;content.hidden=true;}
 }
 async function loadRecentFilingsFeed(target,ticker='',asof=''){
