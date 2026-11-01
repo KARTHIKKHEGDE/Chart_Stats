@@ -86,8 +86,9 @@ _KW_PLAYER_ROLES = [
 ]
 
 
-def _keyword_ticker_map():
-    cached = cget("sec_keyword_ticker_map", 86400)
+def _keyword_ticker_map(force_refresh=False):
+    cache_key = "sec_keyword_ticker_map_v3"
+    cached = None if force_refresh else cget(cache_key, 86400)
     if cached:
         return cached
     response = _keyword_sec_get("https://www.sec.gov/files/company_tickers.json", timeout=25)
@@ -97,10 +98,21 @@ def _keyword_ticker_map():
     for row in raw.values():
         cik = str(row.get("cik_str") or "").strip()
         if cik:
-            result[str(int(cik)).zfill(10)] = {"ticker": str(row.get("ticker") or "").upper(),
-                                               "name": str(row.get("title") or "")}
-    cput("sec_keyword_ticker_map", result)
+            key = str(int(cik)).zfill(10)
+            ticker = str(row.get("ticker") or "").upper()
+            info = result.setdefault(key, {"ticker": ticker, "tickers": [],
+                                           "name": str(row.get("title") or "")})
+            if ticker and ticker not in info["tickers"]:
+                info["tickers"].append(ticker)
+    cput(cache_key, result)
     return result
+
+
+def _keyword_ticker_matches(info, ticker):
+    """Match every listed share class/alias represented by a single SEC CIK."""
+    wanted = str(ticker or "").upper()
+    aliases = info.get("tickers") or [info.get("ticker")]
+    return wanted in {str(alias or "").upper() for alias in aliases}
 
 
 def _keyword_plain_text(value):

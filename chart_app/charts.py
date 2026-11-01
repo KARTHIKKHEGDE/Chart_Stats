@@ -273,8 +273,8 @@ def _extract_explicit_financing_party(excerpt, role_phrase):
 
 def _sec_verified_gap_player(ticker, event_day):
     """Review issuer SEC filings in the six months before the event for named financing firms."""
-    from chart_app.keyword_compare import _keyword_sec_get, _keyword_ticker_map
-    cache_key = f"gap_sec_players_v4_{ticker}_{event_day}"
+    from chart_app.keyword_compare import _keyword_sec_get, _keyword_ticker_map, _keyword_ticker_matches
+    cache_key = f"gap_sec_players_v5_{ticker}_{event_day}"
     cached = cget(cache_key, 30 * 86400)
     if cached is not None:
         return cached
@@ -282,7 +282,7 @@ def _sec_verified_gap_player(ticker, event_day):
     try:
         ticker_map = _keyword_ticker_map()
         cik, company = next(((cik, info) for cik, info in ticker_map.items()
-                             if str(info.get('ticker') or '').upper() == ticker), (None, None))
+                             if _keyword_ticker_matches(info, ticker)), (None, None))
         if not cik or not company:
             cput(cache_key, result)
             return result
@@ -435,15 +435,24 @@ def _gap_deepdive_yahoo_news(ticker):
 
 def _gap_deepdive_sec_filings(ticker):
     """Return SEC submissions with accepted times so chart markers land on the right candle."""
-    from chart_app.keyword_compare import _keyword_sec_get, _keyword_ticker_map
-    cache_key = f"gap_deepdive_sec_filings_v2_{ticker}"
+    from chart_app.keyword_compare import _keyword_sec_get, _keyword_ticker_map, _keyword_ticker_matches
+    # Bump this when ticker-map refresh behavior changes so a previously cached
+    # empty result for a newly listed/renamed issuer does not hide its filings.
+    cache_key = f"gap_deepdive_sec_filings_v4_{ticker}"
     cached = cget(cache_key, 3600)
     if cached is not None:
         return cached
-    cik, company = next(((cik, info) for cik, info in _keyword_ticker_map().items()
-                         if str(info.get("ticker") or "").upper() == ticker), (None, None))
+    ticker_map = _keyword_ticker_map()
+    issuer = next(((cik, info) for cik, info in ticker_map.items()
+                   if _keyword_ticker_matches(info, ticker)), (None, None))
+    # The one-day SEC ticker-map cache may predate an issuer's listing or ticker
+    # change. Refresh once on a miss before treating it as having no filings.
+    if not issuer[0]:
+        ticker_map = _keyword_ticker_map(force_refresh=True)
+        issuer = next(((cik, info) for cik, info in ticker_map.items()
+                       if _keyword_ticker_matches(info, ticker)), (None, None))
+    cik, company = issuer
     if not cik:
-        cput(cache_key, [])
         return []
     response = _keyword_sec_get(f"https://data.sec.gov/submissions/CIK{cik}.json", timeout=20)
     response.raise_for_status()
@@ -1397,7 +1406,9 @@ def sec_dilution_history():
         app.logger.info('SEC dilution review %s: %d filings, %d exhibits fetched/prepared in %.1fs',
                         ticker,len(candidates),len(exhibit_jobs),time.monotonic()-request_started)
         if not sources:
-            return jsonify({'error':'No readable SEC filings were found for this company.'}),404
+            if candidates:
+                return jsonify({'error':f'SEC returned {len(candidates)} relevant filing records for {ticker}, but their documents could not be read. Try again shortly or open the filing links from Live Filings.'}),502
+            return jsonify({'error':f'No relevant filings were found in the SEC submissions available for {ticker} as of {today}. This does not confirm that no dilution exists.'}),404
         market_inputs=market_inputs_future.result()
         market_snapshot={'market_date':None,'last_price':None,'shares_outstanding':None,
                          'shares_filed':None,'shares_as_of':None,'float_shares':None,
