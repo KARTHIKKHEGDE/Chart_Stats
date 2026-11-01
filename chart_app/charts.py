@@ -34,7 +34,7 @@ import requests
 from pathlib import Path
 from html.parser import HTMLParser
 from urllib.parse import quote, urljoin, urlparse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 
 GAP_DEEPDIVE_TICKERS = list(dict.fromkeys("VIOT PPBT FAMI BIAF GELS RDAC GYGY WETO CLGN RDHL WHLR QNRX LGPS VNRX PPCB CELU BRNX SXTC VRAX SKK BIVI TNON CDTG ZSTK YJ EJH SGLY ONFO CIGL YMT DKI HKIT HUIZ GAUZ CELZ CLRO YXT ZYBT HYFM FCUV FFAI EDBL CJMB AKAN INLF GVH DXST EHGO ZBAO YMAT GMM YRD DXF CDT APWC IHT ICCM CIIT BEEM CRE CAST AIDX BYAH DSY BQ CHNR CCTG CGTL AZI CHAI BATL DAIC ANYBAOS BOXL BYSI CHOW DOGZ FRGT FXHO HCTI INM ITOC IVF JZXN KUST KXIN LGHL LICN LNAI LRHC LXEH MBRX MIMI MLEC MTEN NAII NCRA NEXR NIXX NUWE NVVE NXTS ODYS OFAL OMH OPTX ORIS PAVS PCLA PCSA PN PWCM RGNT RLYB RMAX RMSG RUBI RYOJ SAFX SBFM SDOT SFHG SILO SKYQ SLGB SLND SOAR SOBR SSM STG TDIC TRNR TURB TWG UK UPC VEEE VIVK VIVS".split()))
 GAP_DEEPDIVE_JOBS = {}
@@ -46,6 +46,8 @@ _FILING_AI_LOCK = threading.Lock()
 _FILING_AI_KEY_POS = {"groq": 0, "gemini": 0}
 _SEC_DILUTION_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix='sec-dilution')
 _SEC_DILUTION_DATA_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix='sec-dilution-data')
+_GAP_DEEPDIVE_DAILY_LOCK = threading.Lock()
+_GAP_DEEPDIVE_DAILY_PENDING = {}
 
 
 class _SecFilingTextParser(HTMLParser):
@@ -1729,6 +1731,28 @@ def _aggregate_gap_context_bars(source, timeframe):
     return out
 
 
+def _gap_deepdive_daily_history(ticker, force=False):
+    """Read/write the full two-year daily candle cache used by deep-dive charts."""
+    with _GAP_DEEPDIVE_DAILY_LOCK:
+        pending=_GAP_DEEPDIVE_DAILY_PENDING.get(ticker)
+        owner=pending is None
+        if owner:
+            pending=Future();_GAP_DEEPDIVE_DAILY_PENDING[ticker]=pending
+    if owner:
+        try:
+            # load_daily writes the full range to one per-ticker JSON cache;
+            # share that cache instead of keeping a second copy for deep-dive.
+            history=load_daily(ticker,force=force) or []
+            pending.set_result(history)
+        except Exception as exc:
+            pending.set_exception(exc)
+            raise
+        finally:
+            with _GAP_DEEPDIVE_DAILY_LOCK:
+                _GAP_DEEPDIVE_DAILY_PENDING.pop(ticker,None)
+    return pending.result()
+
+
 @app.route("/api/chart-context")
 def chart_context():
     """Lazily load nearby daily or multi-session minute bars for a chart card."""
@@ -1743,13 +1767,19 @@ def chart_context():
     try: dt.date.fromisoformat(day)
     except ValueError: return jsonify({"error":"Invalid session date"}),400
     if tf not in ("1m","2m","3m","5m","15m","30m","1h","1d"): return jsonify({"error":"Invalid timeframe"}),400
-    count=max(1,min(400,count))
-    context_key=f'gap_chart_context_v2_{ticker}_{day}_{tf}_{count}_{int(include_after_hours)}'
-    context_ttl=30 if day==dt.date.today().isoformat() else 3600
+    count=max(1,min(550 if tf=='1d' else 400,count))
+    context_key=f'gap_chart_context_v3_{ticker}_{day}_{tf}_{count}_{int(include_after_hours)}'
+    context_ttl=(30 if day==dt.date.today().isoformat() else
+                 30*86400 if tf=='1d' else 3600)
     cached_context=cget(context_key,context_ttl)
     if cached_context is not None: return jsonify(cached_context)
     try:
-        daily=load_daily(ticker); idx=next((i for i,r in enumerate(daily) if r["date"]==day),None)
+        daily=_gap_deepdive_daily_history(ticker); idx=next((i for i,r in enumerate(daily) if r["date"]==day),None)
+        if idx is None:
+            # Recover from a stale/partial cached daily range before returning
+            # an empty chart for an otherwise valid historical session.
+            daily=_gap_deepdive_daily_history(ticker,force=True)
+            idx=next((i for i,r in enumerate(daily) if r["date"]==day),None)
         live=None
         if day==dt.date.today().isoformat():
             try:

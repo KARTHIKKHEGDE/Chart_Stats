@@ -169,7 +169,7 @@ _init_key_pool()   # bootstrap pool at module load (env already loaded above)
 SEC_UA = os.getenv("SEC_USER_AGENT", "GapFadeAnalyzer admin@example.com")
 GAP_MIN = float(os.getenv("GAP_MIN", "0.30"))
 LOOKBACK_DAYS = 365
-HISTORY_DAYS = 725            # extra daily history so SMA50 / 52w-high exist for the oldest event
+HISTORY_DAYS = 740            # retain a full two years of daily candles plus split/calendar buffer
 MAX_EVENTS = int(os.getenv("MAX_EVENTS", "20"))
 SIM_K = int(os.getenv("SIM_K", "20"))
 MIN_PRICE = float(os.getenv("MIN_PRICE", "0.5"))

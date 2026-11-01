@@ -1894,10 +1894,10 @@ function selectGapDeepDiveSessionCount(days){
 async function loadGapDeepDiveAdjacent(cv,baseChart,side){
   const state=cv._gapDeepDiveState;if(!state||state.loading)return;
   const dates=state.dates||[],anchor=dates.length?dates[side>0?dates.length-1:0]:baseChart.date;
-  state.days=Math.min(400,(Number(state.days)||200)+20);state.daysSelected=true;state.loading=true;const requestId=(state.contextRequestId||0)+1;state.contextRequestId=requestId;
-  if(cv.id==='gap_chart_modal_canvas')selectGapDeepDiveSessionCount(state.days);
   const item=gapDeepDiveCurrent?.item||{ticker:baseChart.ticker};
   const timeframe=cv.id==='gap_chart_modal_canvas'?$('#gap_chart_tf').value:$('#gap_deepdive_tf').value||'2m';
+  const maxSessions=timeframe==='1d'?550:400;state.days=Math.min(maxSessions,(Number(state.days)||(timeframe==='1d'?200:5))+20);state.daysSelected=true;state.loading=true;const requestId=(state.contextRequestId||0)+1;state.contextRequestId=requestId;
+  if(cv.id==='gap_chart_modal_canvas')selectGapDeepDiveSessionCount(state.days);
   const query=new URLSearchParams({ticker:item.ticker,date:anchor,days:String(state.days),tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1'});
   try{
     const response=await fetch('/api/chart-context?'+query.toString()),data=await gapDeepDiveJson(response);

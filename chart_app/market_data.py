@@ -57,7 +57,7 @@ def med(xs):
 
 
 def load_daily(t, force=False):
-    key = f"{t}_daily2"
+    key = f"{t}_daily3"
     d = None if force else cget(key, 6 * 3600)
     if d is not None and any("vw" not in row for row in d):
         d = None
