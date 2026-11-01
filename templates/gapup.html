@@ -873,29 +873,32 @@ async function requestDilutionHistory(ticker,asOfDate=''){
       try{
         const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
         const raw=await response.text();let data;
-        try{data=JSON.parse(raw);}catch{const error=new Error(`${phase} returned a non-JSON response (HTTP ${response.status}).`);error.status=response.status;error.retryable=response.status>=500;throw error;}
-        if(!response.ok){const error=new Error(data.error||`${phase} failed (HTTP ${response.status}).`);error.status=response.status;error.retryable=response.status>=500;throw error;}
+        try{data=JSON.parse(raw);}catch{const error=new Error(`${phase} returned a non-JSON response (HTTP ${response.status}).`);error.status=response.status;error.retryable=response.status===429||response.status>=500;error.retryAfterMs=parseRetryAfter(response.headers.get('Retry-After'));throw error;}
+        if(!response.ok){const error=new Error(data.error||`${phase} failed (HTTP ${response.status}).`);error.status=response.status;error.retryable=response.status===429||response.status>=500;error.retryAfterMs=parseRetryAfter(response.headers.get('Retry-After'));throw error;}
         return data;
       }catch(error){
         if(attempt>=retries||(!error.retryable&&error.name!=='TypeError'))throw error;
-        await new Promise(resolve=>setTimeout(resolve,700*(attempt+1)));
+        await new Promise(resolve=>setTimeout(resolve,error.retryAfterMs||700*(attempt+1)));
       }
     }
   };
+  const parseRetryAfter=value=>{if(!value)return 0;const seconds=Number(value);if(Number.isFinite(seconds))return Math.max(1000,Math.min(30000,seconds*1000));const at=Date.parse(value);return Number.isFinite(at)?Math.max(1000,Math.min(30000,at-Date.now())):0;};
   try{
     const payload={user:currentUser||'',token:sessionToken||'',ticker,as_of:asOfDate||'',request_id:crypto.randomUUID().replace(/-/g,'')};
     const started=await apiRequest('/api/sec-dilution-history/start',payload,'Starting dilution analysis',2);
     const beganAt=Date.now();
     let consecutivePollErrors=0;
     while(Date.now()-beganAt<10*60*1000){
-      await new Promise(resolve=>setTimeout(resolve,1800));
+      await new Promise(resolve=>setTimeout(resolve,3000));
       let job;
-      try{job=await apiRequest('/api/sec-dilution-history/status',{...payload,job_id:started.job_id},'Checking dilution analysis',2);consecutivePollErrors=0;}
+      try{job=await apiRequest('/api/sec-dilution-history/status',{...payload,job_id:started.job_id},'Checking dilution analysis',0);consecutivePollErrors=0;}
       catch(error){
         if(!error.retryable&&error.name!=='TypeError')throw error;
         consecutivePollErrors++;
-        if(consecutivePollErrors>=8)throw new Error(`The server is still unavailable while checking the analysis (last response: HTTP ${error.status||'network error'}). Please retry; your request may still be running.`);
-        status.textContent=`Temporary server connection issue; retrying status check (${consecutivePollErrors}/8)…`;
+        if(consecutivePollErrors>=25)throw new Error(`The server is still rate-limiting status checks (last response: HTTP ${error.status||'network error'}). The analysis may still be running; close this window and retry shortly.`);
+        const retryDelay=error.retryAfterMs||Math.min(15000,1000*2**Math.min(consecutivePollErrors-1,4));
+        status.textContent=`Temporary server rate limit or connection issue (HTTP ${error.status||'network'}); retrying in ${Math.ceil(retryDelay/1000)}s (${consecutivePollErrors}/25)…`;
+        await new Promise(resolve=>setTimeout(resolve,retryDelay));
         continue;
       }
       if(job.status==='complete'){renderDilutionHistory(job.result);return;}
