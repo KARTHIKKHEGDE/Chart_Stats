@@ -169,7 +169,9 @@ function bindGapDeepDiveRangeInput(cv){
   cv.addEventListener('wheel',e=>{
   if(!cv._fullFeatures||!cv._wheelZoomEnabled||!cv._rangeGeometry)return;
     const g=cv._rangeGeometry;if(e.offsetX<g.L||e.offsetX>g.L+g.plotW)return;
-    const ratio=(e.offsetX-g.L)/g.plotW,anchor=g.viewStart+ratio*g.viewSpan,zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,(cv._rangeZoom||1)*Math.exp(-Math.sign(e.deltaY)*.18))),nextSpan=Math.min(g.span,g.baseViewSpan/zoom);
+    const ratio=(e.offsetX-g.L)/g.plotW,anchor=g.viewStart+ratio*g.viewSpan,rawZoom=(cv._rangeZoom||1)*Math.exp(-Math.sign(e.deltaY)*.18),minZoom=g.baseViewSpan/g.span;
+    if(e.deltaY>0&&rawZoom<minZoom-1e-6&&cv._onZoomOutMore){const requestedSessions=Math.ceil(g.baseViewSpan/rawZoom)+1;Promise.resolve(cv._onZoomOutMore(requestedSessions)).then(added=>{if(added)cv._wheelZoomMore?.(ratio);}).catch(()=>{});e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();return;}
+    const zoom=Math.max(minZoom,Math.min(24,rawZoom)),nextSpan=Math.min(g.span,g.baseViewSpan/zoom);
     setGapDeepDiveZoomView(cv,g,zoom,anchor-ratio*nextSpan);
     e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();cv._gapDeepDiveRedraw?.();
   },{capture:true,passive:false});
@@ -211,7 +213,8 @@ function bindUnifiedChartFeatures(cv,ui,persist,redraw){
   ui.clearAvwap.onclick=()=>{cv._avwapAnchors=null;cv._avwapSelectMode=false;setGapDeepDiveMouseMode('zoom',cv,ui);ui.status.textContent='AVWAP cleared.';cv._featurePersist?.();cv._featureRedraw?.();};
   ui.deleteMeasure.onclick=()=>{cv._rangeMeasures=(cv._rangeMeasures||[]).filter(m=>m.id!==cv._selectedRangeId);cv._selectedRangeId=cv._rangeMeasures.at(-1)?.id||null;cv._featurePersist?.();cv._featureRedraw?.();};
   ui.clearMeasures.onclick=()=>{cv._rangeMeasures=[];cv._selectedRangeId=null;cv._featurePersist?.();cv._featureRedraw?.();};
-  const zoomBy=factor=>{const g=cv._rangeGeometry;if(!g)return;const zoom=Math.max(g.baseViewSpan/g.span,Math.min(24,(cv._rangeZoom||1)*factor)),anchor=g.viewStart+g.viewSpan/2,nextSpan=Math.min(g.span,g.baseViewSpan/zoom);setGapDeepDiveZoomView(cv,g,zoom,anchor-nextSpan/2);cv._gapDeepDiveRedraw?.();};ui.zoomIn.onclick=()=>zoomBy(1.25);ui.zoomOut.onclick=()=>zoomBy(.8);
+  const zoomBy=factor=>{const g=cv._rangeGeometry;if(!g)return;const rawZoom=(cv._rangeZoom||1)*factor,minZoom=g.baseViewSpan/g.span;if(factor<1&&rawZoom<minZoom-1e-6&&cv._onZoomOutMore){const requestedSessions=Math.ceil(g.baseViewSpan/rawZoom)+1;Promise.resolve(cv._onZoomOutMore(requestedSessions)).then(added=>{if(added)zoomBy(factor);}).catch(()=>{});return;}const zoom=Math.max(minZoom,Math.min(24,rawZoom)),anchor=g.viewStart+g.viewSpan/2,nextSpan=Math.min(g.span,g.baseViewSpan/zoom);setGapDeepDiveZoomView(cv,g,zoom,anchor-nextSpan/2);cv._gapDeepDiveRedraw?.();};ui.zoomIn.onclick=()=>zoomBy(1.25);ui.zoomOut.onclick=()=>zoomBy(.8);
+  cv._wheelZoomMore=ratio=>{const geometry=cv._rangeGeometry;if(!geometry)return;const rawZoom=(cv._rangeZoom||1)*Math.exp(.18),minZoom=geometry.baseViewSpan/geometry.span;if(rawZoom<minZoom-1e-6&&cv._onZoomOutMore){const requestedSessions=Math.ceil(geometry.baseViewSpan/rawZoom)+1;Promise.resolve(cv._onZoomOutMore(requestedSessions)).then(added=>{if(added)cv._wheelZoomMore(ratio);}).catch(()=>{});return;}const anchor=geometry.viewStart+ratio*geometry.viewSpan,zoom=Math.max(minZoom,Math.min(24,rawZoom)),nextSpan=Math.min(geometry.span,geometry.baseViewSpan/zoom);setGapDeepDiveZoomView(cv,geometry,zoom,anchor-ratio*nextSpan);cv._gapDeepDiveRedraw?.();};
   ui.reset.onclick=()=>{cv._rangeZoom=1;cv._zoom=1;cv._panOffset=0;cv._yZoom=1;cv._featurePersist?.();cv._featureRedraw?.();};
   ui.copy.onclick=async()=>{try{await copyChartWithOverlays(cv,ui.overlay,ui.measureBox);ui.copy.textContent='Copied ✓';setTimeout(()=>ui.copy.textContent='Copy PNG',1200);}catch(error){ui.status.textContent='PNG copy unavailable: '+error.message;}};
   [ui.vwap,ui.twap].forEach((toggle,index)=>toggle.onchange=()=>{if(index===0)cv._showVWAP=toggle.checked;else cv._showTWAP=toggle.checked;cv._featurePersist?.();cv._featureRedraw?.();});
