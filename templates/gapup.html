@@ -23,10 +23,10 @@ select{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;f
 .three .panel{margin-top:0}
 .recent-layout{grid-template-columns:minmax(0,2fr) minmax(250px,1fr)}
 .recent-filings-panel{grid-column:span 2;background:#0b0f12;border:1px solid #263039;border-radius:10px;padding:14px 16px}
-.recent-filings-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;color:#8da6bd;font-size:12px;letter-spacing:.08em}
+.recent-filings-heading{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:12px;color:#aebdcc;font-size:13px;letter-spacing:.06em}
 .recent-filings-heading a,.recent-filing-open{color:#00e88b;text-decoration:none;font-size:11px;white-space:nowrap}
 .recent-filings-date{display:flex;align-items:center;gap:6px;color:#8da6bd;font:11px Consolas,monospace;letter-spacing:0}.recent-filings-date input{width:132px;height:27px;padding:2px 5px;background:#0d1115;border:1px solid #303a42;border-radius:3px;color:#dce5ec;font:11px Consolas,monospace}
-.recent-filings-list{max-height:420px;overflow:auto}
+.recent-filings-list{max-height:520px;overflow:auto;padding-right:5px}
 .recent-filing-row{padding:9px 0;border-bottom:1px solid #20272c}.recent-filing-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.recent-filing-foot{display:flex;align-items:center;gap:12px;justify-content:space-between;padding-top:5px;color:#e8edf3;font-size:12px}.recent-filing-explain{height:auto;min-height:0;background:#101b20;border:1px solid #2e5960;border-radius:3px;color:#8de8e7;padding:3px 8px;font:11px Consolas,monospace;line-height:1.4;cursor:pointer}.recent-filing-explain:hover{background:#173036}.recent-filing-title{height:auto;min-height:0;background:transparent;border:0;color:#e8edf3;padding:0;font:inherit;text-align:left;cursor:pointer}.recent-filing-title:hover{color:#76d9ff;text-decoration:underline}
 .filingExplainOverlay{position:fixed;inset:0;z-index:100200;display:none;align-items:center;justify-content:center;padding:18px;background:rgba(0,0,0,.86)}.filingExplainDialog{width:min(760px,96vw);max-height:90vh;overflow:auto;background:#0a0d10;border:1px solid #35424c;border-radius:8px;padding:18px;color:#e8edf3;box-shadow:0 16px 60px #000}.filingExplainHeader{display:flex;align-items:flex-start;gap:12px;border-bottom:1px solid #263039;padding-bottom:12px}.filingExplainHeader h2{flex:1;margin:0;color:#e8edf3;font-size:17px;letter-spacing:0;text-transform:none;border:0;padding:0;overflow-wrap:anywhere}.filingExplainClose{background:#15191d;border:1px solid #39434c;color:#dce5ec;border-radius:4px;padding:4px 10px;cursor:pointer}.filingExplainSection{margin-top:16px}.filingExplainSection h3{font-size:12px;color:#67c6ff;letter-spacing:.08em;text-transform:uppercase;margin:0 0 6px}.filingExplainSection p,.filingExplainSection li{font:13px/1.6 Consolas,monospace;color:#dce5ec}.filingExplainSection ul{padding-left:20px;margin:6px 0}.filingExplainMeta{font-size:11px;color:#91a0ad;margin-top:5px}.filingExplainLinks{display:grid;gap:7px}.filingExplainRelatedRow{display:flex;align-items:center;gap:8px}.filingExplainLink{flex:1;display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px;text-align:left;background:#101519;border:1px solid #29343d;border-radius:4px;color:#91d5ff;cursor:pointer;font:12px Consolas,monospace}.filingExplainLink:hover{border-color:#5085a1;background:#151f26}.filingExplainStatus{white-space:pre-wrap;color:#bdc9d2;font:13px/1.55 Consolas,monospace;min-height:22px}
 .recent-filing-row{padding:9px 0;border-bottom:1px solid #20272d;font:13px/1.35 Arial,sans-serif}
@@ -37,6 +37,36 @@ select{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;f
 .recent-filing-company{color:#91a9c0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
 .recent-filing-foot{display:flex;justify-content:space-between;gap:12px;margin-top:4px;color:#e5ebf0}
 .recent-filing-age{color:#8da6bd;font:11px Consolas,monospace;white-space:nowrap}
+.filingExplainRelation{color:#c8d1d9;font:13px/1.4 Arial,sans-serif;flex-basis:100%;padding-left:2px}
+.recent-filings-panel{padding:18px 20px}
+.recent-filing-row{position:relative;padding:14px 12px;border:1px solid transparent;border-bottom-color:#26313a;border-radius:5px;font:15px/1.5 Arial,sans-serif;cursor:pointer;transition:background .12s,border-color .12s}
+.recent-filing-row:hover,.recent-filing-row:focus{outline:none;background:#111a20;border-color:#315064}
+.recent-filing-row:focus-visible{box-shadow:0 0 0 2px #29a8ff}
+.recent-filing-head{gap:10px;min-height:28px}
+.recent-filing-ticker{font-size:13px}
+.recent-filing-form{font-size:11px;padding:3px 7px}
+.recent-filing-company{font-size:14px}
+.recent-filing-foot{align-items:center;margin-top:7px;font-size:15px}
+.recent-filing-title{font:600 15px/1.4 Arial,sans-serif}
+.recent-filing-age{font-size:12px}
+.recent-filing-explain{padding:6px 10px;font:12px Consolas,monospace}
+.recent-filing-dilution{display:inline-flex;align-items:center;border:1px solid #bd552c;border-radius:4px;background:#42190f;color:#ffb27c;padding:3px 8px;font:700 10px Consolas,monospace;letter-spacing:.07em;text-transform:uppercase}
+.recent-filing-row.is-dilution{border-left:3px solid #ff762e;background:linear-gradient(90deg,rgba(111,43,14,.2),rgba(11,15,18,0) 55%)}
+.recent-filing-row.is-dilution:hover,.recent-filing-row.is-dilution:focus{background:linear-gradient(90deg,rgba(130,52,16,.32),rgba(17,26,32,.95) 65%)}
+.recent-filings-dilution-btn{height:32px;padding:0 12px;border:1px solid #b96628;border-radius:4px;background:#351d10;color:#ffd1a8;font:700 12px Consolas,monospace;letter-spacing:.03em}
+.recent-filings-dilution-btn:hover{background:#542811;border-color:#ff8a3d}
+.filingExplainDialog{width:min(920px,96vw);padding:24px}
+.filingExplainHeader h2{font-size:20px}
+.filingExplainSection h3{font-size:13px}
+.filingExplainSection p,.filingExplainSection li{font-size:15px;line-height:1.7}
+.filingExplainMeta{font-size:12px}
+.dilutionHistoryCard{padding:14px 16px;border:1px solid #26343d;border-radius:6px;background:#0e1419;margin-top:12px}
+.dilutionHistoryHead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;color:#e7edf3;font-size:15px;font-weight:700}
+.dilutionHistoryDate{color:#90a9bc;font:12px Consolas,monospace;white-space:nowrap}
+.dilutionSourceList{display:grid;gap:8px;margin-top:12px}
+.dilutionSourceButton{width:100%;height:auto;min-height:42px;display:flex;align-items:center;gap:9px;padding:9px 11px;text-align:left;background:#101a21;border:1px solid #2a424f;border-radius:5px;color:#a9dcf4;font:13px/1.4 Arial,sans-serif}
+.dilutionSourceButton:hover{background:#15242d;border-color:#4b8098}
+@media(max-width:700px){.recent-filings-panel{padding:12px}.recent-filings-heading{align-items:flex-start}.recent-filing-head{align-items:flex-start}.recent-filing-foot{align-items:flex-start;flex-direction:column;gap:6px}.recent-filing-company{flex-basis:65%}.recent-filing-age{white-space:normal}.dilutionHistoryHead{flex-direction:column}}
 @media(max-width:900px){.three.recent-layout{grid-template-columns:1fr}.recent-filings-panel{grid-column:span 1}}
 .kv{display:grid;grid-template-columns:max-content 1fr;column-gap:34px;row-gap:2px}
 .kv span:nth-child(odd){white-space:pre}
@@ -756,7 +786,7 @@ function renderRecentFilingsFeed(target,items,error='',ticker=''){
   if(!target)return;
   if(error){target.innerHTML=`<div style="padding:18px 0;color:#ff7777;font:12px Consolas,monospace">${esc(error)}</div>`;return;}
   if(!items?.length){target.innerHTML=`<div style="padding:18px 0;color:#8da6bd;font:12px Consolas,monospace">No recent public filings found for ${esc(ticker||'public companies')}.</div>`;return;}
-  target.innerHTML=items.map(item=>`<div class="recent-filing-row"><div class="recent-filing-head">${item.ticker?`<strong class="recent-filing-ticker">${esc(item.ticker)}</strong>`:''}<span class="recent-filing-form">${esc(item.form)}</span><span class="recent-filing-company">${esc(item.company)}</span><button class="recent-filing-explain" type="button" data-accession="${esc(item.accession||'')}" data-ticker="${esc(item.ticker||ticker)}" data-title="${esc(item.description||item.title||item.form)}">Explain simply</button><a class="recent-filing-open" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open filing ↗</a></div><div class="recent-filing-foot"><button class="recent-filing-title recent-filing-explain" type="button" data-accession="${esc(item.accession||'')}" data-ticker="${esc(item.ticker||ticker)}" data-title="${esc(item.description||item.title||item.form)}">${esc(item.description||item.title||item.form)}</button><time class="recent-filing-age" datetime="${esc(item.filed_at||'')}">${esc(formatDateMDY(item.filed_at))} · ${esc(recentFilingAge(item.filed_at))}</time></div></div>`).join('');
+  target.innerHTML=items.map(item=>{const title=item.description||item.title||item.form;return `<div class="recent-filing-row${item.is_dilution?' is-dilution':''}" role="group" tabindex="0" aria-label="Explain ${esc(title)} in simple language" data-row-explain data-accession="${esc(item.accession||'')}" data-ticker="${esc(item.ticker||ticker)}" data-title="${esc(title)}"><div class="recent-filing-head">${item.ticker?`<strong class="recent-filing-ticker">${esc(item.ticker)}</strong>`:''}<span class="recent-filing-form">${esc(item.form)}</span>${item.is_dilution?'<span class="recent-filing-dilution">Dilution related</span>':''}<span class="recent-filing-company">${esc(item.company)}</span><button class="recent-filing-explain" type="button" data-accession="${esc(item.accession||'')}" data-ticker="${esc(item.ticker||ticker)}" data-title="${esc(title)}">Explain simply</button><a class="recent-filing-open" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open filing ↗</a></div><div class="recent-filing-foot"><span class="recent-filing-title">${esc(title)}</span><time class="recent-filing-age" datetime="${esc(item.filed_at||'')}">${esc(formatDateMDY(item.filed_at))} · ${esc(recentFilingAge(item.filed_at))}</time></div></div>`;}).join('');
 }
 function closeFilingExplanation(){const modal=$('#filing_explanation_modal');if(modal)modal.style.display='none';}
 function renderFilingExplanation(data){
@@ -769,7 +799,21 @@ function renderFilingExplanation(data){
     ${e.why_it_matters?`<section class="filingExplainSection"><h3>Why it matters</h3><p>${esc(e.why_it_matters)}</p></section>`:''}
     ${e.caveats?`<section class="filingExplainSection"><h3>What is unclear</h3><p>${esc(e.caveats)}</p></section>`:''}
     <section class="filingExplainSection"><a class="recent-filing-open" href="${esc(data.url||'#')}" target="_blank" rel="noopener noreferrer">Open the original SEC filing ↗</a></section>
-    ${data.related_filings?.length?`<section class="filingExplainSection"><h3>SEC filings linked in this document</h3><div class="filingExplainLinks">${data.related_filings.map(item=>`<div class="filingExplainRelatedRow"><button class="filingExplainLink" type="button" data-related-url="${esc(item.explain_url||item.url)}" data-related-title="${esc(item.title)}" data-related-ticker="${esc(item.ticker||'')}">${item.ticker?`<strong>${esc(item.ticker)}</strong>`:''}${item.form?`<small>${esc(item.form)}</small>`:''}<span>${esc(item.title)}</span>${item.company?`<small>${esc(item.company)}</small>`:''}</button><a class="recent-filing-open" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open ↗</a></div>`).join('')}</div></section>`:''}`;
+    ${data.related_filings?.length?`<section class="filingExplainSection"><h3>SEC filings linked in this document</h3><div class="filingExplainLinks">${data.related_filings.map(item=>`<div class="filingExplainRelatedRow"><button class="filingExplainLink" type="button" data-related-url="${esc(item.explain_url||item.url)}" data-related-title="${esc(item.title)}" data-related-ticker="${esc(item.ticker||'')}">${item.ticker?`<strong>${esc(item.ticker)}</strong>`:''}${item.form?`<small>${esc(item.form)}</small>`:''}<span>${esc(item.title)}</span>${item.relation?`<span class="filingExplainRelation">(${esc(item.relation)})</span>`:''}${item.company?`<small>${esc(item.company)}</small>`:''}</button><a class="recent-filing-open" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open ↗</a></div>`).join('')}</div></section>`:''}`;
+  status.textContent='';content.hidden=false;
+}
+function renderDilutionHistory(data){
+  const status=$('#filing_explanation_status'),content=$('#filing_explanation_content'),title=$('#filing_explanation_title');
+  title.textContent=`${data.ticker||''} · Dilution history`;
+  const sourceById=Object.fromEntries((data.filings||[]).map(item=>[item.id,item]));
+  const sources=ids=>(ids||[]).map(id=>sourceById[id]).filter(Boolean);
+  const sourceButtons=items=>items.length?`<div class="dilutionSourceList">${items.map(item=>`<button class="dilutionSourceButton" type="button" data-dilution-filing="1" data-accession="${esc(item.accession||'')}" data-ticker="${esc(item.ticker||data.ticker)}" data-title="${esc(item.title)}"><span class="recent-filing-form">${esc(item.form||'SEC')}</span><span>${esc(item.title)}</span><span class="dilutionHistoryDate">${esc(formatDateMDY(item.filing_date))}</span></button>`).join('')}</div>`:'';
+  content.innerHTML=`<div class="filingExplainMeta">As of ${esc(formatDateMDY(data.as_of))} · ${esc(data.filings?.length||0)} SEC filing${data.filings?.length===1?'':'s'} reviewed · AI: ${esc(data.provider||'')}</div>
+    <section class="filingExplainSection"><h3>Dilution overview</h3><p>${esc(data.summary||'No summary was returned.')}</p></section>
+    <section class="filingExplainSection"><h3>Current status</h3><p>${esc(data.current_status||'Unclear from the filings reviewed.')}</p><p><strong>Open dilution capacity:</strong> ${esc(data.open_capacity||'Unclear')}</p></section>
+    ${data.history?.length?`<section class="filingExplainSection"><h3>Financing and dilution history</h3>${data.history.map(event=>`<article class="dilutionHistoryCard"><div class="dilutionHistoryHead"><span>${esc(event.event||'Filing event')}</span><time class="dilutionHistoryDate">${esc(formatDateMDY(event.date))}</time></div>${event.impact?`<p>${esc(event.impact)}</p>`:''}${sourceButtons(sources(event.source_ids))}</article>`).join('')}</section>`:''}
+    ${data.caveats?`<section class="filingExplainSection"><h3>What remains uncertain</h3><p>${esc(data.caveats)}</p></section>`:''}
+    <section class="filingExplainSection"><h3>SEC filings reviewed · click any to read its explanation</h3>${sourceButtons(data.filings||[])}</section>`;
   status.textContent='';content.hidden=false;
 }
 async function requestFilingExplanation({ticker='',accession='',url='',title=''}){
@@ -779,12 +823,26 @@ async function requestFilingExplanation({ticker='',accession='',url='',title=''}
   catch(error){status.textContent=error.message;content.hidden=true;}
 }
 document.addEventListener('click',event=>{
+  const dilution=event.target.closest('#recent_filings_dilution');
+  if(dilution){event.preventDefault();requestDilutionHistory(dilution.dataset.ticker);return;}
+  const dilutionFiling=event.target.closest('[data-dilution-filing]');
+  if(dilutionFiling){event.preventDefault();event.stopPropagation();requestFilingExplanation({ticker:dilutionFiling.dataset.ticker,accession:dilutionFiling.dataset.accession,title:dilutionFiling.dataset.title});return;}
   const explain=event.target.closest('.recent-filing-explain');
   if(explain){event.preventDefault();event.stopPropagation();requestFilingExplanation({ticker:explain.dataset.ticker,accession:explain.dataset.accession,title:explain.dataset.title});return;}
+  const row=event.target.closest('[data-row-explain]');
+  if(row&&!event.target.closest('a,button')){event.preventDefault();requestFilingExplanation({ticker:row.dataset.ticker,accession:row.dataset.accession,title:row.dataset.title});return;}
   const related=event.target.closest('.filingExplainLink');
   if(related){event.preventDefault();requestFilingExplanation({ticker:related.dataset.relatedTicker,url:related.dataset.relatedUrl,title:related.dataset.relatedTitle});return;}
   if(event.target.id==='filing_explanation_modal')closeFilingExplanation();
 });
+document.addEventListener('keydown',event=>{const row=event.target.closest?.('[data-row-explain]');if(row&&(event.key==='Enter'||event.key===' ')){event.preventDefault();requestFilingExplanation({ticker:row.dataset.ticker,accession:row.dataset.accession,title:row.dataset.title});}});
+async function requestDilutionHistory(ticker){
+  const modal=$('#filing_explanation_modal'),status=$('#filing_explanation_status'),content=$('#filing_explanation_content');
+  modal.style.display='flex';content.hidden=true;content.innerHTML='';$('#filing_explanation_title').textContent=`${ticker} · Dilution history`;
+  status.textContent='Reviewing SEC offering, shelf, warrant, and financing filings to summarize the dilution picture as of today…';
+  try{const response=await fetch('/api/sec-dilution-history',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:currentUser||'',token:sessionToken||'',ticker})}),data=await response.json();if(!response.ok)throw new Error(data.error||'Could not analyze dilution history.');renderDilutionHistory(data);}
+  catch(error){status.textContent=error.message;content.hidden=true;}
+}
 async function loadRecentFilingsFeed(target,ticker='',asof=''){
   if(!target)return;
   if(!ticker&&recentFilingsCache.items&&Date.now()-recentFilingsCache.savedAt<120000){renderRecentFilingsFeed(target,recentFilingsCache.items);return;}
@@ -1120,7 +1178,7 @@ function renderTab(tab, r, isRefresh){
      `<div class="foot" id="path_norm_foot"><span class="b" data-tip="Historical median across VWAP-state-matched gap-up setups.">━ history median<\/span> &nbsp; <span style="color:#6c8" data-tip="Middle 50% range of similar setups.">▒ p25–p75<\/span> &nbsp; <span class="y">━ today<\/span> &nbsp; <span class="y">┅ expected path<\/span> &nbsp; <span class="d">━ each similar setup<\/span> &nbsp; Default Y = price / cumulative VWAP − 1; expected price = projected VWAP × (1 + deviation).<\/div><\/div>`;
 
   if(r.pd.rows.length) o += `<div class="panel"><div class="ttl">${esc(T.pd)}</div>${table(r.pd.cols,r.pd.rows,null,false)}<div class="foot">${esc(r.pd.foot||'')}</div></div>`;
-  o += `<div class="panel recent-filings-panel"><div class="recent-filings-heading"><span><span style="color:#25cf91">●</span> LIVE FILINGS · ${esc(h.ticker)}</span><span style="display:flex;align-items:center;gap:14px"><label class="recent-filings-date">Through date <input type="date" id="recent_filings_asof" aria-label="Show filings through date" title="Show filings filed on or before this date"></label><a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent" target="_blank" rel="noopener noreferrer">Full feed ↗</a></span></div><div class="recent-filings-list" id="recent_filings_feed"></div></div>`;
+  o += `<div class="panel recent-filings-panel"><div class="recent-filings-heading"><span><span style="color:#25cf91">●</span> LIVE FILINGS · ${esc(h.ticker)}</span><span style="display:flex;align-items:center;flex-wrap:wrap;gap:12px"><button class="recent-filings-dilution-btn" type="button" id="recent_filings_dilution" data-ticker="${esc(h.ticker)}" title="Read this company's SEC financing filings and summarize dilution through today">Dilution history</button><label class="recent-filings-date">Through date <input type="date" id="recent_filings_asof" aria-label="Show filings through date" title="Show filings filed on or before this date"></label><a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent" target="_blank" rel="noopener noreferrer">Full feed ↗</a></span></div><div class="recent-filings-list" id="recent_filings_feed"></div></div>`;
 
   tab.container.innerHTML = o;
   if(surgeDays) renderPremarketSpikeDays(tab,r,surgeDays);
