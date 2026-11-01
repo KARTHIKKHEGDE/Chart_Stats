@@ -717,13 +717,17 @@ def index():
 @app.route("/gap-deepdive")
 def gap_deepdive_page():
     """Open the historical gap-up deep dive as a standalone app page."""
-    return Response(HTML, mimetype="text/html")
+    page = HTML.replace("<title>Gap-Up Fade Analyzer</title>",
+                        "<title>Gap Up Deepdive · Historical Scanner</title>", 1)
+    page = page.replace("/favicon.svg?app=gapup", "/favicon.svg?app=deepdive", 1)
+    return Response(page, mimetype="text/html")
 
 
 @app.route("/favicon.svg")
 def favicon():
     icons = {
         "gapup": '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#0a1119"/><path d="M12 50h40" stroke="#52677b" stroke-width="3"/><rect x="16" y="34" width="8" height="16" rx="2" fill="#29a8ff"/><rect x="29" y="25" width="8" height="25" rx="2" fill="#29a8ff"/><rect x="42" y="16" width="8" height="34" rx="2" fill="#3ddc84"/><path d="m13 28 13-9 9 3 16-12m-9 0h9v9" fill="none" stroke="#e8f5ff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>''',
+        "deepdive": '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#141006"/><path d="M9 49h32" stroke="#6b5b22" stroke-width="3"/><path d="m12 42 8-12 7 7 8-18" fill="none" stroke="#ffd23f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="41" cy="39" r="12" fill="#10151b" stroke="#60d8ff" stroke-width="4"/><path d="m50 48 7 7" stroke="#60d8ff" stroke-width="5" stroke-linecap="round"/><path d="M36 39h10m-5-5v10" stroke="#e9f7ff" stroke-width="2.5" stroke-linecap="round"/></svg>''',
         "runner": '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#0a1119"/><circle cx="41" cy="13" r="6" fill="#ffd166"/><path d="m34 23 10 7-7 9-9-5-8 10m17-14 10 4 7 10M30 35l-2 11-9 8m18-15 4 12 9 3" fill="none" stroke="#47d890" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 55h44" stroke="#52677b" stroke-width="3" stroke-linecap="round"/></svg>''',
         "keyword": '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#0a1119"/><path d="M13 12h25l9 9v17H13z" fill="#172638" stroke="#60baff" stroke-width="3" stroke-linejoin="round"/><path d="M37 12v10h10M19 28h13m-13 6h9" stroke="#60baff" stroke-width="3" stroke-linecap="round"/><circle cx="39" cy="41" r="10" fill="#0a1119" stroke="#c4a7ff" stroke-width="4"/><path d="m46 48 8 8" stroke="#c4a7ff" stroke-width="5" stroke-linecap="round"/></svg>'''
     }
