@@ -361,7 +361,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
         <label>Interval<select id="cm_tf" title="Chart timeframe">
           <option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option>
         </select>
-        <label>Sessions<select id="cm_days" title="Sessions shown"><option value="1" selected>1</option><option value="3">3</option><option value="5">5</option><option value="10">10</option><option value="20">20</option><option value="75">75</option><option value="80">80</option></select></label>
+        <label>Sessions<select id="cm_days" title="Sessions shown"><option value="1" selected>1</option><option value="3">3</option><option value="5">5</option><option value="10">10</option><option value="20">20</option><option value="75">75</option><option value="80">80</option><option value="200">200</option></select></label>
         <select id="cm_sig" hidden><option value="none" selected>No signals</option><option value="all">All entry models</option></select>
         <label style="color:#d7ff6e"><input type="checkbox" id="cm_bz" checked> Bone Zone (9/21 EMA)</label>
         <label><input type="checkbox" id="cm_vwap" checked> VWAP</label><label style="color:#c084fc"><input type="checkbox" id="cm_twap"> TWAP</label>
@@ -926,7 +926,7 @@ async function run(refresh){
 }
 
 function premarketSpikeChartCard(index){
-  return `<div class="evc" data-ev-slot="${index}" onclick="openChartModal(${index})"><div class="evhead"><div class="evt" id="evtitle${index}"></div><span class="eventDateTag" data-event-date></span><div class="evcontrols"><select class="evtf" title="Timeframe"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select><select class="evdays" title="Sessions shown"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="75">75 days</option><option value="80">80 days</option></select><button class="evzoom" data-zoom="out" title="Zoom out">−</button><button class="evzoom" data-zoom="in" title="Zoom in">+</button><button class="evmeasure" type="button" title="Drag across bars to measure volume, dollar volume, and float rotation">Measure</button><button class="evtoday" type="button" title="Return to today's live chart">Today</button></div></div><canvas id="ev${index}"></canvas></div>`;
+  return `<div class="evc" data-ev-slot="${index}" onclick="openChartModal(${index})"><div class="evhead"><div class="evt" id="evtitle${index}"></div><span class="eventDateTag" data-event-date></span><div class="evcontrols"><select class="evtf" title="Timeframe"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select><select class="evdays" title="Sessions shown"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="75">75 days</option><option value="80">80 days</option><option value="200">200 days</option></select><button class="evzoom" data-zoom="out" title="Zoom out">−</button><button class="evzoom" data-zoom="in" title="Zoom in">+</button><button class="evmeasure" type="button" title="Drag across bars to measure volume, dollar volume, and float rotation">Measure</button><button class="evtoday" type="button" title="Return to today's live chart">Today</button></div></div><canvas id="ev${index}"></canvas></div>`;
 }
 
 function renderPremarketSpikeDays(tab,report,days){
@@ -1069,7 +1069,7 @@ function renderTab(tab, r, isRefresh){
   o += `<div class="panel" data-premarket-spikes><div class="ttl">Premarket Spike Days · PM high &gt; +40% · PM $ volume &gt; $10M · last year</div>`+
     (surgeDays?`<div class="foot">Loading premarket spike days…</div>`:`<div class="foot" data-surge-status>Checking this history in the background…</div>`)+`</div>`;
   o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">`+
-     `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:7px">${esc(T.p6)}<label style="font-size:11px;color:#aaa">All charts <select id="ev_all_tf" class="evtf"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label><select id="ev_all_days" class="evtf" title="Days for all charts"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="75">75 days</option><option value="80">80 days</option></select><select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
+     `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:7px">${esc(T.p6)}<label style="font-size:11px;color:#aaa">All charts <select id="ev_all_tf" class="evtf"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label><select id="ev_all_days" class="evtf" title="Days for all charts"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="75">75 days</option><option value="80">80 days</option><option value="200">200 days</option></select><select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
      (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" checked style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/21 EMA cloud + BB)</label></div>`+
      `<span style="font-size:12px;color:#29a8ff;font-weight:normal">🔍 Click any chart to enlarge</span></div>`+
   `<div class="evgrid">`+tab.EV.map((_,i)=>premarketSpikeChartCard(i)).join('')+
@@ -1093,7 +1093,7 @@ function renderTab(tab, r, isRefresh){
   const bzCheck = tab.container.querySelector('#bz');
   const allTf=tab.container.querySelector('#ev_all_tf'),allDays=tab.container.querySelector('#ev_all_days');
   const applyAllChartSettings=()=>{tab.EV.forEach((_,i)=>{const card=tab.container.querySelector(`[data-ev-slot="${i}"]`);if(!card)return;card._chartTf=allTf.value;card._chartDays=Number(allDays.value)||1;card._panOffset=0;card._yZoom=1;const tf=card.querySelector('.evtf'),days=card.querySelector('.evdays');if(tf)tf.value=card._chartTf;if(days)days.value=String(card._chartDays);});drawEvAll(tab.EV,tab.container);};
-  if(allTf)allTf.onchange=()=>{allDays.value=allTf.value==='1d'?'75':'1';applyAllChartSettings();};
+  if(allTf)allTf.onchange=()=>{allDays.value=allTf.value==='1d'?'200':'1';applyAllChartSettings();};
   if(allDays)allDays.onchange=applyAllChartSettings;
   if(sigSelect) sigSelect.onchange = () => drawEvAll(tab.EV, tab.container);
   if(bzCheck) bzCheck.onchange = () => drawEvAll(tab.EV, tab.container);
@@ -1146,7 +1146,7 @@ function drawEvAll(evList, containerEl){
     const title=card.querySelector(`#evtitle${i}`), tf=card.querySelector('.evtf');
     if(title) title.innerHTML=esc(formatChartTitleDates(item.title))+(item.sim?'':'<span class="d"> (not in similar set)</span>');
     const eventDateTag=card.querySelector('[data-event-date]');if(eventDateTag){eventDateTag.textContent=`Event ${formatDateMDY(card._eventDate)||'date'}`;}
-    if(tf){tf.value=card._chartTf;tf.onclick=e=>e.stopPropagation();tf.onchange=e=>{e.stopPropagation();const previousTf=card._chartTf;card._chartTf=tf.value;card._panOffset=0;card._yZoom=1;if(tf.value==='1d')card._chartDays=75;else if(previousTf==='1d')card._chartDays=1;const daysSelect=card.querySelector('.evdays');if(daysSelect)daysSelect.value=String(card._chartDays);if(card._chartDays===1&&tf.value!=='1d')loadChartContext(card,tabForCharts);else if((tf.value==='1d')!==!!card._contextDaily||!card._contextChart)loadChartContext(card,tabForCharts);else drawEvAll(tabForCharts.EV,tabForCharts.container);};}
+    if(tf){tf.value=card._chartTf;tf.onclick=e=>e.stopPropagation();tf.onchange=e=>{e.stopPropagation();const previousTf=card._chartTf;card._chartTf=tf.value;card._panOffset=0;card._yZoom=1;card._contextEdgeDone={};if(tf.value==='1d')card._chartDays=200;else if(previousTf==='1d')card._chartDays=1;const daysSelect=card.querySelector('.evdays');if(daysSelect)daysSelect.value=String(card._chartDays);if(card._chartDays===1&&tf.value!=='1d')loadChartContext(card,tabForCharts);else if((tf.value==='1d')!==!!card._contextDaily||!card._contextChart||(tf.value==='1d'&&(card._contextDates||[]).length<card._chartDays))loadChartContext(card,tabForCharts);else drawEvAll(tabForCharts.EV,tabForCharts.container);};}
     const days=card.querySelector('.evdays');if(days){days.value=String(card._chartDays);days.onclick=e=>e.stopPropagation();days.onchange=e=>{e.stopPropagation();card._chartDays=Number(days.value);card._panOffset=0;loadChartContext(card,tabForCharts);};}
     card.querySelectorAll('.evzoom').forEach(btn=>btn.onclick=e=>{e.stopPropagation();card._zoom=Math.max(.5,Math.min(8,(card._zoom||1)*(btn.dataset.zoom==='in'?1.25:.8)));drawEvAll(list,cEl);});
     const measureBtn=card.querySelector('.evmeasure');if(measureBtn){measureBtn.onclick=e=>{e.stopPropagation();openChartModal(i);setTimeout(()=>{const modalCv=$('#cm_canvas');if(modalCv._featureUi){setGapDeepDiveMouseMode('measure',modalCv,modalCv._featureUi);modalCv._featureUi.status.textContent='Drag between any two points to measure.';}},45);};}
@@ -1158,6 +1158,7 @@ function drawEvAll(evList, containerEl){
       const eventPos=(tabForCharts.sessionDates||[]).indexOf(card._sessionDate||item.date);
       const edge=contextDates?dates[side>0?dates.length-1:0]:dates[eventPos+side];
       if(!edge)return;
+      if(card._chartTf==='1d'&&contextDates){if(card._contextEdgeDone?.[side])return;loadChartContext(card,tabForCharts,edge,true,side);return;}
       card._chartDays=[1,3,5,10,20,75,80].find(value=>value>card._chartDays)||80;
       const daysSelect=card.querySelector('.evdays');if(daysSelect)daysSelect.value=String(card._chartDays);
       card._panOffset=0;loadChartContext(card,tabForCharts,edge);
@@ -1171,14 +1172,20 @@ function drawEvAll(evList, containerEl){
     drawEv(cv,renderItem.chart,sel,bzChecked,undefined,card._chartTf,card._zoom||1);
   });
 }
-async function loadChartContext(card,tab,anchorDate){
+function mergeDailyChartBars(current,incoming){
+  const byDate=new Map(),fields=['o','h','l','c','v','vw'];
+  for(const bars of [current,incoming])if(bars?.d?.length)for(let i=0;i<bars.d.length;i++){const row={d:bars.d[i]};for(const key of fields)row[key]=bars[key]?.[i]??null;byDate.set(row.d,row);}
+  const rows=[...byDate.values()].sort((a,b)=>a.d.localeCompare(b.d));
+  return {t:rows.map((_,i)=>i),d:rows.map(row=>row.d),...Object.fromEntries(fields.map(key=>[key,rows.map(row=>row[key])]))};
+}
+async function loadChartContext(card,tab,anchorDate,extendDaily=false,extendSide=0){
   if(!card||!tab)return;
   const days=card._chartDays||1, tf=card._chartTf||'2m';
   if(days===1&&tf!=='1d'){card._contextChart=null;card._contextDates=[];card._contextDaily=false;card._contextError='';card._contextLoading=false;drawEvAll(tab.EV,tab.container);return;}
   card._contextLoading=true;card._contextError='';
   const requestId=(card._contextRequestId||0)+1;card._contextRequestId=requestId;
   const query=new URLSearchParams({ticker:tab.result?.head?.ticker||'',date:anchorDate||card._sessionDate,days:String(days),tf,user:currentUser||'',token:sessionToken||'',postmarket:'1'});
-  try{const response=await fetch('/api/chart-context?'+query.toString()),data=await response.json();if(requestId!==card._contextRequestId)return;if(!response.ok)throw new Error(data.error||'Could not load chart range');card._contextChart=data.bars;card._contextDates=data.dates;card._contextDaily=!!data.daily;if(anchorDate)card._sessionDate=anchorDate;}
+  try{const response=await fetch('/api/chart-context?'+query.toString()),data=await response.json();if(requestId!==card._contextRequestId)return;if(!response.ok)throw new Error(data.error||'Could not load chart range');if(extendDaily&&tf==='1d'&&card._contextDaily&&card._contextChart){const previousDates=card._contextDates||[],merged=mergeDailyChartBars(card._contextChart,data.bars),addedBefore=previousDates.length?merged.d.indexOf(previousDates[0]):0,addedAfter=previousDates.length?merged.d.length-merged.d.indexOf(previousDates[previousDates.length-1])-1:0;card._contextChart=merged;card._contextDates=merged.d;card._panOffset=(card._panOffset||0)-addedBefore;if(extendSide&&((extendSide<0&&!addedBefore)||(extendSide>0&&!addedAfter))){card._contextEdgeDone=card._contextEdgeDone||{};card._contextEdgeDone[extendSide]=true;}else card._contextEdgeDone={};}else{card._contextChart=data.bars;card._contextDates=data.dates;card._contextDaily=!!data.daily;card._contextEdgeDone={};}if(anchorDate)card._sessionDate=extendDaily?card._sessionDate:anchorDate;}
   catch(error){card._contextChart=null;card._contextError=error.message;}
   card._contextLoading=false;
   drawEvAll(tab.EV,tab.container);
@@ -1310,6 +1317,7 @@ $('#cm_tf').onchange = () => {
   if(!activeTab || !openTabs[activeTab]) return;
   const tab=openTabs[activeTab],allTf=tab.container.querySelector('#ev_all_tf');
   if(allTf){allTf.value=$('#cm_tf').value;allTf.dispatchEvent(new Event('change'));}
+  const card=tab.container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);if(card)$('#cm_days').value=String(card._chartDays||1);
   renderModalChart();
 };
 

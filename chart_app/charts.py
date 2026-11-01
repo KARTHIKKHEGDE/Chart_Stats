@@ -854,7 +854,7 @@ def chart_context():
     try: dt.date.fromisoformat(day)
     except ValueError: return jsonify({"error":"Invalid session date"}),400
     if tf not in ("1m","2m","3m","5m","15m","30m","1h","1d"): return jsonify({"error":"Invalid timeframe"}),400
-    count=max(1,min(80,count))
+    count=max(1,min(200 if tf=="1d" else 80,count))
     try:
         daily=load_daily(ticker); idx=next((i for i,r in enumerate(daily) if r["date"]==day),None)
         live=None
