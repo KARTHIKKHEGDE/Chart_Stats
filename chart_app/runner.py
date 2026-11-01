@@ -51,9 +51,6 @@ MIN_LEG_PCT = 0.60       # minimum % gain per structural leg (smaller wiggles ge
 S = requests.Session()
 
 
-_aggs_cache = {}
-
-
 def pg(path, params=None, tries=4):
     """Polygon REST request — routes through the 50-key pool from application.py
     when available, falls back to single-key for standalone runner_stats.py usage."""
@@ -126,16 +123,12 @@ def _alpaca_live_df(t):
 
 
 def aggs(tkr, mult, span, frm, to, adjusted="false"):
-    k = (tkr, mult, span, str(frm), str(to), str(adjusted))
-    if k in _aggs_cache:
-        return _aggs_cache[k]
     j = pg(f"/v2/aggs/ticker/{tkr}/range/{mult}/{span}/{frm}/{to}",
            {"adjusted": str(adjusted).lower(), "sort": "asc", "limit": 50000})
     res = (j or {}).get("results") or []
     for b in res:
         if "v" in b:
             b["v"] = round(float(b["v"]))
-    _aggs_cache[k] = res
     return res
 
 

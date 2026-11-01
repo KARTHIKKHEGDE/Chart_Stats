@@ -42,8 +42,6 @@ GAP_DEEPDIVE_TICKERS = list(dict.fromkeys("VIOT PPBT FAMI BIAF GELS RDAC GYGY WE
 GAP_DEEPDIVE_JOBS = {}
 GAP_DEEPDIVE_LOCK = threading.Lock()
 _GAP_DEEPDIVE_MANIFESTS = {}
-_GAP_DEEPDIVE_CHART_PAYLOADS = {}
-_GAP_DEEPDIVE_CHART_PAYLOAD_LOCK = threading.Lock()
 _FILING_AI_LOCK = threading.Lock()
 _FILING_AI_KEY_POS = {"groq": 0, "gemini": 0}
 _SEC_DILUTION_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix='sec-dilution')
@@ -739,18 +737,10 @@ def _gap_deepdive_chart_payload(ticker,day,scan_item):
     # Raw one-minute candles are cached by minute_df, but packing candles and
     # derived chart fields on every open still costs time. Persist this ready-
     # to-render payload as well so repeat chart visits are disk-cache hits.
-    from chart_app.application import cget, cput
-    import hashlib
     chart_key=f'{ticker.upper()}|{day}'
-    with _GAP_DEEPDIVE_CHART_PAYLOAD_LOCK:
-        cached_memory=_GAP_DEEPDIVE_CHART_PAYLOADS.get(chart_key)
-    if cached_memory is not None:
-        return cached_memory
     payload_key = 'gap_chart_payload_' + hashlib.sha1(chart_key.encode()).hexdigest()
     cached = cget(payload_key)
     if cached is not None:
-        with _GAP_DEEPDIVE_CHART_PAYLOAD_LOCK:
-            _GAP_DEEPDIVE_CHART_PAYLOADS[chart_key]=cached
         return cached
     pc=scan_item.get('previous_close')
     if not pc:
@@ -769,8 +759,6 @@ def _gap_deepdive_chart_payload(ticker,day,scan_item):
                       float(pc),dt.date.fromisoformat(day),include_after_hours=True)
     packed['ticker']=ticker
     cput(payload_key, packed)
-    with _GAP_DEEPDIVE_CHART_PAYLOAD_LOCK:
-        _GAP_DEEPDIVE_CHART_PAYLOADS[chart_key]=packed
     return packed
 
 

@@ -2,7 +2,6 @@
 import json
 import gzip
 import threading
-from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -30,14 +29,8 @@ requests = app.requests
 yf = app.yf
 
 _DEEPDIVE_CANDLE_PATH = Path(__file__).resolve().parent.parent / "data" / "gap_deepdive_candles_2026.json"
-_DEEPDIVE_CANDLE_CACHE = None
-_DEEPDIVE_CANDLE_LOCK = threading.Lock()
 _DEEPDIVE_NEIGHBOR_CANDLE_DIR = Path(__file__).resolve().parent.parent / "data" / "gap_deepdive_neighbor_candles_2026"
-_DEEPDIVE_NEIGHBOR_CANDLE_CACHE = OrderedDict()
-_DEEPDIVE_NEIGHBOR_CANDLE_LOCK = threading.Lock()
 _DAILY_CANDLE_SEED_PATH = Path(__file__).resolve().parent.parent / "data" / "gap_deepdive_daily_2026.json"
-_DAILY_CANDLE_SEED = None
-_DAILY_CANDLE_SEED_LOCK = threading.Lock()
 _DAILY_CANDLE_REFRESH_LOCK = threading.Lock()
 _DAILY_CANDLE_REFRESH_PENDING = set()
 _DAILY_CANDLE_REFRESH_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="daily-candle-refresh")
@@ -45,33 +38,21 @@ _DAILY_CANDLE_REFRESH_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefi
 
 def _deepdive_candle_rows(ticker, day):
     """Read bundled historical deepdive candles before requesting Polygon."""
-    global _DEEPDIVE_CANDLE_CACHE
-    if _DEEPDIVE_CANDLE_CACHE is None:
-        with _DEEPDIVE_CANDLE_LOCK:
-            if _DEEPDIVE_CANDLE_CACHE is None:
-                try:
-                    _DEEPDIVE_CANDLE_CACHE = json.loads(_DEEPDIVE_CANDLE_PATH.read_text(encoding="utf-8")).get("sessions", {})
-                except Exception:
-                    _DEEPDIVE_CANDLE_CACHE = {}
     ticker=str(ticker).upper()
-    bars = _DEEPDIVE_CANDLE_CACHE.get(f"{ticker}|{day}") or []
+    path=_DEEPDIVE_NEIGHBOR_CANDLE_DIR/f"{ticker}.json.gz"
+    try:
+        with gzip.open(path,"rt",encoding="utf-8") as source:
+            payload=json.load(source)
+        sessions=payload.get("sessions",{}) if isinstance(payload,dict) else {}
+        bars=sessions.get(day) or []
+    except Exception:
+        bars=[]
     if not bars:
-        with _DEEPDIVE_NEIGHBOR_CANDLE_LOCK:
-            sessions=_DEEPDIVE_NEIGHBOR_CANDLE_CACHE.get(ticker)
-            if sessions is None:
-                path=_DEEPDIVE_NEIGHBOR_CANDLE_DIR/f"{ticker}.json.gz"
-                try:
-                    with gzip.open(path,"rt",encoding="utf-8") as source:
-                        payload=json.load(source)
-                    sessions=payload.get("sessions",{}) if isinstance(payload,dict) else {}
-                except Exception:
-                    sessions={}
-                _DEEPDIVE_NEIGHBOR_CANDLE_CACHE[ticker]=sessions
-                while len(_DEEPDIVE_NEIGHBOR_CANDLE_CACHE)>8:
-                    _DEEPDIVE_NEIGHBOR_CANDLE_CACHE.popitem(last=False)
-            else:
-                _DEEPDIVE_NEIGHBOR_CANDLE_CACHE.move_to_end(ticker)
-            bars=sessions.get(day) or []
+        try:
+            payload=json.loads(_DEEPDIVE_CANDLE_PATH.read_text(encoding="utf-8"))
+            bars=(payload.get("sessions") or {}).get(f"{ticker}|{day}") or []
+        except Exception:
+            bars=[]
     if not bars:
         return None
     return [{"t": t, "o": o, "h": h, "l": l, "c": c, "v": v} for t, o, h, l, c, v in bars]
@@ -79,16 +60,11 @@ def _deepdive_candle_rows(ticker, day):
 
 def _daily_candle_seed_rows(ticker):
     """Read the repo-bundled daily candle seed, which survives service restarts."""
-    global _DAILY_CANDLE_SEED
-    if _DAILY_CANDLE_SEED is None:
-        with _DAILY_CANDLE_SEED_LOCK:
-            if _DAILY_CANDLE_SEED is None:
-                try:
-                    payload=json.loads(_DAILY_CANDLE_SEED_PATH.read_text(encoding="utf-8"))
-                    _DAILY_CANDLE_SEED=payload.get("tickers",{}) if isinstance(payload,dict) else {}
-                except Exception:
-                    _DAILY_CANDLE_SEED={}
-    rows=_DAILY_CANDLE_SEED.get(str(ticker).upper()) or []
+    try:
+        payload=json.loads(_DAILY_CANDLE_SEED_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        payload={}
+    rows=(payload.get("tickers",{}) if isinstance(payload,dict) else {}).get(str(ticker).upper()) or []
     return rows if rows and all("vw" in row for row in rows) else None
 
 
