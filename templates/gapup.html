@@ -1962,7 +1962,8 @@ async function loadGapDeepDiveContext(){
   if(!gapDeepDiveCurrent)return;
   const {item,jobId,chart}=gapDeepDiveCurrent,cv=$('#gap_chart_modal_canvas'),state=cv._gapDeepDiveState;
   if(!state)return;
-  const timeframe=$('#gap_chart_tf').value||'2m',days=Number(state.days)||(timeframe==='1d'?200:1);
+  const timeframe=$('#gap_chart_tf').value||'2m',days=timeframe==='1d'?(Number(state.days)||200):Math.max(5,Number(state.days)||1);
+  state.days=days;
   state.contextCache=state.contextCache||{};
   const prefetched=state.contextCache[`${timeframe}|5`];
   if(timeframe!=='1d'&&prefetched?.bars?.t?.length&&prefetched.dates?.includes(item.date)){
@@ -2083,7 +2084,8 @@ async function openGapDeepDiveChart(item,jobId){
     $('#gap_chart_tf').value=$('#gap_deepdive_tf').value||'2m';$('#gap_chart_bz').checked=true;$('#gap_chart_vwap').checked=true;$('#gap_chart_twap').checked=false;
     const cv=$('#gap_chart_modal_canvas'),gridCv=[...$('#gap_deepdive_grid').querySelectorAll('canvas[data-key]')].find(node=>node.dataset.key===gapDeepDiveKey(item)),timeframe=$('#gap_deepdive_tf').value||'2m';cv.dataset.key=gapDeepDiveKey(item);cv._gapDeepDiveState=gridCv?._gapDeepDiveState||{days:timeframe==='1d'?200:1,dates:[],bars:null,panOffset:0,loading:false,timeframe,daysSelected:false,loadedDays:0,contextCache:{}};configureGapDeepDiveTimeframe(timeframe);$('#gap_chart_tf').value=timeframe;cv._avwapAnchors=null;cv._avwapSelectMode=false;cv._rangeMeasures=[];cv._selectedRangeId=null;cv._rangeZoom=1;cv._panOffset=cv._gapDeepDiveState.panOffset||0;cv._modalPanInitialized=true;cv._yZoom=1;cv._rangeMeasureMode=false;cv._zoomSelectMode=true;cv._panToolMode=false;cv._zoomDrag=null;cv.style.cursor='crosshair';$('#gap_chart_measure_box').hidden=true;$('#gap_chart_measure').dataset.active='';$('#gap_chart_measure').style.borderColor='';$('#gap_chart_measure').textContent='Measure range';$('#gap_chart_pan').dataset.active='';$('#gap_chart_pan').style.borderColor='';$('#gap_chart_avwap_status').textContent='Hold and drag on the chart to zoom. Choose Pan to drag the chart.';
     $('#gap_chart_quote_line').textContent='Float loading · move the cursor over a candle for change and volume';$('#gap_chart_hover_time').textContent='Hover a candle to see its time · IST';$('#gap_deepdive_chart_modal').style.display='flex';setTimeout(renderGapDeepDiveModal,30);
-    const contextLoad=(!cv._gapDeepDiveState.contextLoaded||Number(cv._gapDeepDiveState.loadedDays||0)<Number(cv._gapDeepDiveState.days)||cv._gapDeepDiveState.timeframe!==timeframe)?loadGapDeepDiveContext():Promise.resolve();
+    const requiredSessions=timeframe==='1d'?Number(cv._gapDeepDiveState.days)||200:Math.max(5,Number(cv._gapDeepDiveState.days)||1);
+    const contextLoad=(!cv._gapDeepDiveState.contextLoaded||Number(cv._gapDeepDiveState.loadedDays||0)<requiredSessions||cv._gapDeepDiveState.timeframe!==timeframe)?loadGapDeepDiveContext():Promise.resolve();
     Promise.resolve(contextLoad).then(()=>prefetchGapDeepDiveContexts(item,cv._gapDeepDiveState));
     loadGapDeepDiveFloat(item,jobId).then(data=>{if(!gapDeepDiveCurrent||gapDeepDiveKey(gapDeepDiveCurrent.item)!==gapDeepDiveKey(item))return;gapDeepDiveCurrent.float_shares=data.float_shares;$('#gap_chart_modal_canvas')._floatShares=data.float_shares;const value=Number(data.float_shares);$('#gap_chart_quote_line').textContent=`Float ${Number.isFinite(value)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(value)+' shares':'unavailable'} · move the cursor over a candle for change and volume`;});
   }catch(error){$('#gap_deepdive_status').textContent=`Could not load ${item.ticker} ${formatDateMDY(item.date)}: ${error.message}`;}
