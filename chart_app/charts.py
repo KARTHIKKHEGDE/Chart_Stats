@@ -81,10 +81,20 @@ class _SecFilingTextParser(HTMLParser):
 def _filing_ai_keys(provider):
     plural, singular = (("GROQ_API_KEYS", "GROQ_API_KEY") if provider == "groq"
                         else ("GEMINI_API_KEYS", "GEMINI_API_KEY"))
-    values = [part.strip() for part in os.getenv(plural, "").replace("\n", ",").split(",") if part.strip()]
-    one = os.getenv(singular, "").strip()
-    if one and one not in values:
-        values.append(one)
+    # Accept the documented plural list and the older singular variable. Also
+    # tolerate numbered variables (e.g. GROQ_API_KEY_2) for deployments that
+    # add keys one at a time instead of maintaining a comma-separated list.
+    candidates = [os.getenv(plural, ""), os.getenv(singular, "")]
+    indexed = []
+    for name, value in os.environ.items():
+        match = re.fullmatch(re.escape(singular) + r"_(\d+)", name)
+        if match and value.strip():
+            indexed.append((int(match.group(1)), value))
+    candidates.extend(value for _index, value in sorted(indexed))
+    values = []
+    for candidate in candidates:
+        values.extend(part.strip().strip("'\"") for part in re.split(r"[,;\r\n]+", candidate)
+                      if part.strip().strip("'\"") )
     return list(dict.fromkeys(values))
 
 
