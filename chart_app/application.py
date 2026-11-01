@@ -421,6 +421,7 @@ def run_job(job, t, refresh):
         _type_res   = [None]
         _sec_res    = [None]
         _security_res = [None]
+        _news_res   = [None]
         _err        = [None]
 
         def _get_live():
@@ -461,6 +462,12 @@ def run_job(job, t, refresh):
                     "errors": [f"Polygon security metadata: {type(ex).__name__}: {ex}"]
                 }
 
+        def _get_news():
+            try:
+                _news_res[0] = _get_scanner_news(t)
+            except Exception:
+                _news_res[0] = []
+
         stage1_threads = [
             threading.Thread(target=_get_live,      daemon=True),
             threading.Thread(target=_get_daily,     daemon=True),
@@ -468,6 +475,7 @@ def run_job(job, t, refresh):
             threading.Thread(target=_get_type,      daemon=True),
             threading.Thread(target=_get_sec,       daemon=True),
             threading.Thread(target=_get_security_stats, daemon=True),
+            threading.Thread(target=_get_news,      daemon=True),
         ]
         for th in stage1_threads:
             th.start()
@@ -537,7 +545,7 @@ def run_job(job, t, refresh):
                           f"in parallel ({n_keys} keys active)…")
 
             fetch_args = [(t, i, daily) for i in idxs]
-            workers = min(20, max(n_keys * 2, 12))
+            workers = min(n_keys, max(n_events, 12))
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 futs = {pool.submit(_prefetch_minute, a): a for a in fetch_args}
                 done = 0
@@ -556,7 +564,7 @@ def run_job(job, t, refresh):
             return i, analyze_event(t, i, daily, ctx)
 
         results = {}
-        with ThreadPoolExecutor(max_workers=min(12, max(1, n_events))) as pool:
+        with ThreadPoolExecutor(max_workers=min(20, max(1, n_events))) as pool:
             futs = {pool.submit(_analyze, i): i for i in idxs}
             for fut in as_completed(futs):
                 idx_i, e = fut.result()
@@ -672,7 +680,7 @@ def run_job(job, t, refresh):
                                      (f" ({item['price_conversion']})" if item.get("price_conversion") else "")
                                      for item in reverse_splits)
                             if reverse_splits else "No reverse splits found in Polygon's available split history.")
-        recent_news = _get_scanner_news(t)
+        recent_news = _news_res[0] or []
         report["news"] = recent_news
         report["news_status"] = (_scanner_details.get(t, {}).get("news_status") or
                                   ("Latest press releases found on Yahoo Finance" if recent_news else

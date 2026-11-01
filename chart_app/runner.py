@@ -9,6 +9,8 @@ API_KEY = os.getenv("POLYGON_API_KEY") or os.getenv("POLYGON_KEY")
 
 BASE = "https://api.polygon.io"
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 
 ET = ZoneInfo("America/New_York")   # used for market session classification (do not change)
 
@@ -53,6 +55,16 @@ _aggs_cache = {}
 
 
 def pg(path, params=None, tries=4):
+    """Polygon REST request — routes through the 50-key pool from application.py
+    when available, falls back to single-key for standalone runner_stats.py usage."""
+    try:
+        from chart_app.application import poly_get as _pool_get
+        # poly_get expects path like "/v2/aggs/..." (no base URL)
+        clean_path = path.replace(BASE, "") if path.startswith("http") else path
+        return _pool_get(clean_path, params)
+    except ImportError:
+        pass
+    # Fallback: single-key mode for standalone runner_stats.py
     if not API_KEY:
         raise RuntimeError("POLYGON_API_KEY not found in .env / environment")
     url = path if path.startswith("http") else BASE + path
@@ -680,9 +692,35 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
     prev_close = D[fi - 1]["c"] if fi else None
 
     # ---- shares / float / market cap  (point-in-time historical float)
+    # Fire ALL independent network calls in parallel: details(then), details(now),
+    # poly_float, SEC shares-out, splits — these are 5 separate API calls that
+    # previously ran back-to-back (~60s). Now they complete in ~12s.
     pre = D[si - 1] if si > 0 else D[si]
-    det_then = details(tkr, pre["d"].isoformat())
-    det_now  = details(tkr)
+    _det_then = [None]
+    _det_now  = [None]
+    _poly_f   = [None, None, None, None]   # float, asof, pct, err
+    _sec_rows = [[]]
+    _splits   = [[]]
+
+    def _f_det_then():
+        _det_then[0] = details(tkr, pre["d"].isoformat())
+    def _f_det_now():
+        _det_now[0] = details(tkr)
+    def _f_poly_float():
+        f, asof, pct_, err = poly_float(tkr)
+        _poly_f[0], _poly_f[1], _poly_f[2], _poly_f[3] = f, asof, pct_, err
+    def _f_sec():
+        _sec_rows[0] = load_shares_out(tkr)
+    def _f_splits():
+        _splits[0] = load_splits(tkr)
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futs = [pool.submit(fn) for fn in (_f_det_then, _f_det_now, _f_poly_float, _f_sec, _f_splits)]
+        for f in as_completed(futs):
+            f.result()   # propagate any exceptions
+
+    det_then = _det_then[0] or {}
+    det_now  = _det_now[0] or {}
     shares = (det_then.get("share_class_shares_outstanding") or det_then.get("weighted_shares_outstanding")
               or det_now.get("share_class_shares_outstanding") or det_now.get("weighted_shares_outstanding"))
 
@@ -691,14 +729,14 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
         flt, flt_src = float(float_m) * 1e6, "manual override"
     else:
         # --- Step A: get Polygon current float + free-float ratio (ratio = free_float / shares_out)
-        poly_f, poly_asof, poly_pct, poly_err = poly_float(tkr)
+        poly_f_val, poly_asof, poly_pct, poly_err = _poly_f[0], _poly_f[1], _poly_f[2], _poly_f[3]
         poly_ratio = None
-        if poly_f and shares:
-            poly_ratio = min(1.0, max(0.02, poly_f / float(shares)))
+        if poly_f_val and shares:
+            poly_ratio = min(1.0, max(0.02, poly_f_val / float(shares)))
 
         # --- Step B: reconstruct float as of the rally-start date via SEC EDGAR
-        sec_rows = load_shares_out(tkr)
-        splits   = load_splits(tkr)
+        sec_rows = _sec_rows[0]
+        splits   = _splits[0]
         rally_start_str = D[si]["d"].isoformat()
 
         hist_flt, filing_date, stale = float_at_date(rally_start_str, sec_rows, splits, poly_ratio)
@@ -712,9 +750,9 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
             if stale:
                 notes.append(f"Historical float marked * — nearest SEC filing ({filing_date}) is "
                              f">60 days before the rally start ({rally_start_str}); may be stale.")
-        elif poly_f:
+        elif poly_f_val:
             # No SEC filing predates rally start: use Polygon current float back-adjusted for splits
-            flt = poly_f
+            flt = poly_f_val
             pct_part = f", {poly_pct:.1f}% of shares out" if poly_pct is not None else ""
             flt_src = f"Polygon float (as of {poly_asof}{pct_part})"
             notes.append(f"No SEC filing found before rally start ({rally_start_str}); "
@@ -728,32 +766,45 @@ def analyze(tkr, start_s=None, frd_s=None, float_m=None):
     mcap_before = (shares * pre["c"]) if shares else det_now.get("market_cap")
     mcap_peak   = (shares * D[pi]["h"]) if shares else None
 
-    # ---- intraday on FRD
+    # ---- FRD intraday + 15min legs (run in parallel — they are independent)
     mb = None
-    if frd:
+    legs_15, bars_15, ph_15, pl_15 = [], [], [], []
+    _mb_res = [None]
+    _legs_res = [None]
+
+    def _f_frd():
+        if frd:
+            try:
+                _mb_res[0] = frd_intraday(tkr, frd["d"], prev_close)
+            except Exception as e:
+                notes.append("FRD minute data failed: %s" % e)
+
+    def _f_legs():
         try:
-            mb = frd_intraday(tkr, frd["d"], prev_close)
+            if fi is not None:
+                chart_end = D[fi + 1]["d"] if (fi + 1 < len(D)) else D[fi]["d"]
+            elif pi is not None and pi + 1 < len(D):
+                chart_end = D[pi + 1]["d"]
+            else:
+                chart_end = D[pi]["d"]
+            _legs_res[0] = legs_15min(tkr, D[si]["d"], D[pi]["d"], flt, chart_end_date=chart_end)
         except Exception as e:
-            notes.append("FRD minute data failed: %s" % e)
-        if not mb:
-            notes.append("No minute bars for FRD - premarket / O->H volume unavailable")
+            notes.append(f"15min leg detection failed: {e}")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pool.submit(_f_frd)
+        pool.submit(_f_legs)
+
+    mb = _mb_res[0]
+    if _legs_res[0]:
+        bars_15, legs_15, ph_15, pl_15 = _legs_res[0]
+
+    if frd and not mb:
+        notes.append("No minute bars for FRD - premarket / O->H volume unavailable")
 
     # ---- rally totals (start -> high)
     R = D[si:pi + 1]
     bases, legs = bases_legs(R)
-    # ---- 15min leg breakdown
-    legs_15, bars_15, ph_15, pl_15 = [], [], [], []
-    try:
-        # Chart extends to FRD+1 trading day for context; legs detected only up to rally high
-        if fi is not None:
-            chart_end = D[fi + 1]["d"] if (fi + 1 < len(D)) else D[fi]["d"]
-        elif pi is not None and pi + 1 < len(D):
-            chart_end = D[pi + 1]["d"]
-        else:
-            chart_end = D[pi]["d"]
-        bars_15, legs_15, ph_15, pl_15 = legs_15min(tkr, D[si]["d"], D[pi]["d"], flt, chart_end_date=chart_end)
-    except Exception as e:
-        notes.append(f"15min leg detection failed: {e}")
     partial = bool(frd and fi == pi and mb)
     if partial:
         rally_vol = sum(r["v"] for r in D[si:pi]) + mb["pm_vol"] + mb["o2h_vol"]
