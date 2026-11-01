@@ -71,6 +71,17 @@ select{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;f
 .dilutionInstrumentDetails{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:7px 12px;margin-top:9px}.dilutionInstrumentDetails>span{color:#d5dfe6;font:13px/1.5 Arial,sans-serif}.dilutionInstrumentDetails b{color:#8da6b7;font-size:12px}
 @media(max-width:700px){.recent-filings-panel{padding:12px}.recent-filings-heading{align-items:flex-start}.recent-filing-head{align-items:flex-start}.recent-filing-foot{align-items:flex-start;flex-direction:column;gap:6px}.recent-filing-company{flex-basis:65%}.recent-filing-age{white-space:normal}.dilutionHistoryHead{flex-direction:column}}
 @media(max-width:900px){.three.recent-layout{grid-template-columns:1fr}.recent-filings-panel{grid-column:span 1}}
+@media(max-width:1500px) and (min-width:701px){
+  #gap_deepdive_chart_modal{padding:6px!important}
+  #gap_deepdive_chart_modal>section{width:calc(100vw - 12px)!important;height:calc(100vh - 12px)!important}
+  #gap_deepdive_chart_modal>section>header{gap:7px!important;padding:6px 10px!important}
+  #gap_deepdive_chart_modal>section>header>div{gap:6px!important}
+  #gap_deepdive_chart_modal>section>header>div>button{height:29px!important;padding:0 7px!important;font-size:14px!important;white-space:nowrap}
+  #gap_chart_quote_line{max-width:32vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #gap_chart_modal_body{padding:5px!important}
+  #gap_chart_navigator_wrap{height:64px!important;flex-basis:64px!important}
+  #gap_chart_avwap_status{padding:5px 10px!important;font-size:11px!important}
+}
 .kv{display:grid;grid-template-columns:max-content 1fr;column-gap:34px;row-gap:2px}
 .kv span:nth-child(odd){white-space:pre}
 .scroll{overflow-x:auto}
@@ -123,8 +134,19 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
 </style>
 </style></head><body>
 <div id="ag_tip"></div>
-<!-- Access Gate Modal -->
-<div id="gate" style="position:fixed;inset:0;background:#000;z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px">
+<!-- Sync pre-auth: show gate only when localStorage has no credentials. Eliminates flash for returning users. -->
+<script>
+(function(){
+  var u=localStorage.getItem('gap_user'),t=localStorage.getItem('gap_token');
+  if(!u||!t){
+    document.addEventListener('DOMContentLoaded',function(){
+      var g=document.getElementById('gate');
+      if(g) g.style.display='flex';
+    });
+  }
+})();
+</script><!-- Access Gate Modal -->
+<div id="gate" style="position:fixed;inset:0;background:#000;z-index:9999;display:none;align-items:center;justify-content:center;padding:20px">
   <div style="background:#0c0c0c;border:1px solid #2a2a2a;padding:36px 32px;width:420px;max-width:92vw;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,0.95)">
     <div style="font-size:22px;font-weight:bold;color:#29a8ff;margin-bottom:4px">Gap-Up Fade Terminal</div>
     <div id="gate_subtitle" style="color:#8a8a8a;font-size:14px;margin-bottom:24px">Authorized access only. Enter your name:</div>
@@ -1728,6 +1750,14 @@ function drawChart(ch, cvElement, hoverState){
   }
 }
 window.addEventListener('resize',()=>{
+  if($('#gap_deepdive_chart_modal').style.display==='flex'&&gapDeepDiveCurrent){
+    const cv=$('#gap_chart_modal_canvas');
+    if(!cv._responsiveResizeFrame)cv._responsiveResizeFrame=requestAnimationFrame(()=>{
+      cv._responsiveResizeFrame=0;
+      if($('#gap_deepdive_chart_modal').style.display==='flex'&&gapDeepDiveCurrent)
+        drawGapDeepDiveCanvas(cv,gapDeepDiveCurrent.chart,$('#gap_chart_tf').value,Math.max(300,$('#gap_chart_plot_wrap').clientHeight));
+    });
+  }
   if($('#chart_modal').style.display === 'flex'){
     renderModalChart();
   }
