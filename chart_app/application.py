@@ -258,7 +258,7 @@ def _poly_request_one(path: str, params: dict) -> dict:
         # arrive on a clock tick (equal-interval pattern is a detection signal).
         if wait > 0:
             time.sleep(wait)
-        time.sleep(random.uniform(0.05, 0.40))   # 50-400 ms jitter every request
+        time.sleep(random.uniform(0.02, 0.08))   # 20-80 ms subtle jitter per request
 
         # Use this key's dedicated session (unique fingerprint per key)
         with _key_lock:
@@ -286,8 +286,8 @@ def _poly_request_one(path: str, params: dict) -> dict:
             time.sleep(random.uniform(0.5, 1.5))
             continue
 
-        if r.status_code in (401, 403):
-            # Key permanently rejected — evict from pool entirely.
+        if r.status_code == 401:
+            # Key permanently rejected (Unknown / Invalid API key) — evict from pool.
             with _key_lock:
                 if key in _key_pool:
                     _key_pool.remove(key)
@@ -297,8 +297,14 @@ def _poly_request_one(path: str, params: dict) -> dict:
                     try: old.close()
                     except Exception: pass
             if not _key_pool:
-                raise RuntimeError(f"All Polygon keys rejected ({r.status_code}): {r.text[:150]}")
+                raise RuntimeError(f"All Polygon keys rejected (401): {r.text[:150]}")
             continue
+
+        if r.status_code == 403:
+            # 403 on Polygon means timeframe or feature not allowed on current plan
+            # (e.g. data older than 2 years on Basic plan). The key is VALID,
+            # so do NOT evict the key or retry across other keys (they will also 403).
+            r.raise_for_status()
 
         r.raise_for_status()
         return r.json()

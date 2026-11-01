@@ -381,6 +381,7 @@ def legs_15min(tkr, start_date, high_date, flt, chart_end_date=None):
             b_copy["_t"] = t_et.astimezone(IST)
             b_copy["_et"] = t_et
             b_copy["_dv"] = b["v"] * (b.get("vw") or (b["h"] + b["l"] + b["c"]) / 3)
+            b_copy["_tp"] = (b["h"] + b["l"] + b["c"]) / 3
             bars.append(b_copy)
 
     n = len(bars)
