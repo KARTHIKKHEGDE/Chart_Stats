@@ -5,6 +5,17 @@
     const match=raw.slice(0,10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
     return match?`${match[2]}/${match[3]}/${match[1]}`:raw;
   };
+  const _istClock=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Kolkata',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+  const _etClock=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+  function istFromEasternClock(day,minute,includeDate=true){
+    const [year,month,date]=String(day||'').split('-').map(Number),clock=Math.max(0,Math.min(1439,Math.round(Number(minute)||0)));
+    if(!year||!month||!date)return 'time unavailable';
+    const civil=Date.UTC(year,month-1,date,Math.floor(clock/60),clock%60);
+    const et=Object.fromEntries(_etClock.formatToParts(new Date(civil)).map(part=>[part.type,part.value]));
+    const easternCivil=Date.UTC(Number(et.year),Number(et.month)-1,Number(et.day),Number(et.hour),Number(et.minute));
+    const ist=Object.fromEntries(_istClock.formatToParts(new Date(civil-(easternCivil-civil))).map(part=>[part.type,part.value]));
+    return `${includeDate?`${ist.month}/${ist.day}/${ist.year} `:''}${ist.hour}:${ist.minute} IST`;
+  }
 const MC={"2m ORB low break":"#ff5a5a","5m ORB low break":"#ffd23f","Short at open":"#ff9f43"};
 const MA={"2m ORB low break":"2m ORB","5m ORB low break":"5m ORB","Short at open":"Open"};
 const hm=(m,off)=>{m=((m+off)%1440+1440)%1440;return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0')};
@@ -48,7 +59,7 @@ function gapRangeResolve(point,g){
 function gapRangePointAtIndex(g,index){
   const b=g.bars,day=b.d?.[index]||g.chart.date,dayIndex=g.multi?g.dates.indexOf(day):-1;
   const minute=b.t[index]-(dayIndex>=0?dayIndex*g.sessionSpan:0),hh=String(Math.floor(minute/60)).padStart(2,'0'),mm=String(minute%60).padStart(2,'0');
-  return {date:day,minute,price:b.c[index],label:`${formatDateMDY(day)} ${hh}:${mm} ET`};
+  return {date:day,minute,price:b.c[index],label:istFromEasternClock(day,minute)};
 }
 function gapRangeX(point,g){if(Number.isFinite(point.plotTime))return g.X(point.plotTime);const dayIndex=g.multi?g.dates.indexOf(point.date):-1;return g.X(point.minute+(dayIndex>=0?dayIndex*g.sessionSpan:0));}
 function gapRangeTimestamp(point,offsetForDay){
@@ -119,9 +130,10 @@ function drawGapDeepDiveEventMarkers(cv,x,g){
     const barHigh=Number(b.h[best])||g.yMax,baseY=Math.max(g.T+3,Math.min(g.T+g.plotH-18,g.Y(barHigh)-22)),stackKey=`${best}|${event.chart_date}`,stack=counts.get(stackKey)||0;counts.set(stackKey,stack+1);
     const w=18,h=16,px=Math.max(g.L,Math.min(g.L+g.plotW-w,centerX-w/2+stack*20)),py=Math.max(g.T,baseY-stack*17),isNews=event.kind==='news'||String(event.kind||'').toLowerCase().includes('news'),color=isNews?'#ffd23f':'#62c8ff',label=isNews?'N':'S';
     x.fillStyle='rgba(7,12,18,.97)';x.strokeStyle=color;x.lineWidth=1.2;x.beginPath();x.roundRect(px,py,w,h,3);x.fill();x.stroke();x.fillStyle=color;x.fillText(label,px+w/2,py+h/2+.5);
-    const time=event.time_exact?`${String(Math.floor(event.minute_et/60)).padStart(2,'0')}:${String(event.minute_et%60).padStart(2,'0')} ET`:'time unavailable · marker placed at session open';
+    const time=event.time_exact?istFromEasternClock(event.chart_date,event.minute_et):'time unavailable · marker placed at session open';
     const newsSource=[event.source,event.publisher].filter(Boolean).join(' · ')||'News';
-    placed.push({x:px,y:py,w,h,url:event.url,title:`${isNews?newsSource+' news':'SEC '+(event.form||'filing')} · ${formatDateMDY(event.chart_date)} ${time}\n${event.title}`});
+    const baseTitle=`${isNews?newsSource+' news':'SEC '+(event.form||'filing')} · ${time}\n${event.title}`;
+    placed.push({x:px,y:py,w,h,url:event.url,event,isNews,baseTitle,title:baseTitle});
   }
   x.restore();cv._eventMarkersScreen=placed;
 }
@@ -129,7 +141,7 @@ function scheduleGapDeepDiveHover(cv,x,y){cv._pendingHover={x,y};if(cv._hoverUpd
 function gapDeepDiveRangePoint(cv,x,y){return cv._rangePointAt?.(x,y)||cv._rangePointAtX?.(x)||null;}
 function bindGapDeepDiveRangeInput(cv){
   if(cv._rangeInputBound)return;cv._rangeInputBound=true;
-  if(!cv._eventHoverTip&&cv.parentElement){const tip=document.createElement('div');tip.style.cssText='display:none;position:absolute;z-index:20;pointer-events:none;max-width:min(360px,70vw);white-space:pre-line;background:rgba(8,12,16,.97);border:1px solid #ffd23f;color:#f1f5f9;padding:6px 8px;border-radius:3px;font:11px/1.45 Consolas,monospace;box-shadow:0 2px 8px #000';cv.parentElement.appendChild(tip);cv._eventHoverTip=tip;}
+  if(!cv._eventHoverTip&&cv.parentElement){const tip=document.createElement('div');tip.style.cssText='display:none;position:absolute;z-index:20;pointer-events:none;max-width:min(520px,84vw);white-space:pre-line;background:rgba(8,12,16,.97);border:1px solid #ffd23f;color:#f1f5f9;padding:10px 12px;border-radius:4px;font:13px/1.5 Consolas,monospace;box-shadow:0 2px 10px #000';cv.parentElement.appendChild(tip);cv._eventHoverTip=tip;}
   const stop=e=>{e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();};
   cv.addEventListener('pointerdown',e=>{
     const eventMarker=gapDeepDiveEventMarkerAt(cv,e.offsetX,e.offsetY);if(eventMarker&&eventMarker.url){cv._eventMarkerPointer={marker:eventMarker,pointerId:e.pointerId};cv.setPointerCapture(e.pointerId);cv.style.cursor='pointer';stop(e);return;}
@@ -147,7 +159,7 @@ function bindGapDeepDiveRangeInput(cv){
     }
     cv._rangeDrag=drag;cv.setPointerCapture(e.pointerId);cv.style.cursor='crosshair';stop(e);drawGapDeepDiveRangeOverlay(cv);
   },true);
-  cv.addEventListener('pointermove',e=>{const marker=gapDeepDiveEventMarkerAt(cv,e.offsetX,e.offsetY),tip=cv._eventHoverTip;if(marker){cv.style.cursor='pointer';cv.removeAttribute('title');if(tip){tip.textContent=marker.title;tip.style.display='block';const parent=cv.parentElement,w=tip.offsetWidth,h=tip.offsetHeight;tip.style.left=Math.max(4,Math.min(parent.clientWidth-w-4,cv.offsetLeft+e.offsetX+12))+'px';tip.style.top=Math.max(4,Math.min(parent.clientHeight-h-4,cv.offsetTop+e.offsetY+12))+'px';}}else{if(tip)tip.style.display='none';if(!cv._rangeDrag&&!cv._zoomDrag&&!cv._panActive)cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode)?'crosshair':'grab';}},true);
+  cv.addEventListener('pointermove',e=>{const marker=gapDeepDiveEventMarkerAt(cv,e.offsetX,e.offsetY),tip=cv._eventHoverTip;if(marker){cv._activeEventMarker=marker;cv.style.cursor='pointer';cv.removeAttribute('title');if(tip){tip.textContent=marker.title;tip.style.whiteSpace='pre-wrap';tip.style.display='block';const parent=cv.parentElement,w=tip.offsetWidth,h=tip.offsetHeight;tip.style.left=Math.max(4,Math.min(parent.clientWidth-w-4,cv.offsetLeft+e.offsetX+12))+'px';tip.style.top=Math.max(4,Math.min(parent.clientHeight-h-4,cv.offsetTop+e.offsetY+12))+'px';}const summaryRequest=window.requestSecMarkerAiSummary;if(!marker.isNews&&!marker.aiRequested&&typeof summaryRequest==='function'&&(marker.event?.accession||marker.event?.document_url||marker.event?.url)){marker.aiRequested=true;marker.title=`${marker.baseTitle}\n\nAI summary: Loading…`;if(tip)tip.textContent=marker.title;Promise.resolve(summaryRequest(marker.event,cv._eventTicker||'')).then(summary=>{marker.aiSummary=String(summary||'No AI summary available.');marker.title=`${marker.baseTitle}\n\nAI summary: ${marker.aiSummary}`;if(cv._activeEventMarker===marker&&tip)tip.textContent=marker.title;},error=>{marker.aiSummary=`Unavailable: ${error?.message||'could not generate summary.'}`;marker.title=`${marker.baseTitle}\n\nAI summary: ${marker.aiSummary}`;if(cv._activeEventMarker===marker&&tip)tip.textContent=marker.title;});}}else{cv._activeEventMarker=null;if(tip)tip.style.display='none';if(!cv._rangeDrag&&!cv._zoomDrag&&!cv._panActive)cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode)?'crosshair':'grab';}},true);
   cv.addEventListener('pointermove',e=>{
     if(cv._zoomDrag){cv._zoomDrag.x1=e.offsetX;cv._zoomDrag.y1=cv._rangeGeometry.T+cv._rangeGeometry.plotH;stop(e);scheduleGapDeepDiveRangeOverlay(cv);return;}
     const drag=cv._rangeDrag,g=cv._rangeGeometry;if(!drag||!g)return;
@@ -302,12 +314,9 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   const pad=(hi-lo)*0.05||hi*0.02;lo-=pad;hi+=pad;
   const yMid=(lo+hi)/2,yHalf=(hi-lo)/(2*Math.max(.5,cv._yZoom||1));lo=yMid-yHalf;hi=yMid+yHalf;
   const Y=v=>T+ph*(1-(v-lo)/(hi-lo));
-  const hoverOffsets=new Map(),etClock=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',timeZoneName:'shortOffset'}),istClock=new Intl.DateTimeFormat('en-US',{timeZone:'UTC',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
-  const hoverOffset=day=>{if(hoverOffsets.has(day))return hoverOffsets.get(day);let offset=Number(c.off)||0;try{const parts=etClock.formatToParts(new Date(day+'T12:00:00Z')),name=parts.find(p=>p.type==='timeZoneName')?.value||'',match=name.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/);if(match){const et=(match[1]==='-'?-1:1)*(Number(match[2])*60+Number(match[3]||0));offset=330-et;}}catch{}hoverOffsets.set(day,offset);return offset;};
-  const hoverStamp=(day,minute)=>{const [yy,mm,dd]=String(day||'').split('-').map(Number);if(!yy||!mm||!dd)return 'time unavailable';const at=new Date(Date.UTC(yy,mm-1,dd,0,Math.round(minute+hoverOffset(day)))),parts=istClock.formatToParts(at),v=Object.fromEntries(parts.map(p=>[p.type,p.value]));return `${v.month}/${v.day}/${v.year} ${v.hour}:${v.minute} IST`;};
-  cv._rangeGeometry={bars:b,chart:c,dates,multi,daily,sessionSpan,tf,X,Y,L,T,plotW:pw,plotH:ph,crosshairBottom:vy1,yMin:lo,yMax:hi,offsetForDay:hoverOffset,span,fullStart,viewStart,viewSpan,baseViewSpan,viewBase};
-  cv._hoverItems=visible.map(i=>{const day=b.d?.[i]||c.date||'',dayIndex=multi?dates.indexOf(day):-1,minute=daily?0:b.t[i]-(dayIndex>=0?dayIndex*sessionSpan:0);return {key:`${day}|${b.t[i]}`,index:i,date:day,minute,x:X(b.t[i]+(daily?.5:tf/2)),label:daily?`${hoverStamp(day,0).split(' ').slice(0,1)[0]} · Daily IST`:hoverStamp(day,minute),o:b.o[i],h:b.h[i],l:b.l[i],c:b.c[i],prevC:i>0?b.c[i-1]:c.pc,v:b.v[i]||0};});
-  cv._rangePointAt=(px,py)=>{if(px<L||px>W-R||py<T||py>T+ph)return null;const plotTime=viewStart+(px-L)/pw*viewSpan,price=hi-(py-T)/ph*(hi-lo);let date=c.date||'',minute=plotTime;if(daily){const index=Math.max(0,Math.min(b.d.length-1,Math.round(plotTime)));date=b.d?.[index]||date;minute=0;}else if(multi){const index=Math.max(0,Math.min(dates.length-1,Math.floor((plotTime-240)/sessionSpan)));date=dates[index]||date;minute=plotTime-index*sessionSpan;}return {date,minute,plotTime,price,label:`${formatDateMDY(date)} ${String(Math.floor(minute/60)).padStart(2,'0')}:${String(Math.floor(minute%60)).padStart(2,'0')} ET`};};
+  cv._rangeGeometry={bars:b,chart:c,dates,multi,daily,sessionSpan,tf,X,Y,L,T,plotW:pw,plotH:ph,crosshairBottom:vy1,yMin:lo,yMax:hi,span,fullStart,viewStart,viewSpan,baseViewSpan,viewBase};
+  cv._hoverItems=visible.map(i=>{const day=b.d?.[i]||c.date||'',dayIndex=multi?dates.indexOf(day):-1,minute=daily?0:b.t[i]-(dayIndex>=0?dayIndex*sessionSpan:0);return {key:`${day}|${b.t[i]}`,index:i,date:day,minute,x:X(b.t[i]+(daily?.5:tf/2)),label:daily?`${istFromEasternClock(day,0).split(' ')[0]} · Daily IST`:istFromEasternClock(day,minute),o:b.o[i],h:b.h[i],l:b.l[i],c:b.c[i],prevC:i>0?b.c[i-1]:c.pc,v:b.v[i]||0};});
+  cv._rangePointAt=(px,py)=>{if(px<L||px>W-R||py<T||py>T+ph)return null;const plotTime=viewStart+(px-L)/pw*viewSpan,price=hi-(py-T)/ph*(hi-lo);let date=c.date||'',minute=plotTime;if(daily){const index=Math.max(0,Math.min(b.d.length-1,Math.round(plotTime)));date=b.d?.[index]||date;minute=0;}else if(multi){const index=Math.max(0,Math.min(dates.length-1,Math.floor((plotTime-240)/sessionSpan)));date=dates[index]||date;minute=plotTime-index*sessionSpan;}return {date,minute,plotTime,price,label:daily?`${formatDateMDY(date)} · Daily IST`:istFromEasternClock(date,minute)};};
   cv._rangePointAtX=px=>{const p=cv._hoverItems?.reduce((best,item)=>Math.abs(item.x-px)<Math.abs(best.x-px)?item:best,cv._hoverItems?.[0]);return p?{date:p.date,minute:p.minute,price:p.c,label:p.label}:null;};
   cv._showChartHover=(px,py)=>{const readout=cv._hoverTimeReadout;if(px<L||px>W-R||!cv._hoverItems?.length){if(cv._hoverTip)cv._hoverTip.style.display='none';if(readout)readout.textContent='Hover a candle to see its time · IST';return}let item=cv._hoverItems.reduce((best,p)=>Math.abs(p.x-px)<Math.abs(best.x-px)?p:best,cv._hoverItems[0]);const fmt=n=>Number.isFinite(Number(n))?Number(n).toFixed(Number(n)<1?4:2):'—',ohlc=`O ${fmt(item.o)}  H ${fmt(item.h)}  L ${fmt(item.l)}  C ${fmt(item.c)}  V ${Number(item.v||0).toLocaleString('en-US')}`,bottomOhlc=!!(cv._showOhlcTip&&readout&&cv.id!=='kwModalCanvas');if(readout)readout.textContent=bottomOhlc?`${item.label} · ${ohlc}`:item.label;const tip=cv._hoverTip;if(!tip)return;tip.textContent=cv._showOhlcTip?`O ${fmt(item.o)}  H ${fmt(item.h)}\nL ${fmt(item.l)}  C ${fmt(item.c)}  V ${Number(item.v||0).toLocaleString('en-US')}`:'';tip.style.whiteSpace=cv._showOhlcTip?'pre-line':'nowrap';tip.style.display=cv._showOhlcTip&&!bottomOhlc?'block':'none';if(cv._quoteLine){const change=item.c-Number(item.prevC||0),pct=item.prevC?change/Number(item.prevC)*100:0,tp=(item.h+item.l+item.c)/3,dv=tp*item.v,float=Number(cv._floatShares),compact=n=>Number.isFinite(n)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(n):'—',money=n=>Number.isFinite(n)?(Math.abs(n)>=1000?'$'+compact(Math.abs(n)):Math.abs(n)<1?'$'+Math.abs(n).toFixed(4):'$'+Math.abs(n).toFixed(2)):'—',signedMoney=n=>`${n>=0?'+':'-'}${money(change)}`;cv._quoteLine.textContent=`${item.label} · %Chg ${pct>=0?'+':''}${pct.toFixed(2)}% · $Chg ${signedMoney(change)} · Vol ${Number(item.v).toLocaleString('en-US')} · $Vol ${money(dv)} · Float ${Number.isFinite(float)?compact(float)+' sh':'unavailable'}`;cv._quoteLine.style.color=change>=0?'#64d99b':'#ff7777';}if(cv.id==='kwModalCanvas'){tip.style.left='' ;tip.style.top='' ;}else if(cv._showOhlcTip&&!bottomOhlc){tip.style.left=Math.min(W-210,Math.max(L,px+14))+'px';tip.style.top=(cv.offsetTop+8)+'px';}else{tip.style.left=Math.max(4,cv.offsetLeft+8)+'px';tip.style.top=(cv.offsetTop+cv.offsetHeight+2)+'px';}cv.removeAttribute('title');};
   cv._viewSpan=viewSpan;cv._panSpan=span;cv._plotWidth=pw;cv._drawEvArgs=[c,sel,bzChecked,targetH,timeframe,zoom];

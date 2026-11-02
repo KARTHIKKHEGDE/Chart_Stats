@@ -37,6 +37,9 @@ This note records the requested behavior for the Gap-Up and Deepdive charts and 
 
 - Make analysis popups larger and easier to read, with larger text, adequate spacing, and scrolling for long results.
 - Keep chart hover data in the bottom date/time strip so it remains visible and does not obscure candles.
+- Display every user-facing chart, filing, news, report, and activity timestamp in IST. Internal market-session calculations may retain US-market time so daylight-saving handling remains correct, but ET must not be presented to the user.
+- Hovering an SEC (`S`) chart marker should show a cached AI plain-language filing summary in a readable tooltip. Clicking the marker continues to open the original filing.
+- After a ticker is submitted with Enter, keep its tab and background work running, then clear and refocus only the ticker entry field so the next ticker can be typed immediately.
 
 ## Completion checks
 

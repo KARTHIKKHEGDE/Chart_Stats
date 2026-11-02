@@ -243,7 +243,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
       <span id="gap_deepdive_status" style="margin-left:auto;color:#aeb6c0;font-size:13px">Opening the saved scan…</span>
     </header>
     <div id="gap_deepdive_grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px"></div>
-    <section id="gap_common_pattern" hidden style="margin-top:20px;padding:14px;background:#090c10;border:1px solid #29313a;border-radius:5px"><header style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px"><strong id="gap_common_pattern_title" style="font-size:17px;color:#ffe17d">Most common intraday pattern</strong><span id="gap_common_pattern_status" style="color:#9ba6b0;font-size:13px">Waiting for chart data…</span></header><canvas id="gap_common_pattern_canvas" style="display:block;width:100%;height:430px"></canvas><div id="gap_common_pattern_note" style="padding-top:8px;color:#9ba6b0;font-size:12px">Typical 9:30 AM–4:00 PM ET price path normalized to the regular-session open. White line = the cluster’s average VWAP.</div></section>
+<section id="gap_common_pattern" hidden style="margin-top:20px;padding:14px;background:#090c10;border:1px solid #29313a;border-radius:5px"><header style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px"><strong id="gap_common_pattern_title" style="font-size:17px;color:#ffe17d">Most common intraday pattern</strong><span id="gap_common_pattern_status" style="color:#9ba6b0;font-size:13px">Waiting for chart data…</span></header><canvas id="gap_common_pattern_canvas" style="display:block;width:100%;height:430px"></canvas><div id="gap_common_pattern_note" style="padding-top:8px;color:#9ba6b0;font-size:12px">Typical regular-session price path, normalized to the open. Chart times are displayed in IST. White line = the cluster’s average VWAP.</div></section>
   </section>
   <div id="gap_deepdive_chart_modal" style="position:fixed;inset:0;z-index:100001;display:none;align-items:center;justify-content:center;padding:12px;background:rgba(0,0,0,.94)" onclick="if(event.target===this)closeGapDeepDiveChart()">
     <section style="width:98vw;height:97vh;max-width:2200px;display:flex;flex-direction:column;background:#07090c;border:1px solid #35404a;border-radius:6px;overflow:hidden">
@@ -824,22 +824,35 @@ async function initAuth(){
 
 let lastText="", timer=null, lastChart=null, EV=[];
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+async function responseJson(response,service='Request'){
+  const body=await response.text();
+  if(!body.trim())throw new Error(`${service} returned an empty response (HTTP ${response.status}). Please retry.`);
+  let data;
+  try{data=JSON.parse(body);}catch{throw new Error(`${service} returned an invalid response (HTTP ${response.status}). Please retry.`);}
+  if(!response.ok)throw new Error(data.error||`${service} failed (HTTP ${response.status}).`);
+  return data;
+}
+function formatIstDateTime(value){
+  const raw=String(value??'').trim();
+  if(!raw)return '';
+  if(!/[T\s]\d{1,2}:\d{2}/.test(raw))return formatDateMDY(raw);
+  const instant=new Date(raw);if(Number.isNaN(instant.getTime()))return formatDateMDY(raw);
+  const parts=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Kolkata',month:'2-digit',day:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:true}).formatToParts(instant);
+  const get=type=>parts.find(part=>part.type===type)?.value||'';
+  return `${get('month')}/${get('day')}/${get('year')} · ${get('hour')}:${get('minute')} ${get('dayPeriod')} IST`;
+}
 function newsPressReleaseRow(item,ticker){
   const hasUrl=/^https?:\/\//i.test(item.url||'');
   const link=hasUrl
     ? `<button type="button" class="newsAiTrigger" style="background:none;border:0;color:#6cc4ff;cursor:pointer;font:inherit;text-align:left;padding:0;text-decoration:underline;text-underline-offset:2px" data-url="${esc(item.url)}" data-title="${esc(item.title)}" data-published="${esc(item.published||'')}" data-ticker="${esc(ticker||'')}">&#x1F4CA; ${esc(item.title)}</button>`
     : esc(item.title);
-  let publishedDate='';
-  if(item.published){
-    const raw=String(item.published),parsed=new Date(raw),iso=/^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
-    publishedDate=iso?`${iso[2]}/${iso[3]}/${iso[1]}`:(!Number.isNaN(parsed.getTime())?`${String(parsed.getUTCMonth()+1).padStart(2,'0')}/${String(parsed.getUTCDate()).padStart(2,'0')}/${parsed.getUTCFullYear()}`:'');
-  }
+  const publishedDate=formatIstDateTime(item.published);
   const dateTag=publishedDate?`<span style="display:inline-block;margin-right:8px;padding:1px 6px;border:1px solid #294458;border-radius:3px;background:#0b151c;color:#9fc5dc;font-size:11px;white-space:nowrap">${esc(publishedDate)}</span>`:'';
   const key=item.url||item.title||'';
   return `<div class="news-release-row" data-news-key="${esc(key)}" style="padding:7px 0;border-bottom:1px solid #222">${dateTag}${link}<span style="color:#777;font-size:12px"> — ${esc(item.publisher||'Yahoo Finance')}</span></div>`;
 }
 const formatDateMDY=value=>{const raw=String(value??'');const m=raw.slice(0,10).match(/^(\d{4})-(\d{2})-(\d{2})$/);return m?`${m[2]}/${m[3]}/${m[1]}`:raw;};
-const formatDateTimeMDY=value=>{const raw=String(value??'');return formatDateMDY(raw)+(raw.length>10?raw.slice(10).replace('T',' '):'');};
+const formatDateTimeMDY=formatIstDateTime;
 const formatChartTitleDates=value=>String(value??'').replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g,(_,year,month,day)=>`${month}/${day}/${year}`);
 const kv=rows=>'<div class="kv">'+rows.map(([l,v,c])=>`<span>${esc(l)}:</span><span class="${c}">${esc(v)}</span>`).join('')+'</div>';
 const table=(cols,rows,dim,sortable)=>`<div class="scroll"><table class="${sortable?'sort':''}"><thead><tr>`+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr></thead><tbody>'+
@@ -873,7 +886,7 @@ function warmDilutionHistory(ticker,asOfDate=''){
   if(dilutionWarmJobs.has(key))return dilutionWarmJobs.get(key);
   const payload={user:currentUser||'',token:sessionToken||'',ticker:String(ticker).toUpperCase(),as_of:asOfDate||'',request_id:crypto.randomUUID().replace(/-/g,'')};
   const pending=fetch('/api/sec-dilution-history/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
-    .then(async response=>{const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not start dilution analysis.');return {payload,job_id:data.job_id};})
+    .then(async response=>{const data=await responseJson(response,'Dilution analysis');return {payload,job_id:data.job_id};})
     .catch(error=>{dilutionWarmJobs.delete(key);console.debug('Dilution prefetch unavailable:',error.message);return null;});
   dilutionWarmJobs.set(key,pending);return pending;
 }
@@ -889,7 +902,7 @@ function getDilutionHistory(ticker,asOfDate=''){
       if(pollDelay)await new Promise(resolve=>setTimeout(resolve,pollDelay));
       try{
         const response=await fetch('/api/sec-dilution-history/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...started.payload,job_id:started.job_id})});
-        const job=await response.json();if(!response.ok)throw new Error(job.error||`Dilution status failed (HTTP ${response.status}).`);
+        const job=await responseJson(response,'Dilution status');
         errors=0;
         if(job.status==='complete'){dilutionReportCache.set(key,job.result);return job.result;}
         if(job.status==='error')throw new Error(job.error||'Could not analyze dilution history.');
@@ -934,11 +947,7 @@ function renderRecentFilingsFeed(target,items,error='',ticker=''){
   target.innerHTML=items.map(item=>{const title=item.description||item.title||item.form;return `<div class="recent-filing-row${item.is_dilution?' is-dilution':''}" role="group" tabindex="0" aria-label="Explain ${esc(title)} in simple language" data-row-explain data-accession="${esc(item.accession||'')}" data-ticker="${esc(item.ticker||ticker)}" data-title="${esc(title)}"><div class="recent-filing-head">${item.ticker?`<strong class="recent-filing-ticker">${esc(item.ticker)}</strong>`:''}<span class="recent-filing-form">${esc(item.form)}</span>${item.is_dilution?'<span class="recent-filing-dilution">Dilution related</span>':''}<span class="recent-filing-company">${esc(item.company)}</span><button class="recent-filing-explain" type="button" data-accession="${esc(item.accession||'')}" data-ticker="${esc(item.ticker||ticker)}" data-title="${esc(title)}">Explain simply</button><a class="recent-filing-open" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open filing ↗</a></div><div class="recent-filing-foot"><span class="recent-filing-title">${esc(title)}</span><time class="recent-filing-age" datetime="${esc(item.filed_at||'')}">${esc(formatDateMDY(item.filed_at))} · ${esc(recentFilingAge(item.filed_at))}</time></div></div>`;}).join('');
 }
 async function recentFilingsJson(response){
-  const body=await response.text();
-  if(!body.trim())throw new Error(`SEC filings returned an empty response (HTTP ${response.status}). The filing service may be temporarily unavailable; retrying usually works.`);
-  let data;try{data=JSON.parse(body);}catch{throw new Error(`SEC filings returned an invalid response (HTTP ${response.status}).`);}
-  if(!response.ok)throw new Error(data.error||`Could not load SEC filings (HTTP ${response.status}).`);
-  return data;
+  return responseJson(response,'SEC filings');
 }
 
 // ─── News AI Summary Modal ────────────────────────────────────────────────
@@ -1033,7 +1042,7 @@ function getAioSummary(tab,ticker,dilutionReport){
   const payload=aioPayload(tab,ticker,dilutionReport),key=JSON.stringify(payload);
   if(aioWarmCache.has(key))return aioWarmCache.get(key);
   const pending=fetch('/api/all-in-one-summary',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
-    .then(async response=>{const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not generate summary.');return data;})
+    .then(response=>responseJson(response,'All-in-One summary'))
     .catch(error=>{aioWarmCache.delete(key);throw error;});
   aioWarmCache.set(key,pending);return pending;
 }
@@ -1098,12 +1107,12 @@ async function openAioModal(event,btn){
         <h3>4 · Historical Behavior</h3>
         <p>${esc2(d.historical_behavior?.summary||'—')}</p>
         <p style="color:#8da6bd;font-size:12px;margin-top:4px">Sample size: ${d.historical_behavior?.sample_size||0} gaps · Fade rate: ${d.historical_behavior?.fade_rate_pct??'?'}%</p>
-        ${(()=>{const hb=d.historical_behavior||{},is_=d.intraday_stats;if(!is_&&!hb.median_high_vs_vwap_pct)return'';const n=is_?.sample_size||hb.intraday_sample_size||0;const hvw=is_?.median_high_vs_vwap_pct??hb.median_high_vs_vwap_pct;const hvo=is_?.median_high_vs_open_pct??hb.median_high_vs_open_pct;const cvo=is_?.median_close_vs_open_pct??hb.median_close_vs_open_pct;const cvw=is_?.median_close_vs_vwap_pct??hb.median_close_vs_vwap_pct;const tht=is_?.typical_high_time_et||hb.typical_high_time_et;const fr=is_?.fade_rate_pct??hb.fade_rate_pct;return`<div style="margin-top:10px;background:#080e14;border:1px solid #1e3040;border-radius:6px;padding:10px"><div style="font-size:11px;font-weight:600;color:#56a0d3;letter-spacing:.5px;margin-bottom:8px">📊 INTRADAY VWAP STATS · ${n} SESSIONS</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:5px 14px">${[[`High vs Open`,hvw!=null?`+${hvo}%`:'—'],[`High vs VWAP`,hvw!=null?`+${hvw}%`:'—'],[`Typical High Time (ET)`,tht||'—'],[`Close vs Open`,cvo!=null?`${cvo>0?'+':''}${cvo}%`:'—'],[`Close vs VWAP`,cvw!=null?`${cvw>0?'+':''}${cvw}%`:'—'],[`Fade Rate`,fr!=null?`${fr}%`:'—']].map(([k,v])=>`<span style="color:#6a8090;font-size:12px">${k}</span><span style="color:#e0eaf3;font-size:13px;font-weight:600">${v}</span>`).join('')}</div>${is_?.rows?.length?`<details style="margin-top:8px"><summary style="color:#3d7aad;font-size:11px;cursor:pointer">Per-session detail (${is_.rows.length} days)</summary><div style="margin-top:6px;display:flex;flex-direction:column;gap:3px">${is_.rows.slice(0,10).map(r=>`<div style="display:flex;gap:10px;font-size:11px;color:#7a9ab5"><span style="width:82px;flex-shrink:0">${r.date}</span><span style="color:#4fc97e">H:+${r.high_vs_open_pct}%</span>${r.high_vs_vwap_pct!=null?`<span style="color:#56a0d3">VWAP:+${r.high_vs_vwap_pct}%</span>`:''}<span style="${r.faded?'color:#e05c5c':'color:#4fc97e'}">C:${r.close_vs_open_pct>0?'+':''}${r.close_vs_open_pct}%</span><span style="color:#888">@${r.time_of_high_et}</span></div>`).join('')}</div></details>`:''}`;})()}
+        ${(()=>{const hb=d.historical_behavior||{},is_=d.intraday_stats;if(!is_&&!hb.median_high_vs_vwap_pct)return'';const n=is_?.sample_size||hb.intraday_sample_size||0;const hvw=is_?.median_high_vs_vwap_pct??hb.median_high_vs_vwap_pct;const hvo=is_?.median_high_vs_open_pct??hb.median_high_vs_open_pct;const cvo=is_?.median_close_vs_open_pct??hb.median_close_vs_open_pct;const cvw=is_?.median_close_vs_vwap_pct??hb.median_close_vs_vwap_pct;const tht=is_?.typical_high_time_ist||hb.typical_high_time_ist;const fr=is_?.fade_rate_pct??hb.fade_rate_pct;return`<div style="margin-top:10px;background:#080e14;border:1px solid #1e3040;border-radius:6px;padding:10px"><div style="font-size:11px;font-weight:600;color:#56a0d3;letter-spacing:.5px;margin-bottom:8px">📊 INTRADAY VWAP STATS · ${n} SESSIONS</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:5px 14px">${[[`High vs Open`,hvw!=null?`+${hvo}%`:'—'],[`High vs VWAP`,hvw!=null?`+${hvw}%`:'—'],[`Typical High Time (IST)`,tht||'—'],[`Close vs Open`,cvo!=null?`${cvo>0?'+':''}${cvo}%`:'—'],[`Close vs VWAP`,cvw!=null?`${cvw>0?'+':''}${cvw}%`:'—'],[`Fade Rate`,fr!=null?`${fr}%`:'—']].map(([k,v])=>`<span style="color:#6a8090;font-size:12px">${k}</span><span style="color:#e0eaf3;font-size:13px;font-weight:600">${v}</span>`).join('')}</div>${is_?.rows?.length?`<details style="margin-top:8px"><summary style="color:#3d7aad;font-size:11px;cursor:pointer">Per-session detail (${is_.rows.length} days)</summary><div style="margin-top:6px;display:flex;flex-direction:column;gap:3px">${is_.rows.slice(0,10).map(r=>`<div style="display:flex;gap:10px;font-size:11px;color:#7a9ab5"><span style="width:82px;flex-shrink:0">${r.date}</span><span style="color:#4fc97e">H:+${r.high_vs_open_pct}%</span>${r.high_vs_vwap_pct!=null?`<span style="color:#56a0d3">VWAP:+${r.high_vs_vwap_pct}%</span>`:''}<span style="${r.faded?'color:#e05c5c':'color:#4fc97e'}">C:${r.close_vs_open_pct>0?'+':''}${r.close_vs_open_pct}%</span><span style="color:#888">@${r.time_of_high_ist}</span></div>`).join('')}</div></details>`:''}`;})()}
       </div>
       <div class="aioSection">
         <h3>5 · Similar-Day Pattern <span class="aioChip ${(d.similar_day_pattern?.confidence||'').toLowerCase()}">${(d.similar_day_pattern?.confidence||'?').toUpperCase()}</span></h3>
         <p>${esc2(d.similar_day_pattern?.summary||'—')}</p>
-        ${(()=>{const is_=d.intraday_stats;const hvw=is_?.median_high_vs_vwap_pct??d.historical_behavior?.median_high_vs_vwap_pct;const tht=is_?.typical_high_time_et||d.historical_behavior?.typical_high_time_et;const fr=is_?.fade_rate_pct??d.historical_behavior?.fade_rate_pct;if(hvw==null&&!tht)return'';return`<div style="margin-top:8px;font-size:12px;color:#8da6bd;line-height:1.8">${hvw!=null?`<span>📈 Typical high: <strong style="color:#56a0d3">+${hvw}% above VWAP</strong></span> &nbsp;`:''} ${tht?`<span>⏰ High usually at: <strong style="color:#ffd23f">${tht} ET</strong></span> &nbsp;`:''} ${fr!=null?`<span>📉 Fade rate: <strong style="color:#e05c5c">${fr}%</strong></span>`:''}</div>`;})()}
+        ${(()=>{const is_=d.intraday_stats;const hvw=is_?.median_high_vs_vwap_pct??d.historical_behavior?.median_high_vs_vwap_pct;const tht=is_?.typical_high_time_ist||d.historical_behavior?.typical_high_time_ist;const fr=is_?.fade_rate_pct??d.historical_behavior?.fade_rate_pct;if(hvw==null&&!tht)return'';return`<div style="margin-top:8px;font-size:12px;color:#8da6bd;line-height:1.8">${hvw!=null?`<span>📈 Typical high: <strong style="color:#56a0d3">+${hvw}% above VWAP</strong></span> &nbsp;`:''} ${tht?`<span>⏰ High usually at: <strong style="color:#ffd23f">${tht}</strong></span> &nbsp;`:''} ${fr!=null?`<span>📉 Fade rate: <strong style="color:#e05c5c">${fr}%</strong></span>`:''}</div>`;})()}
         ${(d.similar_day_pattern?.example_dates||[]).length?`<p style="color:#8da6bd;font-size:12px;margin-top:4px">Examples: ${d.similar_day_pattern.example_dates.map(esc2).join(', ')}</p>`:''}
       </div>
       <div class="aioSection" style="background:#080e14;border-radius:6px;padding:12px;border:1px solid #1e3040">
@@ -1120,7 +1129,7 @@ async function openAioModal(event,btn){
     const stats=d.intraday_stats,pmRange=stats?.premarket_high_vs_vwap_range_pct;
     if(stats){const history=[...content.querySelectorAll('.aioSection')].find(section=>section.textContent.includes('4 · Historical Behavior'));
       if(history){const median=stats.median_premarket_high_vs_vwap_pct,range=pmRange?.p25!=null?`+${pmRange.p25}% to +${pmRange.p75}%`:'not enough data';
-        history.insertAdjacentHTML('beforeend',`<div style="margin-top:10px;padding:12px;background:#10150d;border:1px solid #51451a;border-radius:6px"><div style="font-size:13px;font-weight:700;color:#ffd23f;margin-bottom:6px">PREMARKET SPIKE · HIGH VS CUMULATIVE VWAP (04:00 ET)</div><div style="font-size:16px;line-height:1.7;color:#e8edf3">Median: <b>${median!=null?`+${median}%`:'not available'}</b> · Middle 50% range: <b>${range}</b></div><div style="font-size:13px;color:#9ba6b0;margin-top:4px">${stats.rows?.filter(row=>row.premarket_high_vs_vwap_pct!=null).length||0} sessions with premarket data. Each session: ${stats.rows?.filter(row=>row.premarket_high_vs_vwap_pct!=null).slice(0,8).map(row=>`${row.date} +${row.premarket_high_vs_vwap_pct}%${row.premarket_high_time_et?` at ${row.premarket_high_time_et} ET`:''}`).join(' · ')||'—'}</div></div>`);
+        history.insertAdjacentHTML('beforeend',`<div style="margin-top:10px;padding:12px;background:#10150d;border:1px solid #51451a;border-radius:6px"><div style="font-size:13px;font-weight:700;color:#ffd23f;margin-bottom:6px">PREMARKET SPIKE · HIGH VS CUMULATIVE VWAP (13:30 IST)</div><div style="font-size:16px;line-height:1.7;color:#e8edf3">Median: <b>${median!=null?`+${median}%`:'not available'}</b> · Middle 50% range: <b>${range}</b></div><div style="font-size:13px;color:#9ba6b0;margin-top:4px">${stats.rows?.filter(row=>row.premarket_high_vs_vwap_pct!=null).length||0} sessions with premarket data. Each session: ${stats.rows?.filter(row=>row.premarket_high_vs_vwap_pct!=null).slice(0,8).map(row=>`${row.date} +${row.premarket_high_vs_vwap_pct}%${row.premarket_high_time_ist?` at ${row.premarket_high_time_ist}`:''}`).join(' · ')||'—'}</div></div>`);
       }
     }
     status.textContent='';content.hidden=false;
@@ -1169,9 +1178,25 @@ function renderDilutionHistory(data){
 async function requestFilingExplanation({ticker='',accession='',url='',title=''}){
   const modal=$('#filing_explanation_modal'),status=$('#filing_explanation_status'),content=$('#filing_explanation_content');
   modal.style.display='flex';content.hidden=true;content.innerHTML='';$('#filing_explanation_title').textContent=title||'SEC filing';status.textContent='Reading the SEC filing and preparing a plain-language explanation…';
-  try{const response=await fetch('/api/sec-filing-explanation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:currentUser||'',token:sessionToken||'',ticker,accession,url,title})}),data=await response.json();if(!response.ok)throw new Error(data.error||'Could not explain this SEC filing.');renderFilingExplanation(data);}
+  try{const response=await fetch('/api/sec-filing-explanation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:currentUser||'',token:sessionToken||'',ticker,accession,url,title})}),data=await responseJson(response,'SEC filing explanation');renderFilingExplanation(data);}
   catch(error){status.textContent=error.message;content.hidden=true;}
 }
+const filingMarkerSummaryCache=new Map();
+window.requestSecMarkerAiSummary=function requestSecMarkerAiSummary(event={},markerTicker=''){
+  const ticker=String(markerTicker||event.ticker||'').trim().toUpperCase();
+  const accession=String(event.accession||'').trim();
+  const url=String(event.document_url||event.url||'').trim();
+  const title=String(event.title||'SEC filing').trim();
+  const key=`${ticker}|${accession||url}`;
+  if(!ticker||(!accession&&!url))return Promise.reject(new Error('Filing details are unavailable.'));
+  if(filingMarkerSummaryCache.has(key))return filingMarkerSummaryCache.get(key);
+  const pending=fetch('/api/sec-filing-explanation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:currentUser||'',token:sessionToken||'',ticker,accession,url,title})})
+    .then(response=>responseJson(response,'SEC filing summary'))
+    .then(data=>String(data?.explanation?.summary||data?.summary||'No summary available.').replace(/\s+/g,' ').trim());
+  filingMarkerSummaryCache.set(key,pending);
+  pending.catch(()=>{if(filingMarkerSummaryCache.get(key)===pending)filingMarkerSummaryCache.delete(key);});
+  return pending;
+};
 document.addEventListener('click',event=>{
   const dilution=event.target.closest('#recent_filings_dilution');
   if(dilution){event.preventDefault();const asOfDate=dilution.closest('.recent-filings-panel')?.querySelector('#recent_filings_asof')?.value||'';requestDilutionHistory(dilution.dataset.ticker,asOfDate);return;}
@@ -1335,7 +1360,7 @@ async function run(refresh){
 
   try {
     const r = await fetch('/api/start?ticker=' + encodeURIComponent(t) + '&user=' + encodeURIComponent(currentUser) + '&token=' + encodeURIComponent(sessionToken) + (refresh ? '&refresh=1' : ''));
-    const j = await r.json();
+    const j = await responseJson(r,'Analysis request');
     if(j.error){
       tab.isRunning = false;
       renderTabBar();
@@ -1346,7 +1371,7 @@ async function run(refresh){
     let pollDelay=250;
     const poll = async () => {
       try {
-        const s = await (await fetch('/api/job/' + j.job)).json();
+        const s = await responseJson(await fetch('/api/job/' + j.job),'Analysis status');
         if(s.status === 'running'){
           if(!tab.result){
             tab.container.innerHTML = `<span class="d">${esc(s.msg)}</span>`;
@@ -1464,8 +1489,7 @@ async function loadPremarketSpikeChart(tab,card,item){
   item._chartLoading=true;
   const report=tab.result,query=new URLSearchParams({ticker:report?.head?.ticker||'',date:item.date,user:currentUser||'',token:sessionToken||''});
   try{
-    const response=await fetch('/api/session-chart?'+query.toString()),data=await response.json();
-    if(!response.ok)throw new Error(data.error||'Could not load premarket spike chart.');
+    const response=await fetch('/api/session-chart?'+query.toString()),data=await responseJson(response,'Premarket spike chart');
     if(tab.result!==report||!card.isConnected)return;
     const loaded={date:data.date,title:`PREMARKET SPIKE ${item.date} · PM high +${Number(item.premarketSpikePct).toFixed(1)}% · ${data.title}`,sim:false,ticker:report?.head?.ticker,chart:data.chart,premarketSpikeChart:true,premarketSpikePct:item.premarketSpikePct,premarketSpikeDollarVolume:item.premarketSpikeDollarVolume};
     tab.sessionChartCache[item.date]=loaded;
@@ -1556,7 +1580,7 @@ function renderTab(tab, r, isRefresh){
      (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" checked style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/21 EMA cloud + BB)</label></div>`+
      `<span style="font-size:12px;color:#29a8ff;font-weight:normal">🔍 Click a premarket spike chart for full Deepdive controls</span></div>`+
   `<div class="evgrid">`+tab.EV.map((_,i)=>premarketSpikeChartCard(i)).join('')+
-     `<\/div><div class="foot"><span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance.">━ VWAP<\/span> &nbsp; <span style="color:#c084fc">━ TWAP</span> &nbsp; <span style="color:#e879f9">┅ active-minute TWAP</span> &nbsp; <span style="color:#ffd23f">┅ HOD-anchored AVWAP</span> &nbsp; <span style="color:#ffd23f">N News</span> &nbsp; <span style="color:#62c8ff">S SEC filing</span>  <span class="y" data-tip="Pre-market High — highest price before the US market open. Common fade target.">┅ PM high<\/span>  <span class="d" data-tip="Previous Close — yesterday’s close. Gap % is measured from here.">┅ prev close<\/span> &nbsp; <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period EMA on 2-min closes. Fast trend line.">━ EMA9<\/span> <span style="color:#ffa500" data-tip="EMA 21 — 20-period EMA on 2-min closes. Slower trend line. Bearish when EMA9 drops below it.">━ EMA21<\/span> <span class="g" data-tip="Bone Zone cloud — shaded between EMA9 &amp; EMA21. Green = bullish. Red = bearish.">▒<\/span><span class="r">▒<\/span> cloud <span class="d" data-tip="Bollinger Bands (20-period, 2 std dev). Shows expected volatility range on the 2-min chart.">━ BB(20,2)<\/span> &nbsp; <span data-tip="SELL signal — short entry triggered by an entry model.">▼ SELL<\/span> &nbsp; <span data-tip="BUY / Cover signal — close the short here. P&amp;L % shown next to it.">▲ BUY<\/span>. <span data-tip="Lighter shaded background = pre-market session (before 9:30 ET / 19:00 IST).">Shaded = premarket<\/span>. X axis = IST. Measure: activate Measure, then drag across bars for volume, estimated dollar volume, and float rotation.<\/div><\/div>`;
+     `<\/div><div class="foot"><span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance.">━ VWAP<\/span> &nbsp; <span style="color:#c084fc">━ TWAP</span> &nbsp; <span style="color:#e879f9">┅ active-minute TWAP</span> &nbsp; <span style="color:#ffd23f">┅ HOD-anchored AVWAP</span> &nbsp; <span style="color:#ffd23f">N News</span> &nbsp; <span style="color:#62c8ff">S SEC filing</span>  <span class="y" data-tip="Pre-market High — highest price before the US market open. Common fade target.">┅ PM high<\/span>  <span class="d" data-tip="Previous Close — yesterday’s close. Gap % is measured from here.">┅ prev close<\/span> &nbsp; <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period EMA on 2-min closes. Fast trend line.">━ EMA9<\/span> <span style="color:#ffa500" data-tip="EMA 21 — 20-period EMA on 2-min closes. Slower trend line. Bearish when EMA9 drops below it.">━ EMA21<\/span> <span class="g" data-tip="Bone Zone cloud — shaded between EMA9 &amp; EMA21. Green = bullish. Red = bearish.">▒<\/span><span class="r">▒<\/span> cloud <span class="d" data-tip="Bollinger Bands (20-period, 2 std dev). Shows expected volatility range on the 2-min chart.">━ BB(20,2)<\/span> &nbsp; <span data-tip="SELL signal — short entry triggered by an entry model.">▼ SELL<\/span> &nbsp; <span data-tip="BUY / Cover signal — close the short here. P&amp;L % shown next to it.">▲ BUY<\/span>. <span data-tip="Lighter shaded background = pre-market session before the US open; all chart times are IST.">Shaded = premarket<\/span>. X axis = IST. Measure: activate Measure, then drag across bars for volume, estimated dollar volume, and float rotation.<\/div><\/div>`;
 
   const pmGapText = Number.isFinite(r.chart.premarket_gap_pct)
     ? `${(r.chart.premarket_gap_pct*100).toFixed(1)}% (PM high vs prev close)` : 'Not available';
@@ -1596,10 +1620,10 @@ function renderTab(tab, r, isRefresh){
       const foot = tab.container.querySelector('#path_norm_foot');
       if(foot) foot.lastChild.textContent = tab.pathNormalization === 'gap'
         ? ' X = minutes from each day’s PM high · Y = % of that day’s gap retained · 100% = PM high · 0% = previous close'
-        : tab.pathNormalization === 'dev' ? ' Y = price / cumulative 04:00 ET VWAP − 1; zero is VWAP'
+        : tab.pathNormalization === 'dev' ? ' Y = price / cumulative 13:30 IST VWAP − 1; zero is VWAP'
         : tab.pathNormalization === 'dt' ? ' Y = price / clock-time TWAP − 1; zero is TWAP'
         : tab.pathNormalization === 'spread' ? ' Y = ln(VWAP / TWAP); positive means volume traded at relatively higher prices'
-        : tab.pathNormalization === 'vwap' ? ' Y = cumulative 04:00 ET VWAP from previous close'
+        : tab.pathNormalization === 'vwap' ? ' Y = cumulative 13:30 IST VWAP from previous close'
         : tab.pathNormalization === 'twap' ? ' Y = clock-time TWAP from previous close (empty minutes forward-fill price)'
         : ' Y = price from previous close; expected P is recomposed from VWAP × (1 + Dᵥ)';
       const canvas = tab.container.querySelector('#cv');
@@ -1667,7 +1691,7 @@ function drawEvAll(evList, containerEl){
       card._panOffset=0;loadChartContext(card,tabForCharts,edge);
     };
     const renderItem=card._contextChart?{...item,chart:{...item.chart,bars:card._contextChart}}:item;
-    cv._anchorDate=card._sessionDate;cv._panOffset=card._panOffset||0;cv._onPanChange=value=>card._panOffset=value;cv._onPanEdge=card._onPanEdge;cv._showVWAP=card._showVWAP!==false;cv._showTWAP=card._showTWAP===true;cv._avwapAnchors=card._avwapAnchors||null;
+    cv._anchorDate=card._sessionDate;cv._eventTicker=tabForCharts?.result?.head?.ticker||item.ticker||'';cv._panOffset=card._panOffset||0;cv._onPanChange=value=>card._panOffset=value;cv._onPanEdge=card._onPanEdge;cv._showVWAP=card._showVWAP!==false;cv._showTWAP=card._showTWAP===true;cv._avwapAnchors=card._avwapAnchors||null;
     if(!card._chartVisible&&$('#chart_modal').style.display!=='flex'){window.evLazyObserver.observe(card);return;}
     const markerDates=card._contextDates?.length?card._contextDates:[card._sessionDate||item.date],markerKey=`${String(tabForCharts?.result?.head?.ticker||'').toUpperCase()}|${[...new Set(markerDates)].sort().join(',')}`;
     if(tabForCharts&&cv._marketEventKey!==markerKey){cv._marketEventKey=markerKey;cv._marketEvents=[];loadChartMarketEvents(tabForCharts.result?.head?.ticker,markerDates).then(events=>{if(cv._marketEventKey!==markerKey||!cv.isConnected)return;cv._marketEvents=events;if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);if($('#chart_modal').style.display==='flex'&&currentModalSlot===i)renderModalChart();});}
@@ -1726,9 +1750,8 @@ async function navigateEvCard(card, step, tab){
     const title=card.querySelector('.evt');if(title) title.textContent=`${day} · loading…`;
     const query=new URLSearchParams({ticker:tab.result?.head?.ticker||'',date:day,user:currentUser||'',token:sessionToken||''});
     try{
-      const response=await fetch('/api/session-chart?'+query.toString()), data=await response.json();
+      const response=await fetch('/api/session-chart?'+query.toString()), data=await responseJson(response,'Session chart');
       if(requestId!==card._loadRequestId)return;
-      if(!response.ok) throw new Error(data.error||'Could not load session chart');
       item={date:data.date,title:data.title,sim:false,chart:data.chart};
       tab.sessionChartCache[day]=item;
     }catch(error){
@@ -1809,7 +1832,7 @@ window.renderModalChart = function(){
 
   const chart=card?._contextChart?{...item.chart,bars:card._contextChart}:item.chart;
   const sourceCanvas=card?.querySelector(`#ev${currentModalSlot}`);
-  cv._chart=chart;cv._event=item;cv._marketEvents=sourceCanvas?._marketEvents||[];cv._timeframe=$('#cm_tf').value||(card?card._chartTf:'2m');cv._anchorDate=card?._sessionDate||item.date;cv._activeDate=cv._anchorDate;cv._chartDays=card?._chartDays||5;cv._panOffset=card?._panOffset||0;cv._yZoom=card?._yZoom||1;cv._zoom=card?._zoom||1;cv._rangeZoom=cv._zoom;cv._rangeMeasures=card?._rangeMeasures||(card._rangeMeasures=[]);cv._selectedRangeId=card?._selectedRangeId||null;cv._avwapAnchors=card?._avwapAnchors||null;cv._showVWAP=card?._showVWAP!==false;cv._showTWAP=card?._showTWAP===true;cv._floatShares=Number(item.float_shares??chart.float_shares)||null;
+  cv._chart=chart;cv._event=item;cv._eventTicker=tab.result?.head?.ticker||item.ticker||'';cv._marketEvents=sourceCanvas?._marketEvents||[];cv._timeframe=$('#cm_tf').value||(card?card._chartTf:'2m');cv._anchorDate=card?._sessionDate||item.date;cv._activeDate=cv._anchorDate;cv._chartDays=card?._chartDays||5;cv._panOffset=card?._panOffset||0;cv._yZoom=card?._yZoom||1;cv._zoom=card?._zoom||1;cv._rangeZoom=cv._zoom;cv._rangeMeasures=card?._rangeMeasures||(card._rangeMeasures=[]);cv._selectedRangeId=card?._selectedRangeId||null;cv._avwapAnchors=card?._avwapAnchors||null;cv._showVWAP=card?._showVWAP!==false;cv._showTWAP=card?._showTWAP===true;cv._floatShares=Number(item.float_shares??chart.float_shares)||null;
   cv._onPanChange=value=>{if(card)card._panOffset=value;};cv._onYZoomChange=value=>{if(card)card._yZoom=value;};cv._onPanEdge=card?._onPanEdge?side=>{card._panOffset=cv._panOffset;card._onPanEdge(side);}:null;
   const ui=chartFeatureUi('cm');bindUnifiedChartFeatures(cv,ui,()=>{if(!card)return;card._panOffset=cv._panOffset||0;card._yZoom=cv._yZoom||1;card._zoom=cv._rangeZoom||1;card._avwapAnchors=cv._avwapAnchors;card._rangeMeasures=cv._rangeMeasures||[];card._selectedRangeId=cv._selectedRangeId;card._showVWAP=cv._showVWAP;card._showTWAP=cv._showTWAP;},renderModalChart);
   syncGapDeepDiveMouseMode(cv,ui);
@@ -2166,7 +2189,17 @@ async function copyAll(){
   const b=$('#cp'); b.textContent='Copied ✓'; setTimeout(()=>b.textContent='Copy all',1200);
 }
 $('#go').onclick=()=>run(false); $('#rf').onclick=()=>run(true); $('#cp').onclick=copyAll;
-$('#t').addEventListener('keydown',e=>{if(e.key==='Enter')run(false)});
+$('#t').addEventListener('keydown',e=>{
+  if(e.key!=='Enter')return;
+  e.preventDefault();
+  const submitted=$('#t').value.trim();
+  if(!submitted)return;
+  run(false);
+  // run() switches to the submitted tab synchronously; clear only the entry field
+  // afterwards so its completed tab keeps running while this field is ready for the next ticker.
+  $('#t').value='';
+  $('#t').focus();
+});
 let gapDeepDiveRequest=0,gapDeepDiveLoaded=false,gapDeepDivePromise=null;
 function openGapDeepDive(){
   $('#tabs_view').style.display='none';$('#tab_bar').style.display='none';$('#multiday_view').style.display='none';$('#gap_deepdive_view').style.display='block';
@@ -2319,7 +2352,7 @@ function renderGapDeepDiveGroups(items,jobId,mode=gapDeepDiveGroupBy){
     if(unmatched.length)groups.push({title:'No verified financing player',kind:'unmatched',entries:unmatched});
     if(failed.length)groups.push({title:'SEC lookup unavailable',kind:'failed',entries:failed});
   }else groups=[...tickerGroups].map(([ticker,entries])=>({title:ticker,kind:'ticker',entries}));
-  const sessionMarkup=(entry,groupIndex)=>{const {item,index}=entry;return `<article class="gap-session-card"><header class="gap-session-head"><strong>${mode==='player'?`${esc(item.ticker)} · `:''}${esc(formatDateMDY(item.date))}</strong><span style="color:#64d99b;font-size:13px">PM high +${(item.move*100).toFixed(1)}%</span><span style="color:#b6c0ca;font-size:13px">PM $vol $${(item.pm_dollar_volume/1e6).toFixed(1)}M</span><button class="gap-copy-png" data-index="${index}" disabled style="margin-left:auto;height:32px;font-size:12px;border-color:#555">Copy PNG</button></header><div class="gap-session-canvas-wrap"><canvas id="gap_deepdive_chart_${index}_${groupIndex}" data-index="${index}"></canvas><span class="gap-chart-loading" style="position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);color:#89939e;font-size:14px">Scroll here to load this chart</span></div><div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#aab4bf;padding:7px 2px"><span style="color:#fff">━ VWAP</span><span style="color:#c084fc">━ TWAP</span><span style="color:#ffe45c">AVWAP · set A/B in expanded chart</span><span style="color:#b0b0b0">░ Premarket</span><span style="color:#ffd23f">N News</span><span style="color:#62c8ff">S SEC filing</span><span>1-minute OHLCV · Postmarket to 20:00 ET · X-axis IST · click to expand</span></div></article>`;};
+  const sessionMarkup=(entry,groupIndex)=>{const {item,index}=entry;return `<article class="gap-session-card"><header class="gap-session-head"><strong>${mode==='player'?`${esc(item.ticker)} · `:''}${esc(formatDateMDY(item.date))}</strong><span style="color:#64d99b;font-size:13px">PM high +${(item.move*100).toFixed(1)}%</span><span style="color:#b6c0ca;font-size:13px">PM $vol $${(item.pm_dollar_volume/1e6).toFixed(1)}M</span><button class="gap-copy-png" data-index="${index}" disabled style="margin-left:auto;height:32px;font-size:12px;border-color:#555">Copy PNG</button></header><div class="gap-session-canvas-wrap"><canvas id="gap_deepdive_chart_${index}_${groupIndex}" data-index="${index}"></canvas><span class="gap-chart-loading" style="position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);color:#89939e;font-size:14px">Scroll here to load this chart</span></div><div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#aab4bf;padding:7px 2px"><span style="color:#fff">━ VWAP</span><span style="color:#c084fc">━ TWAP</span><span style="color:#ffe45c">AVWAP · set A/B in expanded chart</span><span style="color:#b0b0b0">░ Premarket</span><span style="color:#ffd23f">N News</span><span style="color:#62c8ff">S SEC filing</span><span>1-minute OHLCV · all times IST · click to expand</span></div></article>`;};
   grid.innerHTML=groups.map((group,groupIndex)=>{
     const entries=mode==='player'?group.entries.slice().sort((a,b)=>String(a.item.date).localeCompare(String(b.item.date))||String(a.item.ticker).localeCompare(String(b.item.ticker))):group.entries;
     const heading=mode==='player'&&group.player?`<strong>${esc(group.title)}</strong><span class="gap-player-date">${esc([...group.roles].join(' · '))}</span><a href="${esc(group.player.filing_url)}" target="_blank" rel="noopener noreferrer" title="Open the SEC filing">SEC filing</a>`:`<strong>${esc(group.title)}</strong>`;
@@ -2357,6 +2390,7 @@ async function loadGapDeepDiveFloat(item,jobId){
 }
 function drawGapDeepDiveCanvas(cv,baseChart,timeframe,targetH){
   const state=cv._gapDeepDiveState,chart=state?.bars?{...baseChart,bars:state.bars,after_hours:true}:baseChart;
+  cv._eventTicker=baseChart.ticker||gapDeepDiveCurrent?.item?.ticker||'';
   cv._renderDpr=cv.id==='gap_chart_modal_canvas'?3:2;
   if(cv.id==='gap_chart_modal_canvas')cv._onZoomOutMore=requiredSessions=>loadGapDeepDiveMore(cv,requiredSessions);
   if(state){cv._anchorDate=baseChart.date;if(cv.id!=='gap_chart_modal_canvas'||!cv._modalPanInitialized){cv._panOffset=state.panOffset||0;if(cv.id==='gap_chart_modal_canvas')cv._modalPanInitialized=true;}if(cv.id==='gap_chart_modal_canvas')state.panOffset=cv._panOffset||0;cv._onPanChange=value=>{state.panOffset=value;};cv._onPanEdge=side=>loadGapDeepDiveAdjacent(cv,baseChart,side);}

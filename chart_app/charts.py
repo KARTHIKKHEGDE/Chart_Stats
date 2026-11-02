@@ -10,6 +10,7 @@ from chart_app.application import (
     clean,
     cput,
     dt,
+    IST,
     jsonify,
     load_daily,
     metrics,
@@ -2049,26 +2050,28 @@ def _compute_intraday_stats(ticker, dates, max_dates=15):
             close_price= float(rth.iloc[-1]['c'])
             vwap_at_high  = float(vwap_s.reindex([high_idx]).iloc[0]) if high_idx in vwap_s.index else float(vwap_s.iloc[-1])
             vwap_at_close = float(vwap_s.iloc[-1])
-            high_time_et  = high_idx.strftime('%H:%M') if hasattr(high_idx, 'strftime') else str(high_idx)
+            high_time_ist = (high_idx.tz_convert(IST).strftime('%H:%M IST')
+                             if hasattr(high_idx, 'tz_convert') else str(high_idx))
             pm = bars[(mins >= 240) & (mins < 570)]  # 4:00–9:30 ET
             pm_high_vs_vwap = None
-            pm_high_time = None
+            pm_high_time_ist = None
             if not pm.empty:
                 pm_high_idx = pm['h'].idxmax()
                 pm_high_price = float(pm['h'].max())
                 pm_vwap = float(vwap_s.reindex([pm_high_idx]).iloc[0]) if pm_high_idx in vwap_s.index else 0
                 if pm_vwap > 0:
                     pm_high_vs_vwap = round((pm_high_price / pm_vwap - 1) * 100, 1)
-                pm_high_time = pm_high_idx.strftime('%H:%M') if hasattr(pm_high_idx, 'strftime') else str(pm_high_idx)
+                pm_high_time_ist = (pm_high_idx.tz_convert(IST).strftime('%H:%M IST')
+                                    if hasattr(pm_high_idx, 'tz_convert') else str(pm_high_idx))
             return {
                 'date':             date,
                 'high_vs_open_pct': round((high_price / open_price - 1) * 100, 1),
                 'high_vs_vwap_pct': round((high_price / vwap_at_high - 1) * 100, 1) if vwap_at_high > 0 else None,
                 'premarket_high_vs_vwap_pct': pm_high_vs_vwap,
-                'premarket_high_time_et': pm_high_time,
+                'premarket_high_time_ist': pm_high_time_ist,
                 'close_vs_open_pct':round((close_price / open_price - 1) * 100, 1),
                 'close_vs_vwap_pct':round((close_price / vwap_at_close - 1) * 100, 1) if vwap_at_close > 0 else None,
-                'time_of_high_et':  high_time_et,
+                'time_of_high_ist': high_time_ist,
                 'faded':            close_price < open_price,
             }
         except Exception:
@@ -2094,10 +2097,10 @@ def _compute_intraday_stats(ticker, dates, max_dates=15):
     close_vs_vwap = [r['close_vs_vwap_pct'] for r in rows]
     fade_count    = sum(1 for r in rows if r['faded'])
     try:
-        common_high_time = _stats.mode([r['time_of_high_et'] for r in rows])
+        common_high_time = _stats.mode([r['time_of_high_ist'] for r in rows])
     except Exception:
-        times_sorted = sorted(rows, key=lambda r: r['time_of_high_et'])
-        common_high_time = times_sorted[len(times_sorted)//2]['time_of_high_et']
+        times_sorted = sorted(rows, key=lambda r: r['time_of_high_ist'])
+        common_high_time = times_sorted[len(times_sorted)//2]['time_of_high_ist']
     return {
         'sample_size':              len(rows),
         'median_high_vs_open_pct':  _med(high_vs_open),
@@ -2107,7 +2110,7 @@ def _compute_intraday_stats(ticker, dates, max_dates=15):
         'median_close_vs_open_pct': _med(close_vs_open),
         'median_close_vs_vwap_pct': _med(close_vs_vwap),
         'fade_rate_pct':            round(100 * fade_count / len(rows)),
-        'typical_high_time_et':     common_high_time,
+        'typical_high_time_ist':    common_high_time,
         'rows':                     rows,
     }
 
@@ -2196,7 +2199,7 @@ Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
         # Compute real intraday VWAP stats from minute bars
         event_dates = [e.get('date', '') for e in (events or []) if e.get('date', '')]
         stats_fingerprint=json.dumps(event_dates[:15],separators=(',',':'))
-        stats_cache_key='aio_intraday_v2_'+hashlib.sha256(
+        stats_cache_key='aio_intraday_v3_'+hashlib.sha256(
             (ticker+'|'+stats_fingerprint).encode('utf-8')).hexdigest()[:24]
         # The fingerprint only contains completed historical event dates, so the
         # result is stable until a new event changes the key. Keep it warm for a day.
@@ -2232,25 +2235,25 @@ Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
             vwap_detail_lines = "\n".join(
                 f"    {r['date']}: high +{r['high_vs_open_pct']}% from open"
                 + (f", +{r['high_vs_vwap_pct']}% above VWAP" if r['high_vs_vwap_pct'] is not None else "")
-                + f", close {r['close_vs_open_pct']:+}% from open, high at {r['time_of_high_et']} ET"
+                + f", close {r['close_vs_open_pct']:+}% from open, high at {r['time_of_high_ist']}"
                 for r in is_['rows'][:8]
             )
             pm_range=is_.get('premarket_high_vs_vwap_range_pct') or {}
             pm_value=is_.get('median_premarket_high_vs_vwap_pct')
             pm_detail_lines="\n".join(
                 f"    {r['date']}: premarket high {('+'+str(r['premarket_high_vs_vwap_pct'])+'% above VWAP') if r.get('premarket_high_vs_vwap_pct') is not None else 'unavailable'}"
-                + (f" at {r['premarket_high_time_et']} ET" if r.get('premarket_high_time_et') else '')
+                + (f" at {r['premarket_high_time_ist']}" if r.get('premarket_high_time_ist') else '')
                 for r in is_['rows'][:8]
             )
             intraday_block = (
                 f"\nQUANTITATIVE INTRADAY STATS (computed from {is_['sample_size']} real sessions):\n"
                 f"  Median intraday high vs open:       +{is_['median_high_vs_open_pct']}%\n"
                 f"  Median intraday high vs VWAP:       +{is_['median_high_vs_vwap_pct']}%\n"
-                f"  Typical time of day high (ET):      {is_['typical_high_time_et']}\n"
+                f"  Typical time of day high (IST):     {is_['typical_high_time_ist']}\n"
                 f"  Median close vs open:               {is_['median_close_vs_open_pct']:+}%\n"
                 f"  Median close vs VWAP:               {is_['median_close_vs_vwap_pct']:+}%\n"
                 f"  Actual fade rate (close < open):    {is_['fade_rate_pct']}%\n"
-                f"  Premarket high vs cumulative VWAP (04:00 ET onward): median {('+'+str(pm_value)+'%') if pm_value is not None else 'unavailable'}; middle 50% range {('+'+str(pm_range.get('p25'))+'% to +'+str(pm_range.get('p75'))+'%') if pm_range.get('p25') is not None else 'unavailable'}\n"
+                f"  Premarket high vs cumulative VWAP (starting 13:30 IST): median {('+'+str(pm_value)+'%') if pm_value is not None else 'unavailable'}; middle 50% range {('+'+str(pm_range.get('p25'))+'% to +'+str(pm_range.get('p75'))+'%') if pm_range.get('p25') is not None else 'unavailable'}\n"
                 f"  Per-session premarket highs:\n{pm_detail_lines}\n"
                 f"  Per-session detail:\n{vwap_detail_lines}\n"
             )
@@ -2309,7 +2312,7 @@ Return this exact JSON structure (fill every field, use null if unknown):
     "median_premarket_high_vs_vwap_pct": {intraday_stats['median_premarket_high_vs_vwap_pct'] if intraday_stats else 'null'},
     "premarket_high_vs_vwap_range_pct": {json.dumps(intraday_stats['premarket_high_vs_vwap_range_pct']) if intraday_stats else 'null'},
     "median_high_vs_open_pct": {intraday_stats['median_high_vs_open_pct'] if intraday_stats else 'null'},
-    "typical_high_time_et": "{intraday_stats['typical_high_time_et'] if intraday_stats else ''}",
+    "typical_high_time_ist": "{intraday_stats['typical_high_time_ist'] if intraday_stats else ''}",
     "median_close_vs_open_pct": {intraday_stats['median_close_vs_open_pct'] if intraday_stats else 'null'},
     "intraday_sample_size": {intraday_stats['sample_size'] if intraday_stats else 0}
   }},
@@ -2339,7 +2342,7 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
                 result['historical_behavior'].update({
                     'median_high_vs_vwap_pct':  intraday_stats['median_high_vs_vwap_pct'],
                     'median_high_vs_open_pct':  intraday_stats['median_high_vs_open_pct'],
-                    'typical_high_time_et':     intraday_stats['typical_high_time_et'],
+                    'typical_high_time_ist':    intraday_stats['typical_high_time_ist'],
                     'median_close_vs_open_pct': intraday_stats['median_close_vs_open_pct'],
                     'median_close_vs_vwap_pct': intraday_stats['median_close_vs_vwap_pct'],
                     'intraday_sample_size':     intraday_stats['sample_size'],
