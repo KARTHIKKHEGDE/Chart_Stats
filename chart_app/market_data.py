@@ -30,7 +30,6 @@ yf = app.yf
 
 _DEEPDIVE_CANDLE_PATH = Path(__file__).resolve().parent.parent / "data" / "gap_deepdive_candles_2026.json"
 _DEEPDIVE_NEIGHBOR_CANDLE_DIR = Path(__file__).resolve().parent.parent / "data" / "gap_deepdive_neighbor_candles_2026"
-_DAILY_CANDLE_SEED_PATH = Path(__file__).resolve().parent.parent / "data" / "gap_deepdive_daily_2026.json"
 _DEEPDIVE_CANDLE_CACHE_LOCK = threading.RLock()
 _DEEPDIVE_NEIGHBOR_CANDLE_CACHE = {}
 _DEEPDIVE_MAIN_CANDLE_CACHE = None
@@ -74,16 +73,6 @@ def _deepdive_candle_rows(ticker, day):
     return [{"t": t, "o": o, "h": h, "l": l, "c": c, "v": v} for t, o, h, l, c, v in bars]
 
 
-def _daily_candle_seed_rows(ticker):
-    """Read the repo-bundled daily candle seed, which survives service restarts."""
-    try:
-        payload=json.loads(_DAILY_CANDLE_SEED_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        payload={}
-    rows=(payload.get("tickers",{}) if isinstance(payload,dict) else {}).get(str(ticker).upper()) or []
-    return rows if rows and all("vw" in row for row in rows) else None
-
-
 def _fetch_daily_candles(ticker):
     end=dt.date.today()+dt.timedelta(days=1)
     start=end-dt.timedelta(days=HISTORY_DAYS)
@@ -99,7 +88,7 @@ def _refresh_daily_candle_cache(ticker):
     try:
         rows=_fetch_daily_candles(ticker)
         if rows:
-            cput(f"{ticker}_daily3",rows)
+            cput(f"{ticker}_daily_polygon_v1",rows)
     except Exception as exc:
         app.app.logger.info("Daily candle refresh failed for %s (%s)",ticker,type(exc).__name__)
     finally:
@@ -129,7 +118,9 @@ def med(xs):
 
 def load_daily(t, force=False):
     ticker=str(t).upper()
-    key = f"{ticker}_daily3"
+    # Use a new Polygon-only cache namespace so historical JSON seed data from
+    # older releases cannot leak into Gap-Up reports or charts.
+    key = f"{ticker}_daily_polygon_v1"
     if not force:
         fresh=cget(key,6*3600)
         if fresh is not None and all("vw" in row for row in fresh):
@@ -140,11 +131,6 @@ def load_daily(t, force=False):
         if stale is not None and all("vw" in row for row in stale):
             _schedule_daily_candle_refresh(ticker)
             return stale
-        seeded=_daily_candle_seed_rows(ticker)
-        if seeded:
-            cput(key,seeded)
-            _schedule_daily_candle_refresh(ticker)
-            return seeded
     rows=_fetch_daily_candles(ticker)
     cput(key,rows)
     return rows
@@ -268,15 +254,21 @@ def poly_frame(rows):
     return df
 
 
-def minute_df(t, day, force=False):
-    key = f"{t}_{day}_1m"
+def minute_df(t, day, force=False, source="polygon"):
+    ticker=str(t).upper()
+    source=str(source or "polygon").strip().lower()
+    key = f"{ticker}_{day}_1m_polygon_v1"
+    # Bundled one-minute JSON is deliberately scoped to the Deepdive chart.
+    # Never write seeded rows into Polygon's cache namespace.
+    if source == "deepdive" and not force:
+        seeded=_deepdive_candle_rows(ticker,day)
+        if seeded:
+            return poly_frame(seeded)
     rows = None if force else cget(key)
     if rows is None:
-        rows = None if force else _deepdive_candle_rows(t, day)
-        if rows is None:
-            j = poly_get(f"/v2/aggs/ticker/{t}/range/1/minute/{day}/{day}",
-                         {"adjusted": "false", "sort": "asc", "limit": 50000})
-            rows = j.get("results") or []
+        j = poly_get(f"/v2/aggs/ticker/{ticker}/range/1/minute/{day}/{day}",
+                     {"adjusted": "false", "sort": "asc", "limit": 50000})
+        rows = j.get("results") or []
         cput(key, rows)
     return poly_frame(rows) if rows else None
 

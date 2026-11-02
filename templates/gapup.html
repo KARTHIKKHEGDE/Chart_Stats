@@ -1636,9 +1636,9 @@ async function loadChartContext(card,tab,anchorDate,extendDaily=false,extendSide
   }
   card._contextLoading=true;card._contextError='';
   const requestId=(card._contextRequestId||0)+1;card._contextRequestId=requestId;
-  const query=new URLSearchParams({ticker:tab.result?.head?.ticker||'',date:anchorDate||card._sessionDate,days:String(days),tf,user:currentUser||'',token:sessionToken||'',postmarket:'1'});
+  const query=new URLSearchParams({ticker:tab.result?.head?.ticker||'',date:anchorDate||card._sessionDate,days:String(days),tf,user:currentUser||'',token:sessionToken||'',postmarket:'1',source:'polygon'});
   if($('#chart_modal').style.display==='flex'&&currentModalSlot===Number(card.dataset.evSlot))$('#cm_status').textContent=`Loading up to two sessions before and after ${tab.result?.head?.ticker||''} ${formatDateMDY(card._sessionDate)}…`;
-  try{const response=await fetch('/api/chart-context?'+query.toString()),data=await response.json();if(requestId!==card._contextRequestId)return;if(!response.ok)throw new Error(data.error||'Could not load chart range');if(extendDaily&&tf==='1d'&&card._contextDaily&&card._contextChart){const previousDates=card._contextDates||[],merged=mergeDailyChartBars(card._contextChart,data.bars),addedBefore=previousDates.length?merged.d.indexOf(previousDates[0]):0,addedAfter=previousDates.length?merged.d.length-merged.d.indexOf(previousDates[previousDates.length-1])-1:0;card._contextChart=merged;card._contextDates=merged.d;card._panOffset=(card._panOffset||0)-addedBefore;if(extendSide&&((extendSide<0&&!addedBefore)||(extendSide>0&&!addedAfter))){card._contextEdgeDone=card._contextEdgeDone||{};card._contextEdgeDone[extendSide]=true;}else card._contextEdgeDone={};}else{card._contextChart=data.bars;card._contextDates=data.dates;card._contextDaily=!!data.daily;card._contextEdgeDone={};
+  try{const response=await fetch('/api/chart-context?'+query.toString()),data=await gapDeepDiveJson(response);if(requestId!==card._contextRequestId)return;if(!response.ok)throw new Error(data.error||'Could not load chart range');if(extendDaily&&tf==='1d'&&card._contextDaily&&card._contextChart){const previousDates=card._contextDates||[],merged=mergeDailyChartBars(card._contextChart,data.bars),addedBefore=previousDates.length?merged.d.indexOf(previousDates[0]):0,addedAfter=previousDates.length?merged.d.length-merged.d.indexOf(previousDates[previousDates.length-1])-1:0;card._contextChart=merged;card._contextDates=merged.d;card._panOffset=(card._panOffset||0)-addedBefore;if(extendSide&&((extendSide<0&&!addedBefore)||(extendSide>0&&!addedAfter))){card._contextEdgeDone=card._contextEdgeDone||{};card._contextEdgeDone[extendSide]=true;}else card._contextEdgeDone={};}else{card._contextChart=data.bars;card._contextDates=data.dates;card._contextDaily=!!data.daily;card._contextEdgeDone={};
     // Save to per-TF cache (all TFs incl. 1d, not during anchor-change extends)
     if(!anchorDate&&!extendDaily){const cacheKey=`${tf}|${days}|${card._sessionDate}`;card._contextCache[cacheKey]={bars:data.bars,dates:data.dates};}
   }if(anchorDate)card._sessionDate=extendDaily?card._sessionDate:anchorDate;}
@@ -2125,9 +2125,10 @@ function consumeGapDeepDiveFilingsJump(){
   run(false);
 }
 async function gapDeepDiveJson(response){
-  const type=response.headers.get('content-type')||'';
-  if(!type.includes('application/json')){const body=(await response.text()).slice(0,100);throw new Error(`Scan API returned HTML instead of JSON (HTTP ${response.status}). Refresh the app after its server has updated. ${body}`);}
-  const data=await response.json();if(!response.ok)throw new Error(data.error||`Request failed (HTTP ${response.status})`);return data;
+  const body=await response.text();
+  if(!body.trim())throw new Error(`Chart request returned an empty response (HTTP ${response.status}); the data service may have timed out. Retry once the request window is clear.`);
+  let data;try{data=JSON.parse(body);}catch{throw new Error(`Chart request returned invalid JSON (HTTP ${response.status}): ${body.slice(0,120)}`);}
+  if(!response.ok)throw new Error(data.error||`Request failed (HTTP ${response.status})`);return data;
 }
 $('#nav_gap_deepdive_btn').onclick=()=>{
   if(location.pathname==='/gap-deepdive')location.assign('/');
@@ -2289,7 +2290,7 @@ async function loadGapDeepDiveAdjacent(cv,baseChart,side){
     return;
   }
   const maxSessions=timeframe==='1d'?550:400;state.days=Math.min(maxSessions,(Number(state.days)||(timeframe==='1d'?200:1))+20);state.daysSelected=true;state.loading=true;const requestId=(state.contextRequestId||0)+1;state.contextRequestId=requestId;
-  const query=new URLSearchParams({ticker:item.ticker,date:anchor,days:String(state.days),tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1'});
+  const query=new URLSearchParams({ticker:item.ticker,date:anchor,days:String(state.days),tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1',source:gapDeepDiveCurrent?.item?.chartSource||'deepdive',seed_date:gapDeepDiveCurrent?.item?.date||baseChart.date});
   try{
     const response=await fetch('/api/chart-context?'+query.toString()),data=await gapDeepDiveJson(response);
     if(requestId!==state.contextRequestId)return;
@@ -2329,7 +2330,7 @@ async function loadGapDeepDiveContext(){
   const requestId=(state.contextRequestId||0)+1;state.contextRequestId=requestId;state.loading=true;
   $('#gap_deepdive_status').textContent=`Loading up to two sessions before and after ${item.ticker} ${formatDateMDY(item.date)}…`;
   $('#gap_chart_avwap_status').textContent=`Loading up to two sessions before and after ${item.ticker} ${formatDateMDY(item.date)}…`;
-  const query=new URLSearchParams({ticker:item.ticker,date:item.date,days:String(days),tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1'});
+  const query=new URLSearchParams({ticker:item.ticker,date:item.date,days:String(days),tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1',source:item.chartSource||'deepdive',seed_date:item.date});
   try{
     const response=await fetch('/api/chart-context?'+query.toString()),data=await gapDeepDiveJson(response);
     if(requestId!==state.contextRequestId)return;
@@ -2356,7 +2357,7 @@ async function loadGapDeepDiveMore(cv,requiredSessions=0){
   const loaded=Math.max(Number(state.loadedDays)||0,Number(state.days)||0);
   if(state.exhaustedTimeframe===timeframe||loaded>=maxSessions){$('#gap_deepdive_status').textContent=`All available candles are loaded for this range.`;return false;}
   const days=Math.min(maxSessions,Math.max(loaded+20,Number(requiredSessions)||0)),requestId=(state.contextRequestId||0)+1;state.contextRequestId=requestId;state.loading=true;
-  const query=new URLSearchParams({ticker:item.ticker,date:item.date,days:String(days),tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1'});
+  const query=new URLSearchParams({ticker:item.ticker,date:item.date,days:String(days),tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1',source:item.chartSource||'deepdive',seed_date:item.date});
   state.morePromise=(async()=>{
     try{
       const response=await fetch('/api/chart-context?'+query.toString()),data=await gapDeepDiveJson(response);
@@ -2390,7 +2391,7 @@ async function loadGapDeepDiveGridDaily(cv,chart){
   }else if(!state.daysSelected)state.days=200;
   const savedDaily=state.contextCache?.['1d'];if(savedDaily&&savedDaily.days===state.days){state.bars=savedDaily.bars;state.dates=savedDaily.dates;state.contextLoaded=true;state.loadedDays=savedDaily.days;drawGapDeepDiveCanvas(cv,chart,'1d',540);return;}if(state.contextLoaded&&state.loadedDays===state.days){drawGapDeepDiveCanvas(cv,chart,'1d',540);return;}
   const requestId=(state.contextRequestId||0)+1;state.contextRequestId=requestId;state.loading=true;
-  const query=new URLSearchParams({ticker:chart.ticker,date:chart.date,days:String(state.days||75),tf:'1d',user:currentUser||'',token:sessionToken||''});
+  const query=new URLSearchParams({ticker:chart.ticker,date:chart.date,days:String(state.days||75),tf:'1d',user:currentUser||'',token:sessionToken||'',source:chart.chartSource||'deepdive',seed_date:chart.date});
   try{
     const response=await fetch('/api/chart-context?'+query.toString()),data=await gapDeepDiveJson(response);
     if(requestId!==state.contextRequestId)return;
@@ -2448,8 +2449,8 @@ async function openReportSpikeChart(evIndex){
   const canReuseCardContext=cardTicker===ticker&&cardDate===String(item.date||'').slice(0,10);
   const timeframe=card?._chartTf||$('#gap_deepdive_tf').value||'2m';
   const pct=Number(item.premarketSpikePct),move=Number.isFinite(pct)?pct/100:(Number(item.chart.premarket_gap_pct)||0);
-  const deepItem={ticker,date:item.date,move,pm_dollar_volume:Number(item.premarketSpikeDollarVolume)||0};
-  const chart={...item.chart,ticker,date:item.date,pm_high_pct:move,after_hours:true};
+  const deepItem={ticker,date:item.date,move,pm_dollar_volume:Number(item.premarketSpikeDollarVolume)||0,chartSource:'polygon'};
+  const chart={...item.chart,ticker,date:item.date,pm_high_pct:move,after_hours:true,chartSource:'polygon'};
   gapDeepDiveCurrent={item:deepItem,jobId:null,chart,float_shares:Number(item.float_shares??chart.float_shares)||null};
   $('#gap_chart_title').textContent=ticker;$('#gap_chart_date').textContent=formatDateMDY(item.date);
   $('#gap_chart_stats').textContent=`Historical premarket spike +${(move*100).toFixed(1)}% · $${(deepItem.pm_dollar_volume/1e6).toFixed(1)}M PM volume`;

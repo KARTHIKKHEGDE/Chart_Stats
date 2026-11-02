@@ -1,7 +1,6 @@
 """Charts feature module."""
 from chart_app.application import (
     PM_START,
-    RG_END,
     RG_START,
     _db_validate_session,
     app,
@@ -12,7 +11,6 @@ from chart_app.application import (
     cput,
     dt,
     jsonify,
-    live_snapshot,
     load_daily,
     metrics,
     minute_df,
@@ -734,9 +732,7 @@ def gap_deepdive_chart(job_id):
 
 
 def _gap_deepdive_chart_payload(ticker,day,scan_item):
-    # Raw one-minute candles are cached by minute_df, but packing candles and
-    # derived chart fields on every open still costs time. Persist this ready-
-    # to-render payload as well so repeat chart visits are disk-cache hits.
+    # Store the prepared Deepdive event chart so repeat opens are disk-cache hits.
     chart_key=f'{ticker.upper()}|{day}'
     payload_key = 'gap_chart_payload_' + hashlib.sha1(chart_key.encode()).hexdigest()
     cached = cget(payload_key)
@@ -748,10 +744,7 @@ def _gap_deepdive_chart_payload(ticker,day,scan_item):
         saved_item=next((item for item in (saved or {}).get('results',[]) if item.get('ticker')==ticker and item.get('date')==day),None)
         pc=(saved_item or {}).get('previous_close')
     if not pc: raise ValueError('Cached previous close is unavailable for this session.')
-    # minute_df checks the per-session JSON cache, then the bundled JSON cache,
-    # and only fetches Polygon when neither contains this session. It persists
-    # newly fetched raw candles back to the per-session JSON cache.
-    frame=minute_df(ticker,day)
+    frame=minute_df(ticker,day,source='deepdive')
     if frame is None or frame.empty: raise ValueError('Cached intraday candles are unavailable.')
     mm=frame.index.hour*60+frame.index.minute
     pm=frame[(mm>=PM_START)&(mm<RG_START)]
@@ -1828,7 +1821,8 @@ def chart_context_prefetch():
         for timeframe in ('1m','2m','5m'):
             with app.test_request_context('/api/chart-context',query_string={
                     'user':user,'token':token,'ticker':ticker,'date':day,
-                    'days':'5','tf':timeframe,'postmarket':'1'}):
+                    'days':'5','tf':timeframe,'postmarket':'1',
+                    'source':'deepdive','seed_date':day}):
                 g.gap_chart_context_session_validated=True
                 response=chart_context()
                 if isinstance(response,tuple):
@@ -1852,19 +1846,24 @@ def chart_context():
     """Lazily load nearby daily or multi-session minute bars for a chart card."""
     user=(request.args.get("user") or "").strip().lower(); token=(request.args.get("token") or "").strip()
     ticker=(request.args.get("ticker") or "").strip().upper(); day=(request.args.get("date") or "").strip()
+    source=(request.args.get("source") or "polygon").strip().lower()
+    seed_date=(request.args.get("seed_date") or day).strip()
     tf=(request.args.get("tf") or "15m").strip().lower()
     include_after_hours=request.args.get("postmarket", "1") != "0"
     try: count=int(request.args.get("days", "5"))
     except ValueError: count=5
     if user not in _auth.ALLOWED_USERS or (not getattr(g,'gap_chart_context_session_validated',False) and not _db_validate_session(user,token)): return jsonify({"error":"Unauthorized"}),401
     if not re.fullmatch(r"[A-Z.\-]{1,10}",ticker): return jsonify({"error":"Invalid ticker"}),400
+    if source not in ("polygon","deepdive"): return jsonify({"error":"Invalid chart data source"}),400
     try: dt.date.fromisoformat(day)
     except ValueError: return jsonify({"error":"Invalid session date"}),400
+    try: dt.date.fromisoformat(seed_date)
+    except ValueError: return jsonify({"error":"Invalid seed session date"}),400
     if tf not in ("1m","2m","3m","5m","15m","30m","1h","1d"): return jsonify({"error":"Invalid timeframe"}),400
     count=max(1,min(550 if tf=='1d' else 400,count))
-    # v4 discards older one-session context payloads so Deepdive rebuilds the
-    # requested range from the bundled per-ticker +/-2-session candle JSON.
-    context_key=f'gap_chart_context_v4_{ticker}_{day}_{tf}_{count}_{int(include_after_hours)}'
+    # Source is part of the cache key: Polygon-only Gap-Up bars must never be
+    # served from Deepdive's optional event-neighbor JSON seed.
+    context_key=f'gap_chart_context_v5_{source}_{ticker}_{day}_{seed_date}_{tf}_{count}_{int(include_after_hours)}'
     context_ttl=(30 if day==dt.date.today().isoformat() else
                  30*86400 if tf=='1d' else 3600)
     cached_context=cget(context_key,context_ttl)
@@ -1876,25 +1875,6 @@ def chart_context():
             # an empty chart for an otherwise valid historical session.
             daily=_gap_deepdive_daily_history(ticker,force=True)
             idx=next((i for i,r in enumerate(daily) if r["date"]==day),None)
-        live=None
-        if day==dt.date.today().isoformat():
-            try:
-                candidate=live_snapshot(ticker)
-                live_day=candidate["date"].isoformat() if hasattr(candidate["date"],"isoformat") else str(candidate["date"])
-                if live_day==day:
-                    live=candidate; live_df=live["df"]
-                    regular=live_df[(live_df.index.hour*60+live_df.index.minute>=RG_START)&
-                                    (live_df.index.hour*60+live_df.index.minute<RG_END)]
-                    today_row={"date":day,"o":float(regular["o"].iloc[0]) if not regular.empty else None,
-                               "h":float(live_df["h"].max()) if not live_df.empty else None,
-                               "l":float(live_df["l"].min()) if not live_df.empty else None,
-                               "c":float(live_df["c"].iloc[-1]) if not live_df.empty else None,
-                               "v":float(live_df["v"].sum()) if not live_df.empty else None,
-                               "vw":float(live_df["vw"].iloc[-1]) if not live_df.empty and "vw" in live_df else None}
-                    daily=[row for row in daily if row["date"]<day]+[today_row]
-                    idx=len(daily)-1
-            except Exception:
-                live=None
         if idx is None: return jsonify({"error":f"No daily data for {day}"}),404
         # Keep the requested number of sessions even when the anchor is the
         # newest (or oldest) available session.
@@ -1914,41 +1894,65 @@ def chart_context():
             result={"bars":bars,"dates":[r["date"] for r in rows],"daily":True,"metrics":daily_metrics}
             cput(context_key,result)
             return jsonify(result)
-        startday,endday=rows[0]["date"],rows[-1]["date"]
-        from chart_app.market_data import _deepdive_candle_rows
-        bundled=[_deepdive_candle_rows(ticker,row['date']) for row in rows]
-        if all(bundled):
-            # The selected gap day and +/- two neighboring sessions are shipped
-            # as a private repo seed, so this path needs no cold Polygon request.
-            frames=[poly_frame(raw) for raw in bundled]
+        # Only Deepdive may use bundled intraday JSON, and only for the event
+        # session plus two neighboring trading sessions on either side. Missing
+        # seed sessions and all wider history are fetched from Polygon.
+        seed_frames={}
+        if source=='deepdive' and tf!='1d':
+            seed_idx=next((i for i,r in enumerate(daily) if r['date']==seed_date),None)
+            if seed_idx is not None:
+                seed_dates={r['date'] for r in daily[max(0,seed_idx-2):min(len(daily),seed_idx+3)]}
+                from chart_app.market_data import _deepdive_candle_rows
+                for row in rows:
+                    if row['date'] not in seed_dates:
+                        continue
+                    raw=_deepdive_candle_rows(ticker,row['date'])
+                    if raw:
+                        seeded_frame=poly_frame(raw)
+                        if not seeded_frame.empty:
+                            seed_frames[row['date']]=seeded_frame
+        polygon_dates=[row['date'] for row in rows if row['date'] not in seed_frames]
+        polygon_day_frames={}
+        uncached_dates=[]
+        for date in polygon_dates:
+            cached_rows=cget(f'{ticker}_{date}_1m_polygon_v1') if date<dt.date.today().isoformat() else None
+            if cached_rows is None:
+                uncached_dates.append(date)
+            else:
+                polygon_day_frames[date]=poly_frame(cached_rows) if cached_rows else pd.DataFrame()
+        chunk_ranges={}
+        if 0<len(uncached_dates)<=5:
+            # The initial +/-2-session window fits in one small Polygon request.
+            first,last=uncached_dates[0],uncached_dates[-1]
+            chunk_ranges[first]=(first,last)
         else:
-            # Stable calendar-week chunks let a wider pan reuse warmed data,
-            # even as the rolling daily history range advances.
-            chunk_ranges={}
-            for row in rows:
-                session=dt.date.fromisoformat(row['date'])
+            # Wider zoom-out ranges are split by week to keep each response small.
+            for date in uncached_dates:
+                session=dt.date.fromisoformat(date)
                 first=session-dt.timedelta(days=session.weekday())
                 last=first+dt.timedelta(days=4)
                 chunk_ranges[first.isoformat()]=(first.isoformat(),last.isoformat())
-            chunks=list(chunk_ranges.values())
-            from concurrent.futures import ThreadPoolExecutor
-            def read_chunk(bounds):
-                first,last=bounds
-                raw=_gap_chart_context_minute_chunk(ticker,first,last)
-                return poly_frame(raw) if raw else pd.DataFrame()
-            with ThreadPoolExecutor(max_workers=min(8,max(1,len(chunks)))) as pool:
-                frames=list(pool.map(read_chunk,chunks))
-        frames=[part for part in frames if not part.empty]
-        frame=pd.concat(frames).sort_index() if frames else pd.DataFrame()
+        chunks=list(chunk_ranges.values())
+        from concurrent.futures import ThreadPoolExecutor
+        def read_chunk(bounds):
+            first,last=bounds
+            raw=_gap_chart_context_minute_chunk(ticker,first,last)
+            return poly_frame(raw) if raw else pd.DataFrame()
+        with ThreadPoolExecutor(max_workers=min(8,max(1,len(chunks)))) as pool:
+            fetched_frames=list(pool.map(read_chunk,chunks)) if chunks else []
+        fetched_frames=[part for part in fetched_frames if not part.empty]
+        polygon_frame=pd.concat(fetched_frames).sort_index() if fetched_frames else pd.DataFrame()
         chunks=[]
         for date in [r["date"] for r in rows]:
-            if live is not None and date==day:
-                dayframe=live["df"]
-            elif not frame.empty:
-                dayframe=frame[frame.index.date==dt.date.fromisoformat(date)]
+            if date in seed_frames:
+                dayframe=seed_frames[date]
+            elif date in polygon_day_frames:
+                dayframe=polygon_day_frames[date]
+            elif not polygon_frame.empty:
+                dayframe=polygon_frame[polygon_frame.index.date==dt.date.fromisoformat(date)]
             else:
                 continue
-            prepared_key=f'gap_chart_session_v2_{ticker}_{date}_{tf}_{int(include_after_hours)}'
+            prepared_key=f'gap_chart_session_v3_{source}_{ticker}_{date}_{tf}_{int(include_after_hours)}'
             prepared_ttl=30 if date>=dt.date.today().isoformat() else 30*86400
             packed=cget(prepared_key,prepared_ttl)
             if packed is None:

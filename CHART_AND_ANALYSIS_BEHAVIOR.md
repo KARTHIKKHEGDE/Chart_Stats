@@ -14,6 +14,7 @@ This note records the requested behavior for the Gap-Up and Deepdive charts and 
 - When a gap-up or premarket-spike event is selected, load the event session and up to two trading sessions before and after it by default. Keep the selected event centered in the range. Use the same default in Gap-Up and Deepdive.
 - If fewer than five sessions exist in the available data, show the sessions that are available and make the shortfall clear.
 - Load additional sessions automatically as the user zooms out or pans to the edge of the loaded range. Keep the current event and viewport stable while extending the data. Apply the same lazy-loading behavior to both chart views.
+- Gap-Up chart candles and daily history must come from Polygon only. Deepdive may use bundled intraday JSON only for the selected event and its two trading sessions on either side; if a seed session is missing, fetch that session from Polygon. All sessions beyond that five-session window come from Polygon.
 - Compare the current session with historical premarket-spike sessions for that ticker. Use the historical spike sessions as the comparison set; do not limit the comparison to the event day or to regular-hours-only candles.
 - Keep the historical comparison ticker-specific. Data for one ticker or event must never appear in another ticker's chart.
 
