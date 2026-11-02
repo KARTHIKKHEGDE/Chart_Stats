@@ -1862,7 +1862,9 @@ def chart_context():
     except ValueError: return jsonify({"error":"Invalid session date"}),400
     if tf not in ("1m","2m","3m","5m","15m","30m","1h","1d"): return jsonify({"error":"Invalid timeframe"}),400
     count=max(1,min(550 if tf=='1d' else 400,count))
-    context_key=f'gap_chart_context_v3_{ticker}_{day}_{tf}_{count}_{int(include_after_hours)}'
+    # v4 discards older one-session context payloads so Deepdive rebuilds the
+    # requested range from the bundled per-ticker +/-2-session candle JSON.
+    context_key=f'gap_chart_context_v4_{ticker}_{day}_{tf}_{count}_{int(include_after_hours)}'
     context_ttl=(30 if day==dt.date.today().isoformat() else
                  30*86400 if tf=='1d' else 3600)
     cached_context=cget(context_key,context_ttl)

@@ -2473,7 +2473,10 @@ async function openReportSpikeChart(evIndex){
     item=card?._chartItem||tab.EV?.[evIndex];
   }
   if(!item?.chart)return;
-  const ticker=String(tab.result?.head?.ticker||item.ticker||'').toUpperCase();
+  const ticker=String(item.ticker||tab.result?.head?.ticker||'').toUpperCase();
+  const cardTicker=String(card?._chartItem?.ticker||tab.result?.head?.ticker||'').toUpperCase();
+  const cardDate=String(card?._sessionDate||card?._chartItem?.date||'').slice(0,10);
+  const canReuseCardContext=cardTicker===ticker&&cardDate===String(item.date||'').slice(0,10);
   const timeframe=card?._chartTf||$('#gap_deepdive_tf').value||'2m';
   const pct=Number(item.premarketSpikePct),move=Number.isFinite(pct)?pct/100:(Number(item.chart.premarket_gap_pct)||0);
   const deepItem={ticker,date:item.date,move,pm_dollar_volume:Number(item.premarketSpikeDollarVolume)||0};
@@ -2489,9 +2492,9 @@ async function openReportSpikeChart(evIndex){
   configureGapDeepDiveTimeframe(timeframe);$('#gap_chart_tf').value=timeframe;
   if(timeframe!=='1d'){
     state.days=5;state.daysSelected=true;
-    const cached=card?._contextCache?.[`${timeframe}|5|${item.date}`];
-    const bars=card?._contextChart||cached?.bars;
-    const dates=card?._contextDates||cached?.dates||bars?.d||[];
+    const cached=canReuseCardContext?card?._contextCache?.[`${timeframe}|5|${item.date}`]:null;
+    const bars=canReuseCardContext?(card?._contextChart||cached?.bars):null;
+    const dates=canReuseCardContext?(card?._contextDates||cached?.dates||bars?.d||[]):[];
     if(bars?.t?.length&&dates.includes(item.date)){
       state.bars=bars;state.dates=dates;state.loadedDays=dates.length;state.timeframe=timeframe;state.contextLoaded=true;state.panOffset=0;
       state.contextCache=state.contextCache||{};state.contextCache[timeframe]={bars,dates,days:dates.length,daily:false};
