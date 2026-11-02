@@ -2137,6 +2137,7 @@ Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
 
         # Gather context: news + grade + gap history + sec data already in report
         news_items   = data.get("news", [])          # from frontend report
+        news_status  = str(data.get("news_status", "") or "").strip()
         grade_info   = data.get("grade", {})          # grade/verdict
         events       = data.get("events", [])         # historical gap events
         sec_filings  = data.get("sec_filings", [])    # filing rows already loaded in ticker report
@@ -2144,7 +2145,7 @@ Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
         current_price= data.get("current_price", "")
         gap_pct      = data.get("gap_pct", "")
 
-        context_fingerprint=json.dumps({'ticker':ticker,'news':news_items,'events':events,'sec_filings':sec_filings,
+        context_fingerprint=json.dumps({'ticker':ticker,'news':news_items,'news_status':news_status,'events':events,'sec_filings':sec_filings,
                                         'dilution_text':dilution_ctx,'grade':grade_info,'current_price':current_price,'gap_pct':gap_pct},
                                        sort_keys=True,default=str,separators=(',',':'))
         cache_key = "aio_" + __import__('hashlib').sha1(context_fingerprint.encode()).hexdigest()[:16]
@@ -2155,9 +2156,11 @@ Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
         # Compute real intraday VWAP stats from minute bars
         event_dates = [e.get('date', '') for e in (events or []) if e.get('date', '')]
         stats_fingerprint=json.dumps(event_dates[:15],separators=(',',':'))
-        stats_cache_key='aio_intraday_v1_'+hashlib.sha256(
+        stats_cache_key='aio_intraday_v2_'+hashlib.sha256(
             (ticker+'|'+stats_fingerprint).encode('utf-8')).hexdigest()[:24]
-        intraday_stats=cget(stats_cache_key,600)
+        # The fingerprint only contains completed historical event dates, so the
+        # result is stable until a new event changes the key. Keep it warm for a day.
+        intraday_stats=cget(stats_cache_key,24*60*60)
         if intraday_stats is None:
             intraday_stats=_compute_intraday_stats(ticker,event_dates)
             if intraday_stats is not None:cput(stats_cache_key,intraday_stats)
@@ -2166,7 +2169,8 @@ Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
         news_text = "\n".join(
             f"- [{item.get('published','')[:10]}] {item.get('title','')} ({item.get('publisher','')})"
             for item in (news_items or [])[:8]
-        ) or "No recent news available."
+        ) or ("Press-release headlines are still loading; do not treat this as evidence that there is no news."
+              if "still loading" in news_status.lower() else "No recent news available.")
 
         # Format gap history
         fade_count = sum(1 for e in events if float(e.get("close_pct", e.get("fade_pct", 0)) or 0) < 0)

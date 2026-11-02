@@ -31,28 +31,44 @@ yf = app.yf
 _DEEPDIVE_CANDLE_PATH = Path(__file__).resolve().parent.parent / "data" / "gap_deepdive_candles_2026.json"
 _DEEPDIVE_NEIGHBOR_CANDLE_DIR = Path(__file__).resolve().parent.parent / "data" / "gap_deepdive_neighbor_candles_2026"
 _DAILY_CANDLE_SEED_PATH = Path(__file__).resolve().parent.parent / "data" / "gap_deepdive_daily_2026.json"
+_DEEPDIVE_CANDLE_CACHE_LOCK = threading.RLock()
+_DEEPDIVE_NEIGHBOR_CANDLE_CACHE = {}
+_DEEPDIVE_MAIN_CANDLE_CACHE = None
+_DEEPDIVE_NEIGHBOR_CANDLE_CACHE_MAX = 6
 _DAILY_CANDLE_REFRESH_LOCK = threading.Lock()
 _DAILY_CANDLE_REFRESH_PENDING = set()
 _DAILY_CANDLE_REFRESH_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="daily-candle-refresh")
 
 
 def _deepdive_candle_rows(ticker, day):
-    """Read bundled historical deepdive candles before requesting Polygon."""
+    """Read bundled historical candles, keeping parsed seed files warm in memory."""
+    global _DEEPDIVE_MAIN_CANDLE_CACHE
     ticker=str(ticker).upper()
-    path=_DEEPDIVE_NEIGHBOR_CANDLE_DIR/f"{ticker}.json.gz"
-    try:
-        with gzip.open(path,"rt",encoding="utf-8") as source:
-            payload=json.load(source)
-        sessions=payload.get("sessions",{}) if isinstance(payload,dict) else {}
+    with _DEEPDIVE_CANDLE_CACHE_LOCK:
+        sessions=_DEEPDIVE_NEIGHBOR_CANDLE_CACHE.get(ticker)
+        if sessions is None:
+            path=_DEEPDIVE_NEIGHBOR_CANDLE_DIR/f"{ticker}.json.gz"
+            try:
+                with gzip.open(path,"rt",encoding="utf-8") as source:
+                    payload=json.load(source)
+                sessions=payload.get("sessions",{}) if isinstance(payload,dict) else {}
+            except Exception:
+                sessions={}
+            _DEEPDIVE_NEIGHBOR_CANDLE_CACHE[ticker]=sessions
+            if len(_DEEPDIVE_NEIGHBOR_CANDLE_CACHE)>_DEEPDIVE_NEIGHBOR_CANDLE_CACHE_MAX:
+                oldest=next(iter(_DEEPDIVE_NEIGHBOR_CANDLE_CACHE))
+                if oldest!=ticker:_DEEPDIVE_NEIGHBOR_CANDLE_CACHE.pop(oldest,None)
+        else:
+            _DEEPDIVE_NEIGHBOR_CANDLE_CACHE[ticker]=sessions
         bars=sessions.get(day) or []
-    except Exception:
-        bars=[]
-    if not bars:
-        try:
-            payload=json.loads(_DEEPDIVE_CANDLE_PATH.read_text(encoding="utf-8"))
-            bars=(payload.get("sessions") or {}).get(f"{ticker}|{day}") or []
-        except Exception:
-            bars=[]
+        if not bars:
+            if _DEEPDIVE_MAIN_CANDLE_CACHE is None:
+                try:
+                    payload=json.loads(_DEEPDIVE_CANDLE_PATH.read_text(encoding="utf-8"))
+                    _DEEPDIVE_MAIN_CANDLE_CACHE=payload.get("sessions",{}) if isinstance(payload,dict) else {}
+                except Exception:
+                    _DEEPDIVE_MAIN_CANDLE_CACHE={}
+            bars=_DEEPDIVE_MAIN_CANDLE_CACHE.get(f"{ticker}|{day}") or []
     if not bars:
         return None
     return [{"t": t, "o": o, "h": h, "l": l, "c": c, "v": v} for t, o, h, l, c, v in bars]

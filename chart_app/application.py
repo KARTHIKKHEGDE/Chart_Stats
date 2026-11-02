@@ -485,8 +485,17 @@ def run_job(job, t, refresh):
         ]
         for th in stage1_threads:
             th.start()
-        for th in stage1_threads:
+        # Live quote, daily history, and split data affect the core report.
+        # SEC shares, reference metadata, type, and news are optional enrichments;
+        # let them finish in the background instead of holding the whole report.
+        for th in stage1_threads[:3]:
             th.join()
+        optional_deadline=time.monotonic()+1.25
+        for th in stage1_threads[3:]:
+            th.join(max(0.0,optional_deadline-time.monotonic()))
+        sec_history_pending=stage1_threads[4].is_alive()
+        security_stats_pending=stage1_threads[5].is_alive()
+        news_pending=stage1_threads[6].is_alive()
 
         if _err[0]:
             raise _err[0]
@@ -539,42 +548,34 @@ def run_job(job, t, refresh):
 
         idxs = detect_events(daily, splits, live["date"])
 
-        # ------------------------------------------------------------------ STAGE 2
-        # Pre-fetch all 1-min files in parallel.
-        # With N keys the pool fires up to N concurrent requests; each key self-throttles
-        # to its own 12-second window via _acquire_slot, so rate limits are strictly respected.
-        n_keys   = max(1, len(_key_pool))
-        n_events = len(idxs)
-
-        if n_events:
-            job["msg"] = (f"Fetching 1-min data for {n_events} event days "
-                          f"in parallel ({n_keys} keys active)…")
-
-            fetch_args = [(t, i, daily) for i in idxs]
-            workers = min(n_keys, max(n_events, 12))
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                futs = {pool.submit(_prefetch_minute, a): a for a in fetch_args}
-                done = 0
-                for fut in as_completed(futs):
-                    done += 1
-                    _, day, ok = fut.result()
-                    job["msg"] = (f"Cached {done}/{n_events} minute files… "
-                                  f"({day}{'  ✓' if ok else '  ✗ skipped'})")
-
-        # ------------------------------------------------------------------ STAGE 3
-        # analyze_event is now fully CPU-bound (all 1-min data is in cache).
-        # Run all events in parallel.
-        job["msg"] = "Analyzing events (parallel)…"
+        # ------------------------------------------------------------------ STAGE 2 + 3
+        # Fetch and analyze each event as soon as its minute bars are available.
+        # This overlaps CPU work with provider/network latency instead of waiting
+        # for every historical session to finish downloading first.
+        n_keys=max(1,len(_key_pool))
+        n_events=len(idxs)
+        results={}
 
         def _analyze(i):
             return i, analyze_event(t, i, daily, ctx)
 
-        results = {}
-        with ThreadPoolExecutor(max_workers=min(20, max(1, n_events))) as pool:
-            futs = {pool.submit(_analyze, i): i for i in idxs}
-            for fut in as_completed(futs):
-                idx_i, e = fut.result()
-                results[idx_i] = e
+        if n_events:
+            job["msg"]=f"Loading and analyzing {n_events} historical sessions in parallel…"
+            fetch_args=[(t,i,daily) for i in idxs]
+            fetch_workers=min(n_keys,max(n_events,12))
+            analyze_workers=min(8,n_events)
+            with ThreadPoolExecutor(max_workers=fetch_workers,thread_name_prefix="gap-minute-fetch") as fetch_pool:
+                with ThreadPoolExecutor(max_workers=analyze_workers,thread_name_prefix="gap-event-analysis") as analyze_pool:
+                    fetch_futures={fetch_pool.submit(_prefetch_minute,arg):arg for arg in fetch_args}
+                    analyze_futures={}
+                    for completed,future in enumerate(as_completed(fetch_futures),1):
+                        idx_i,day,ok=future.result()
+                        analyze_futures[analyze_pool.submit(_analyze,idx_i)]=idx_i
+                        job["msg"]=(f"Loaded {completed}/{n_events} historical sessions; analyzing in parallel… "
+                                    f"({day}{' · cached' if ok else ' · no minute bars'})")
+                    for future in as_completed(analyze_futures):
+                        idx_i,event=future.result()
+                        results[idx_i]=event
 
         events, skipped = [], 0
         for i in idxs:
@@ -648,8 +649,12 @@ def run_job(job, t, refresh):
             notes.append(f"{skipped} event(s) skipped: no 1-min data from Polygon (or below MIN_PM_VOL).")
         if not events:
             notes.append("No qualifying gap-ups found in the last 365 days.")
-        if not sec:
+        if sec_history_pending:
+            notes.append("SEC shares-outstanding history is still loading; historical float rotation uses the latest available float for now. Refresh to update it.")
+        elif not sec:
             notes.append("No SEC shares-outstanding history found; rotation uses today's float (split-adjusted).")
+        if security_stats_pending:
+            notes.append("Polygon security metadata is still loading; the report uses the available price/share fallback for now.")
         for error in live.get("security_stats_errors", []):
             notes.append(f"Latest security metadata lookup issue: {error}")
         notes.append("Historical data is point-in-time for tickers still listed; delisted names are missing, "
@@ -686,7 +691,8 @@ def run_job(job, t, refresh):
                             if reverse_splits else "No reverse splits found in Polygon's available split history.")
         recent_news = _news_res[0] or []
         report["news"] = recent_news
-        report["news_status"] = (_scanner_details.get(t, {}).get("news_status") or
+        report["news_status"] = ("Latest press releases are still loading; refresh the report to update this section." if news_pending else
+                                  _scanner_details.get(t, {}).get("news_status") or
                                   ("Latest press releases found on Yahoo Finance" if recent_news else
                                    "No press releases found on Yahoo Finance"))
         if recent_news:

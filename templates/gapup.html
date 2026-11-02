@@ -870,15 +870,16 @@ function getDilutionHistory(ticker,asOfDate=''){
   const pending=(async()=>{
     const started=await (dilutionWarmJobs.get(key)||warmDilutionHistory(symbol,asOfDate));
     if(!started)throw new Error('Could not start dilution analysis.');
-    const began=Date.now();let errors=0;
+    const began=Date.now();let errors=0,pollDelay=0;
     while(Date.now()-began<15*60*1000){
-      await new Promise(resolve=>setTimeout(resolve,1400));
+      if(pollDelay)await new Promise(resolve=>setTimeout(resolve,pollDelay));
       try{
         const response=await fetch('/api/sec-dilution-history/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...started.payload,job_id:started.job_id})});
         const job=await response.json();if(!response.ok)throw new Error(job.error||`Dilution status failed (HTTP ${response.status}).`);
         errors=0;
         if(job.status==='complete'){dilutionReportCache.set(key,job.result);return job.result;}
         if(job.status==='error')throw new Error(job.error||'Could not analyze dilution history.');
+        pollDelay=pollDelay?Math.min(1600,Math.round(pollDelay*1.5)):350;
       }catch(error){
         errors++;
         if(errors>=25)throw error;
@@ -975,7 +976,7 @@ function aioPayload(tab,ticker,dilutionReport){
   const r=tab?.result||{},h=r.head||{},news=(r.news||[]).slice(0,8);
   const events=(tab?.EV||[]).filter(x=>!x.sim).slice(0,20).map(x=>({date:x.date,gap_pct:x.gap||x.gapPct,grade:x.grade,verdict:x.verdict,close_pct:x.closePct??x.close_pct??0}));
   const sec_filings=[...(tab?.container?.querySelectorAll('.recent-filing-row')||[])].slice(0,25).map(row=>({form:row.querySelector('.recent-filing-form')?.textContent?.trim()||'',title:row.querySelector('.recent-filing-title')?.textContent?.trim()||'',filed_at:row.querySelector('.recent-filing-age')?.getAttribute('datetime')||''})).filter(item=>item.title);
-  return {user:currentUser||'',token:sessionToken||'',ticker,news,events,sec_filings,dilution_text:dilutionTextForAio(dilutionReport),grade:{grade:h.grade,verdict:h.verdict,score:h.score,n:h.n},current_price:h.price||h.last_price||'',gap_pct:h.gap_pct||h.gap||''};
+  return {user:currentUser||'',token:sessionToken||'',ticker,news,news_status:r.news_status||'',events,sec_filings,dilution_text:dilutionTextForAio(dilutionReport),grade:{grade:h.grade,verdict:h.verdict,score:h.score,n:h.n},current_price:h.price||h.last_price||'',gap_pct:h.gap_pct||h.gap||''};
 }
 function getAioSummary(tab,ticker,dilutionReport){
   const payload=aioPayload(tab,ticker,dilutionReport),key=JSON.stringify(payload);
@@ -987,7 +988,7 @@ function getAioSummary(tab,ticker,dilutionReport){
 }
 function warmAioSummary(tab,ticker){
   const asOf=tab?.container?.querySelector('#recent_filings_asof')?.value||'';
-  getDilutionHistory(ticker,asOf).then(report=>getAioSummary(tab,ticker,report)).catch(error=>console.debug('All-in-One prefetch unavailable:',error.message));
+  return getDilutionHistory(ticker,asOf).then(report=>getAioSummary(tab,ticker,report)).catch(error=>{console.debug('All-in-One prefetch unavailable:',error.message);});
 }
 function latestFilingsAsOfDate(){
   const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
@@ -1012,12 +1013,13 @@ $('#t').addEventListener('input',()=>{
 
 async function openAioModal(event,btn){
   if(event)event.stopPropagation();
-  const ticker=(btn||event?.target?.closest('[data-ticker]'))?.dataset?.ticker||activeTab||'';
-  const tab=openTabs[activeTab]||Object.values(openTabs)[0];
+  const ticker=String((btn||event?.target?.closest('[data-ticker]'))?.dataset?.ticker||activeTab||'').trim().toUpperCase();
+  const tab=openTabs[ticker]||(activeTab===ticker?openTabs[activeTab]:null);
   const h=tab?.result?.head||{};
   const modal=$('#aio_modal'),status=$('#aio_status'),content=$('#aio_content');
   $('#aio_title').textContent=`All-in-One Summary — ${ticker||'loading…'}`;
   modal.style.display='flex';content.hidden=true;content.innerHTML='';
+  if(!tab||String(h.ticker||'').toUpperCase()!==ticker){status.textContent=`Load the ${ticker} report before opening its AI summary.`;return;}
   const asOf=tab?.container?.querySelector('#recent_filings_asof')?.value||'';
   status.textContent='Using the shared SEC dilution review and preparing the summary in the background. You can close this window and return later.';
   try{
@@ -1215,7 +1217,7 @@ function switchTab(t){
 
 function closeTab(t){
   if(!openTabs[t]) return;
-  if(openTabs[t].timer) clearInterval(openTabs[t].timer);
+  if(openTabs[t].timer) clearTimeout(openTabs[t].timer);
   if(openTabs[t].container) openTabs[t].container.remove();
   delete openTabs[t];
 
@@ -1278,7 +1280,7 @@ async function run(refresh){
     }
   }
 
-  if(tab.timer) clearInterval(tab.timer);
+  if(tab.timer) clearTimeout(tab.timer);
 
   try {
     const r = await fetch('/api/start?ticker=' + encodeURIComponent(t) + '&user=' + encodeURIComponent(currentUser) + '&token=' + encodeURIComponent(sessionToken) + (refresh ? '&refresh=1' : ''));
@@ -1290,6 +1292,7 @@ async function run(refresh){
       return;
     }
 
+    let pollDelay=250;
     const poll = async () => {
       try {
         const s = await (await fetch('/api/job/' + j.job)).json();
@@ -1297,9 +1300,11 @@ async function run(refresh){
           if(!tab.result){
             tab.container.innerHTML = `<span class="d">${esc(s.msg)}</span>`;
           }
+          tab.timer=setTimeout(poll,pollDelay);
+          pollDelay=Math.min(1200,Math.round(pollDelay*1.5));
           return;
         }
-        clearInterval(tab.timer);
+        clearTimeout(tab.timer);
         tab.isRunning = false;
         renderTabBar();
         if(s.status === 'error'){
@@ -1308,14 +1313,13 @@ async function run(refresh){
         }
         renderTab(tab, s.result, refresh);
       } catch(e){
-        clearInterval(tab.timer);
+        clearTimeout(tab.timer);
         tab.isRunning = false;
         renderTabBar();
         tab.container.innerHTML = `<span class="r">Could not load report: ${esc(e?.message || e)}</span>`;
       }
     };
 
-    tab.timer = setInterval(poll, 250);
     poll();
   } catch(e) {
     tab.isRunning = false;
@@ -1507,9 +1511,8 @@ function renderTab(tab, r, isRefresh){
   if(filingsDate){const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()),part=k=>parts.find(x=>x.type===k)?.value||'00',today=`${part('year')}-${part('month')}-${part('day')}`,jumpDate=filingsJump?.ticker===String(h.ticker).toUpperCase()?normalizeFilingsDate(filingsJump.date):'',savedDate=normalizeFilingsDate(recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]);filingsDate.max=today;filingsDate.value=jumpDate||savedDate||today;recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]=filingsDate.value;filingsDate.onchange=()=>{recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]=filingsDate.value;loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker,filingsDate.value);};}
   if(filingsJump&&filingsJump.ticker===String(h.ticker).toUpperCase()&&filingsDate){const jumpDate=normalizeFilingsDate(filingsJump.date);if(jumpDate){filingsDate.value=jumpDate;recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]=jumpDate;window.gapDeepDiveFilingsJump=null;setTimeout(()=>{tab.container.querySelector('.recent-filings-panel')?.scrollIntoView({behavior:'smooth',block:'center'});requestDilutionHistory(h.ticker,jumpDate);},350);}}
   loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker,filingsDate?.value||'').then(()=>{
-    if(openTabs[h.ticker]===tab&&tab.result===r)warmAioSummary(tab,h.ticker);
-  });
-  warmNewsSummaries(h.ticker,newsItems);
+    if(openTabs[h.ticker]===tab&&tab.result===r)return warmAioSummary(tab,h.ticker);
+  }).finally(()=>warmNewsSummaries(h.ticker,newsItems));
   getDilutionHistory(h.ticker,filingsDate?.value||'').catch(error=>console.debug('Dilution prefetch unavailable:',error.message));
   tab.container.querySelectorAll('table.sort').forEach(makeSortable);
 
@@ -1569,7 +1572,7 @@ function drawEvAll(evList, containerEl){
   const bzEl = cEl.querySelector('#bz');
   const bzChecked = bzEl ? bzEl.checked : false;
   const tabForCharts=Object.values(openTabs).find(tab=>tab.container===cEl);
-  if(!window.evLazyObserver)window.evLazyObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){entry.target._chartVisible=true;const t=Object.values(openTabs).find(x=>x.container.contains(entry.target));if(t){if(entry.target._chartItem?.premarketSpikeChart)loadPremarketSpikeChart(t,entry.target,entry.target._chartItem);prefetchEvCardContexts(entry.target,t);drawEvAll(t.EV,t.container);}window.evLazyObserver.unobserve(entry.target);}}),{rootMargin:'450px 0px'});
+  if(!window.evLazyObserver)window.evLazyObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){entry.target._chartVisible=true;const t=Object.values(openTabs).find(x=>x.container.contains(entry.target));if(t){if(entry.target._chartItem?.premarketSpikeChart)loadPremarketSpikeChart(t,entry.target,entry.target._chartItem);drawEvAll(t.EV,t.container);}window.evLazyObserver.unobserve(entry.target);}}),{rootMargin:'450px 0px'});
   list.forEach((c,i)=>{
     const card=cEl.querySelector(`[data-ev-slot="${i}"]`), cv=cEl.querySelector('#ev'+i);
     if(!card || !cv) return;
@@ -1608,39 +1611,6 @@ function drawEvAll(evList, containerEl){
     if(!card._contextChart&&!card._contextLoading&&!card._contextError)loadChartContext(card,tabForCharts);
     drawEv(cv,renderItem.chart,sel,bzChecked,undefined,card._chartTf,card._zoom||1);
   });
-}
-// Pre-warm the card's context cache for 1m/2m/5m timeframes in a single round-trip.
-// Mirrors deepdive's prefetchGapDeepDiveContexts — result is stored in card._contextCache
-// so subsequent TF switches are served instantly without an additional fetch.
-async function prefetchEvCardContexts(card, tab) {
-  if(!card||!tab||card._contextPrefetched||card._contextPrefetchPromise) return;
-  const ticker=tab.result?.head?.ticker;
-  if(!ticker||!card._sessionDate) return;
-  const query=new URLSearchParams({ticker,date:card._sessionDate,user:currentUser||'',token:sessionToken||''});
-  card._contextPrefetchPromise=(async()=>{
-    try{
-      const response=await fetch('/api/chart-context/prefetch?'+query.toString());
-      const data=await response.json();
-      if(!response.ok||!data.contexts)return;
-      card._contextCache=card._contextCache||{};
-      for(const tf of ['1m','2m','5m']){
-        const ctx=data.contexts[tf];
-        if(ctx?.bars?.t?.length&&ctx.dates?.length>=5&&ctx.dates.includes(card._sessionDate)){
-          const cacheKey=`${tf}|5|${card._sessionDate}`;
-          card._contextCache[cacheKey]={bars:ctx.bars,dates:ctx.dates};
-        }
-      }
-      card._contextPrefetched=true;
-      // If the currently active TF is one we just prefetched and context is not yet loaded, serve it now
-      const activeTf=card._chartTf||'2m';
-      if(activeTf!=='1d'&&!card._contextChart){
-        const cacheKey=`${activeTf}|5|${card._sessionDate}`;
-        const cached=card._contextCache[cacheKey];
-        if(cached?.dates?.length>=5&&cached.dates.includes(card._sessionDate)){card._contextChart=cached.bars;card._contextDates=cached.dates;card._contextDaily=false;card._contextError='';card._contextLoading=false;card._chartDays=5;card._contextEdgeDone={};drawEvAll(tab.EV,tab.container);}
-      }
-    }catch(e){/* silent — main fetch in loadChartContext will still run */}
-    finally{card._contextPrefetchPromise=null;}
-  })();
 }
 function mergeDailyChartBars(current,incoming){
   const byDate=new Map(),fields=['o','h','l','c','v','vw'];
@@ -2378,29 +2348,6 @@ async function loadGapDeepDiveContext(){
     if(requestId===state.contextRequestId){$('#gap_deepdive_status').textContent=`Could not load chart range: ${error.message}`;$('#gap_chart_avwap_status').textContent=`Could not load neighboring sessions: ${error.message}`;}
   }finally{if(requestId===state.contextRequestId)state.loading=false;}
 }
-async function prefetchGapDeepDiveContexts(item,state){
-  if(!state||state.contextPrefetched||state.contextPrefetchPromise)return state?.contextPrefetchPromise;
-  const query=new URLSearchParams({ticker:item.ticker,date:item.date,user:currentUser||'',token:sessionToken||''});
-  state.contextPrefetchPromise=(async()=>{
-    try{
-      const response=await fetch('/api/chart-context/prefetch?'+query.toString()),data=await gapDeepDiveJson(response);
-      state.contextCache=state.contextCache||{};
-      for(const timeframe of ['1m','2m','5m']){
-        const context=data.contexts?.[timeframe];
-        if(context?.bars&&context.dates?.length)state.contextCache[`${timeframe}|5`]=context;
-      }
-      state.contextPrefetched=true;
-      const activeTimeframe=$('#gap_chart_tf').value||'2m',active=state.contextCache[`${activeTimeframe}|5`];
-      if(activeTimeframe!=='1d'&&active?.bars?.t?.length&&active.dates?.includes(item.date)&&state.timeframe===activeTimeframe){
-        state.bars=active.bars;state.dates=active.dates;state.days=5;state.loadedDays=5;state.timeframe=activeTimeframe;state.contextLoaded=true;state.daysSelected=true;state.contextCache[activeTimeframe]=active;state.panOffset=0;
-        const current=gapDeepDiveCurrent&&gapDeepDiveKey(gapDeepDiveCurrent.item)===gapDeepDiveKey(item),cv=$('#gap_chart_modal_canvas');
-        if(current){cv._panOffset=0;cv._modalPanInitialized=true;renderGapDeepDiveModal();$('#gap_deepdive_status').textContent=`Loaded ${state.dates.length} sessions around ${item.ticker}; the gap day stays centered.`;}
-      }
-    }catch(error){console.debug(`Neighbor candle prefetch failed for ${item.ticker} ${item.date}:`,error.message);}
-    finally{state.contextPrefetchPromise=null;}
-  })();
-  return state.contextPrefetchPromise;
-}
 async function loadGapDeepDiveMore(cv,requiredSessions=0){
   const state=cv._gapDeepDiveState,item=gapDeepDiveCurrent?.item;
   if(!state||!item)return false;
@@ -2481,7 +2428,7 @@ async function openGapDeepDiveChart(item,jobId){
     const contextReady=state.contextLoaded&&state.timeframe===timeframe&&state.dates?.length>=requiredSessions&&Number(state.loadedDays||0)>=requiredSessions&&state.dates.includes(item.date);
     const contextLoad=contextReady?Promise.resolve():loadGapDeepDiveContext();
     if(contextReady&&timeframe!=='1d')$('#gap_chart_avwap_status').textContent=`Loaded the spike session and two neighboring sessions on each side for ${item.ticker}.`;
-    Promise.resolve(contextLoad).then(()=>prefetchGapDeepDiveContexts(item,state));
+    Promise.resolve(contextLoad).catch(error=>console.debug(`Initial chart context failed for ${item.ticker} ${item.date}:`,error.message));
     loadGapDeepDiveFloat(item,jobId).then(data=>{if(!gapDeepDiveCurrent||gapDeepDiveKey(gapDeepDiveCurrent.item)!==gapDeepDiveKey(item))return;gapDeepDiveCurrent.float_shares=data.float_shares;$('#gap_chart_modal_canvas')._floatShares=data.float_shares;const value=Number(data.float_shares);$('#gap_chart_quote_line').textContent=`Float ${Number.isFinite(value)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(value)+' shares':'unavailable'} · move the cursor over a candle for change and volume`;});
   }catch(error){$('#gap_deepdive_status').textContent=`Could not load ${item.ticker} ${formatDateMDY(item.date)}: ${error.message}`;}
 }
@@ -2532,9 +2479,7 @@ async function openReportSpikeChart(evIndex){
   const contextReady=state.contextLoaded&&state.timeframe===timeframe&&state.dates?.length>=5&&state.dates.includes(item.date);
   if(contextReady)$('#gap_chart_avwap_status').textContent=`Loaded the spike session and two neighboring sessions on each side for ${ticker}.`;
   const contextLoad=contextReady?Promise.resolve():loadGapDeepDiveContext();
-  Promise.resolve(contextLoad).then(()=>{
-    if(gapDeepDiveCurrent&&gapDeepDiveKey(gapDeepDiveCurrent.item)===key)prefetchGapDeepDiveContexts(deepItem,state);
-  });
+  Promise.resolve(contextLoad).catch(error=>console.debug(`Initial chart context failed for ${ticker} ${item.date}:`,error.message));
 }
 function openGapDeepDiveFilings(){
   const item=gapDeepDiveCurrent?.item;
