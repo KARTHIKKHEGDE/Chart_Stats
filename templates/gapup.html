@@ -72,6 +72,21 @@ select{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;f
 .dilutionStatusCard{margin-top:16px;padding:15px 17px;border:1px solid #a55a21;border-left:4px solid #ff8a3d;border-radius:6px;background:#21150f}.dilutionStatusCard h3{margin:0 0 7px;color:#ffb16e;font-size:13px;letter-spacing:.07em;text-transform:uppercase}.dilutionStatusCard p{margin:0;color:#fff;font:600 16px/1.6 Arial,sans-serif}
 .dilutionSnapshotGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin-top:8px}.dilutionSnapshotGrid>span{display:flex;flex-direction:column;gap:3px;min-width:0;padding:10px 12px;border:1px solid #283842;border-radius:5px;background:#0e151a;color:#eaf1f5;font:14px/1.45 Arial,sans-serif}.dilutionSnapshotGrid b{color:#88b9d2;font:11px Consolas,monospace;text-transform:uppercase;letter-spacing:.03em}.dilutionSnapshotGrid small{color:#8da6b7;font:11px/1.4 Consolas,monospace}
 .dilutionInstrumentDetails{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:7px 12px;margin-top:9px}.dilutionInstrumentDetails>span{color:#d5dfe6;font:13px/1.5 Arial,sans-serif}.dilutionInstrumentDetails b{color:#8da6b7;font-size:12px}
+#ticker_ai_chat_widget{position:fixed;z-index:100500;right:18px;bottom:18px;width:min(390px,calc(100vw - 24px));height:min(540px,72vh);display:flex;flex-direction:column;overflow:hidden;border:1px solid #345365;border-radius:10px;background:#080e13;color:#e8edf3;box-shadow:0 14px 50px #000b;font-family:Arial,sans-serif}
+#ticker_ai_chat_widget[hidden]{display:none}
+.tickerAiChatHead{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid #263640;background:#0c151c}
+.tickerAiChatHead h2{flex:1;min-width:0;margin:0;color:#83d3ff;font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tickerAiChatClose{width:32px;height:32px;border:1px solid #394750;border-radius:5px;background:#151d23;color:#dce5ec;font-size:20px;cursor:pointer}
+.tickerAiChatContext{margin:0;padding:8px 13px;color:#91a7b6;font-size:12px;line-height:1.45;border-bottom:1px solid #1e2b34}
+.tickerAiChatMessages{display:flex;flex:1;flex-direction:column;gap:9px;min-height:0;overflow:auto;padding:12px}
+.tickerAiChatMessage{max-width:95%;padding:9px 11px;border-radius:7px;font:14px/1.55 Arial,sans-serif;white-space:pre-wrap;overflow-wrap:anywhere}
+.tickerAiChatMessage.user{align-self:flex-end;background:#102436;border:1px solid #254a62;color:#e3f4ff}
+.tickerAiChatMessage.assistant{align-self:flex-start;background:#10171d;border:1px solid #26343e;color:#dce5ec}
+.tickerAiChatForm{display:flex;gap:8px;align-items:flex-end;padding:10px 12px;border-top:1px solid #263640}
+.tickerAiChatForm textarea{flex:1;min-width:0;min-height:42px;max-height:110px;resize:vertical;padding:9px;background:#070c10;border:1px solid #34434e;border-radius:5px;color:#e8edf3;font:14px/1.45 Arial,sans-serif}
+.tickerAiChatForm button{min-height:40px;padding:7px 12px;border:1px solid #1e6b91;border-radius:5px;background:#0d2b3c;color:#8edcff;font-weight:700;cursor:pointer}
+.tickerAiChatForm button:disabled{opacity:.55;cursor:wait}
+.tickerAiChatStatus{min-height:18px;padding:0 12px 9px;color:#91a7b6;font:12px/1.45 Arial,sans-serif}
 /* Give the research dialogs room to breathe and keep text readable at 100% zoom. */
 .newsAiDialog,.aioDialog,.filingExplainDialog{width:min(1120px,96vw);max-height:94vh;padding:clamp(22px,3vw,38px);font-family:Arial,sans-serif}
 .newsAiHead h2,.aioHead h2,.filingExplainHeader h2{font-size:clamp(21px,2vw,27px);line-height:1.35}
@@ -484,6 +499,13 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
     <div id="aio_content" hidden></div>
   </article>
 </div>
+<aside id="ticker_ai_chat_widget" hidden aria-label="Ticker AI chat">
+  <header class="tickerAiChatHead"><h2 data-ticker-chat-title>&#128172; Ask AI</h2><button class="tickerAiChatClose" type="button" data-ticker-chat-close aria-label="Close ticker chat">×</button></header>
+  <p class="tickerAiChatContext" data-ticker-chat-context>Choose a ticker tab to start a separate conversation.</p>
+  <div class="tickerAiChatMessages" data-ticker-chat-messages role="log" aria-live="polite"></div>
+  <form class="tickerAiChatForm" data-ticker-chat-form><textarea data-ticker-chat-question maxlength="1200" aria-label="Ask a question about the selected ticker" placeholder="Ask anything about this ticker…" required></textarea><button type="submit">Ask</button></form>
+  <div class="tickerAiChatStatus" data-ticker-chat-status role="status"></div>
+</aside>
 <div id="filing_explanation_modal" class="filingExplainOverlay" role="dialog" aria-modal="true" aria-labelledby="filing_explanation_title" onclick="if(event.target===this)closeFilingExplanation()">
   <article class="filingExplainDialog">
     <header class="filingExplainHeader"><h2 id="filing_explanation_title">SEC filing</h2><button class="filingExplainClose" type="button" onclick="closeFilingExplanation()">Close</button></header>
@@ -1020,10 +1042,15 @@ document.addEventListener('click',async e=>{
 function closeAioModal(){const m=$('#aio_modal');if(m)m.style.display='none';}
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#aio_modal')?.style.display==='flex')closeAioModal();});
 const aioWarmCache=new Map();
+const tickerChatHistories=new Map();
+const tickerChatPending=new Set();
+let tickerChatDisplayedTicker='';
 function dilutionTextForAio(report){
   if(!report)return '';
   const sections=[`SEC review as of ${report.as_of||'latest'}: ${report.summary||''}`,`Current status: ${report.current_status||''}`];
   if(report.ceo_ownership)sections.push(`CEO ownership: ${JSON.stringify(report.ceo_ownership)}`);
+  if(report.active_participants?.length)sections.push(`Banks/underwriters/placement agents involved in active dilution: ${JSON.stringify(report.active_participants)}`);
+  if(report.major_warrant_holders?.length)sections.push(`Largest disclosed active warrant holders: ${JSON.stringify(report.major_warrant_holders)}`);
   for(const [label,key] of [['Active ATMs','active_atms'],['Active warrants','active_warrants'],['Convertibles','convertibles'],['Other share overhang','other_overhang']]){
     const rows=report[key]||[];if(rows.length)sections.push(`${label}: ${JSON.stringify(rows.slice(0,12))}`);
   }
@@ -1062,10 +1089,98 @@ function aioDilutionFacts(report){
     Estimated value at the ${esc(priceText)} close: ${esc(money(ceoValue))}.
     This estimates the value of existing shares; it is not new dilution or cash proceeds.
   </div>`;
+  const participants=Array.isArray(report.active_participants)?report.active_participants:[];
+  const participantDetails=participants.length?participants.map(item=>`<div style="padding:8px 0;border-top:1px solid #1e3040"><strong>${esc(item.name||'Name not confirmed')}</strong> — ${esc(item.role||'Role not confirmed')}${item.related_instrument?` for ${esc(item.related_instrument)}`:''}${item.involvement_as_of?` (reported ${esc(item.involvement_as_of)})`:''}.</div>`).join(''):'<div style="padding:8px 0;border-top:1px solid #1e3040">No underwriter, investment bank, placement agent, or dealer was named for an active instrument in the reviewed filings.</div>';
+  const holders=Array.isArray(report.major_warrant_holders)?report.major_warrant_holders:[];
+  const holderDetails=holders.length?holders.map(item=>`<div style="padding:8px 0;border-top:1px solid #1e3040"><strong>${esc(item.name||'Name not confirmed')}</strong>${item.related_tranche?` — ${esc(item.related_tranche)}`:''}: ${esc(count(item.warrants_held))} warrants${item.percent_of_outstanding?` (${esc(item.percent_of_outstanding)}% of outstanding warrants)`:''}${item.ownership_as_of?`; reported ${esc(item.ownership_as_of)}`:''}.</div>`).join(''):'<div style="padding:8px 0;border-top:1px solid #1e3040">Major warrant holders and their positions were not confirmed in the reviewed filings.</div>';
   return `<div style="margin-top:8px;padding:10px;background:#080e14;border:1px solid #1e3040;border-radius:6px;color:#c8d5e0;font-size:13px;line-height:1.6">
     <strong style="color:#ffd23f">SEC figures · price as of ${esc(priceDate)}</strong>${warrantDetails}${ceoDetails}
+    <strong style="display:block;margin-top:8px;color:#ffd23f">Banks and agents involved in active dilution</strong>${participantDetails}
+    <strong style="display:block;margin-top:8px;color:#ffd23f">Largest disclosed active warrant holders</strong>${holderDetails}
   </div>`;
 }
+function renderTickerChatMessages(panel,ticker){
+  if(!panel)return;
+  const list=panel.querySelector('[data-ticker-chat-messages]');
+  if(!list)return;
+  const history=tickerChatHistories.get(ticker)||[];
+  list.innerHTML=history.map(message=>`<div class="tickerAiChatMessage ${message.role==='user'?'user':'assistant'}"><strong>${message.role==='user'?'You':'AI'}:</strong> ${esc(message.content)}</div>`).join('');
+  list.scrollTop=list.scrollHeight;
+}
+function syncTickerChatWidget(statusMessage=''){
+  const widget=$('#ticker_ai_chat_widget');
+  if(!widget)return;
+  const ticker=String(activeTab||'').toUpperCase(),tab=openTabs[ticker];
+  const title=widget.querySelector('[data-ticker-chat-title]'),context=widget.querySelector('[data-ticker-chat-context]');
+  const question=widget.querySelector('[data-ticker-chat-question]'),button=widget.querySelector('button[type="submit"]');
+  const status=widget.querySelector('[data-ticker-chat-status]');
+  const switched=tickerChatDisplayedTicker!==ticker;
+  if(switched){question.value='';tickerChatDisplayedTicker=ticker;}
+  title.textContent=ticker?`💬 Ask AI · ${ticker}`:'💬 Ask AI';
+  context.textContent=tab?.result
+    ?`Using ${ticker}'s report, filings, news, and chart history. Chat history is separate for each ticker.`
+    :'Load a ticker report to ask questions about it.';
+  question.placeholder=ticker?`Ask anything about ${ticker}…`:'Load a ticker report first…';
+  const unavailable=!tab?.result,pending=!!ticker&&tickerChatPending.has(ticker);
+  question.disabled=unavailable||pending;button.disabled=unavailable||pending;
+  if(status)status.textContent=statusMessage||(pending?`Preparing an answer for ${ticker}…`:switched&&ticker?`Switched to ${ticker}. This ticker has its own conversation.`:unavailable?'':'');
+  renderTickerChatMessages(widget,ticker);
+}
+document.addEventListener('click',event=>{
+  const toggle=event.target.closest('[data-ticker-chat-toggle]');
+  if(toggle){
+    const ticker=String(toggle.dataset.ticker||'').toUpperCase();
+    if(!openTabs[ticker])return;
+    if(activeTab!==ticker)switchTab(ticker);
+    const widget=$('#ticker_ai_chat_widget');
+    widget.hidden=false;syncTickerChatWidget();
+    widget.querySelector('[data-ticker-chat-question]')?.focus();
+    return;
+  }
+  if(event.target.closest('[data-ticker-chat-close]'))$('#ticker_ai_chat_widget').hidden=true;
+});
+document.addEventListener('submit',async event=>{
+  const form=event.target.closest('[data-ticker-chat-form]');
+  if(!form)return;
+  event.preventDefault();
+  const widget=form.closest('#ticker_ai_chat_widget'),ticker=String(activeTab||'').toUpperCase();
+  const tab=openTabs[ticker],questionField=form.querySelector('[data-ticker-chat-question]');
+  const status=widget?.querySelector('[data-ticker-chat-status]'),button=form.querySelector('button[type="submit"]');
+  const question=String(questionField?.value||'').trim();
+  if(!widget||!ticker||!tab||String(tab.result?.head?.ticker||'').toUpperCase()!==ticker){
+    if(status)status.textContent='Load a ticker report before asking a question.';
+    return;
+  }
+  if(!question)return;
+  if(question.length>1200){if(status)status.textContent='Keep your question under 1,200 characters.';return;}
+  if(tickerChatPending.has(ticker))return;
+  tickerChatPending.add(ticker);syncTickerChatWidget();
+  let finalStatus='';
+  try{
+    const asOf=tab.container.querySelector('#recent_filings_asof')?.value||'';
+    const report=await getDilutionHistory(ticker,asOf);
+    const context=aioPayload(tab,ticker,report);
+    delete context.user;delete context.token;
+    context.ticker=ticker;
+    context.chart_summary=String(tab.lastText||'').slice(0,6000);
+    const priorHistory=tickerChatHistories.get(ticker)||[];
+    const response=await fetch('/api/ticker-chat',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({user:currentUser||'',token:sessionToken||'',ticker,question,history:priorHistory.slice(-8).map(item=>({...item,content:String(item.content||'').slice(-2000)})),context})});
+    const result=await responseJson(response,'Ticker AI chat');
+    if(String(result.ticker||'').toUpperCase()!==ticker)throw new Error('The answer came back for a different ticker. Please retry.');
+    const answer=String(result.answer||'').trim();
+    if(!answer)throw new Error('The AI returned an empty answer. Please retry.');
+    if(openTabs[ticker]!==tab)return;
+    tickerChatHistories.set(ticker,[...priorHistory,{role:'user',content:question},{role:'assistant',content:answer}].slice(-16));
+    finalStatus=`Answered for ${ticker}${result.provider?` · ${result.provider}`:''}.`;
+    if(String(activeTab||'').toUpperCase()===ticker&&questionField.value===question)questionField.value='';
+  }catch(error){
+    finalStatus=error.message||'Could not answer this question.';
+  }finally{
+    tickerChatPending.delete(ticker);
+    if(String(activeTab||'').toUpperCase()===ticker)syncTickerChatWidget(finalStatus);
+  }
+});
 function aioPayload(tab,ticker,dilutionReport){
   const r=tab?.result||{},h=r.head||{},news=(r.news||[]).slice(0,8);
   const events=(tab?.EV||[]).filter(x=>!x.sim).slice(0,20).map(x=>({date:x.date,gap_pct:x.gap||x.gapPct,grade:x.grade,verdict:x.verdict,close_pct:x.closePct??x.close_pct??0}));
@@ -1203,6 +1318,8 @@ function renderDilutionHistory(data){
     ${mathMetrics.some(([,value])=>value!=='Not confirmed')?`<section class="filingExplainSection"><h3>Potential shares and float impact</h3><div class="dilutionSnapshotGrid">${mathMetrics.map(([label,value])=>`<span><b>${esc(label)}</b>${esc(value)}</span>`).join('')}</div>${today.assumptions?`<p class="filingExplainMeta">Assumptions: ${esc(today.assumptions)}</p>`:''}</section>`:''}
     <section class="filingExplainSection"><h3>Active ATM programs</h3>${cards(data.active_atms,'ATM programs',[['Agent','agent'],['Status','status'],['Program size','size'],['Sold to date','sold'],['Remaining capacity','remaining'],['Remaining amount disclosed as of','remaining_as_of'],['Estimated shares on date','shares_today'],['Binding limit','constraint']])}</section>
     <section class="filingExplainSection"><h3>Warrants active and exercisable on date</h3>${cards(data.active_warrants,'warrants',[['Outstanding quantity','quantity_outstanding'],['Quantity disclosed as of','quantity_as_of'],['Current strike','strike'],['Expiry','expiry'],['Exercisable on date','exercisable_today'],['In the money on date','in_the_money'],['Cashless exercise','cashless'],['Pre-funded','pre_funded'],['Shares possible on date','shares_today'],['Cash if exercised','cash_if_exercised']])}</section>
+    <section class="filingExplainSection"><h3>Banks and agents involved in active dilution</h3>${cards((data.active_participants||[]).map(item=>({...item,status:'Named in reviewed filing'})),'underwriters / placement agents',[['Role','role'],['Related active instrument','related_instrument'],['Involvement disclosed as of','involvement_as_of']])}</section>
+    <section class="filingExplainSection"><h3>Largest disclosed active warrant holders</h3>${cards((data.major_warrant_holders||[]).map(item=>({...item,status:'Position disclosed'})),'major warrant holders',[['Warrant tranche','related_tranche'],['Warrants held','warrants_held'],['Percent of outstanding warrants','percent_of_outstanding'],['Ownership disclosed as of','ownership_as_of']])}<p class="filingExplainMeta">Only holder positions explicitly identified in the reviewed filings are listed. Being an underwriter, purchaser, or 10% shareholder alone does not establish warrant ownership.</p></section>
     <section class="filingExplainSection"><h3>Convertible notes and preferred shares active on date</h3>${cards(data.convertibles,'convertible instruments',[['Principal + interest','principal_and_interest'],['Amount disclosed as of','amount_as_of'],['Conversion terms','conversion_terms'],['Blockers / approvals','blockers'],['Shares possible on date','shares_today'],['Status','status']])}</section>
     ${data.other_overhang?.length?`<section class="filingExplainSection"><h3>Other / contingent overhang</h3>${data.other_overhang.map(item=>`<article class="dilutionHistoryCard"><div class="dilutionHistoryHead"><span>${esc(item.instrument||'Other instrument')}</span><span class="dilutionHistoryDate">${esc(item.status||'Status not confirmed')}</span></div><p>${esc(item.amount||'Amount not confirmed')}</p>${sourceButtons(sources(item.source_ids))}</article>`).join('')}</section>`:''}
     <section class="filingExplainSection"><h3>Dilution history</h3><p>${esc(data.summary||'No summary was returned.')}</p>${data.history?.length?data.history.map(event=>`<article class="dilutionHistoryCard"><div class="dilutionHistoryHead"><span>${esc(event.event||'Filing event')} · ${esc(event.status||'')}</span><time class="dilutionHistoryDate">${esc(formatDateMDY(event.date))}</time></div>${event.impact?`<p>${esc(event.impact)}</p>`:''}${sourceButtons(sources(event.source_ids))}</article>`).join(''):'<p>No completed dilution events were confirmed in the filing set reviewed.</p>'}</section>
@@ -1313,6 +1430,7 @@ function switchTab(t){
   });
 
   renderTabBar();
+  syncTickerChatWidget();
 
   const tab = openTabs[t];
   if(tab){
@@ -1330,6 +1448,7 @@ function closeTab(t){
   if(!openTabs[t]) return;
   if(openTabs[t].timer) clearTimeout(openTabs[t].timer);
   if(openTabs[t].container) openTabs[t].container.remove();
+  tickerChatHistories.delete(t);
   delete openTabs[t];
 
   if(activeTab === t){
@@ -1345,6 +1464,7 @@ function closeTab(t){
   } else {
     renderTabBar();
   }
+  syncTickerChatWidget();
 }
 
 async function run(refresh){
@@ -1601,7 +1721,7 @@ function renderTab(tab, r, isRefresh){
     `<div>Grade: <span class="badge ${esc(h.gcls)}">${esc(h.grade)}</span> <span class="c">${esc(h.score)}</span> <span class="${esc(h.gcls)}">· ${esc(h.verdict)}</span></div>`+
     `<div class="foot">Based on ${Number(h.n)||0} similar historical gap-up setups.</div></div>`;
   const newsItems = r.news || [];
-  o += `<div class="panel" data-news-panel><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px"><span>Latest Press Releases &#x2013; Yahoo Finance</span><button type="button" class="aioBtn" onclick="openAioModal(event,this)" data-ticker="${esc(h.ticker)}" style="font-size:11px;padding:4px 10px">&#128202; All-in-One Summary</button></div>`+
+  o += `<div class="panel" data-news-panel><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px"><span>Latest Press Releases &#x2013; Yahoo Finance</span><span style="display:flex;gap:7px;flex-wrap:wrap"><button type="button" class="aioBtn" onclick="openAioModal(event,this)" data-ticker="${esc(h.ticker)}" style="font-size:11px;padding:4px 10px">&#128202; All-in-One Summary</button><button type="button" class="aioBtn" data-ticker-chat-toggle data-ticker="${esc(h.ticker)}" aria-label="Open AI chat for ${esc(h.ticker)}" style="font-size:11px;padding:4px 10px">&#128172; Ask AI</button></span></div>`+
     (newsItems.length ? `<div data-news-list>${newsItems.map(item=>newsPressReleaseRow(item,h.ticker)).join('')}</div><div style="display:flex;align-items:center;gap:10px;margin-top:8px"><button type="button" class="newsMoreBtn" data-ticker="${esc(h.ticker)}" data-offset="${newsItems.length}" style="border:1px solid #24577a;border-radius:4px;background:#102333;color:#8ed5ff;padding:6px 12px;cursor:pointer;font:inherit">2 more</button><span class="foot" data-news-more-status role="status"></span></div>` : `<div class="foot">${esc(r.news_status || 'No press releases found on Yahoo Finance.')}</div>`) + `</div>`;
   const reverseSplits=r.reverse_splits||[];
   o += `<div class="panel"><div class="ttl">Reverse Splits · ${reverseSplits.length} ${reverseSplits.length===1?'event':'events'}</div>`+
@@ -1626,6 +1746,7 @@ function renderTab(tab, r, isRefresh){
   o += `<div class="panel recent-filings-panel"><div class="recent-filings-heading"><span><span style="color:#25cf91">●</span> LIVE FILINGS · ${esc(h.ticker)}</span><span style="display:flex;align-items:center;flex-wrap:wrap;gap:12px"><button class="recent-filings-dilution-btn" type="button" id="recent_filings_dilution" data-ticker="${esc(h.ticker)}" title="Show filings and active dilution status as of the selected date">Dilution history</button><label class="recent-filings-date" title="This date controls both the filing list and the Dilution history report">As of date <input type="date" id="recent_filings_asof" aria-label="As-of date for filings and dilution status"></label><a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent" target="_blank" rel="noopener noreferrer">Full feed ↗</a></span></div><div class="recent-filings-list" id="recent_filings_feed"></div></div>`;
 
   tab.container.innerHTML = o;
+  syncTickerChatWidget();
   if(surgeDays) renderPremarketSpikeDays(tab,r,surgeDays);
   else loadPremarketSpikeDays(tab,r);
   const filingsDate=tab.container.querySelector('#recent_filings_asof');
