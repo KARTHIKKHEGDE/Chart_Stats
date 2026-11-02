@@ -1439,7 +1439,7 @@ def sec_dilution_history():
     if asof_date>current_day:
         return jsonify({'error':'As-of date cannot be in the future.'}),400
     today=asof_date.isoformat()
-        cache_key=f'sec_dilution_history_v15_{ticker}_{today}_asof'
+    cache_key=f'sec_dilution_history_v15_{ticker}_{today}_asof'
     cached=cget(cache_key,30*60)
     if cached is not None:
         return jsonify(cached)
