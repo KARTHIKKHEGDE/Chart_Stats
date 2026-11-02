@@ -225,7 +225,7 @@ def load_companyfacts(t):
     quarterly operating-cash burn.  A 10-Q/20-F cash-flow fact is often YTD,
     so treating its value as a single quarter materially overstates burn.
     """
-    key=f"{str(t).upper()}_sec_companyfacts_v1"
+    key=f"{str(t).upper()}_sec_companyfacts_v2"
     cached=cget(key,3*86400)
     if isinstance(cached,dict):
         return cached
@@ -245,10 +245,31 @@ def load_companyfacts(t):
             def units(namespace, name, unit):
                 concept=(facts.get(namespace) or {}).get(name) or {}
                 return (concept.get("units") or {}).get(unit) or []
+            def positive_number(value):
+                try:return float(value)>0
+                except (TypeError,ValueError):return False
+            def latest_per_period(rows, flow=False):
+                """Keep the latest-filed version of each reported period.
+
+                Companyfacts repeats facts in amendments, restatements, and
+                later filings. Balance-sheet facts are point-in-time, while
+                cash-flow facts must also retain start/fp/form so quarterly,
+                year-to-date, and annual values cannot be merged.
+                """
+                newest={}
+                for source in rows:
+                    if not source.get("filed") or not source.get("end") or source.get("val") is None:
+                        continue
+                    row={key:source.get(key) for key in ("filed","end","start","val","fy","fp","form","frame")}
+                    key=(row["end"],row.get("start") or "",row.get("fp") or "",row.get("form") or "") if flow else row["end"]
+                    previous=newest.get(key)
+                    if previous is None or str(row["filed"])>=str(previous["filed"]):
+                        newest[key]=row
+                return sorted(newest.values(),key=lambda row:(row.get("end") or "",row.get("filed") or ""))
             share_rows=units("dei","EntityCommonStockSharesOutstanding","shares")
             result["shares"]=sorted([
                 {"filed":r.get("filed",""),"end":r.get("end",""),"val":r.get("val")}
-                for r in share_rows if float(r.get("val") or 0)>0
+                for r in share_rows if positive_number(r.get("val"))
             ],key=lambda r:r["filed"])
             # SEC domestic filers normally use us-gaap; foreign issuers can use
             # ifrs-full.  If a concept is unavailable, leave it absent rather
@@ -263,10 +284,7 @@ def load_companyfacts(t):
                 for namespace in ("us-gaap","ifrs-full"):
                     for concept in concept_names:
                         rows.extend(units(namespace,concept,"USD"))
-                result[target]=sorted([
-                    {key:r.get(key) for key in ("filed","end","start","val","fy","fp","form","frame")}
-                    for r in rows if r.get("filed") and r.get("end") and r.get("val") is not None
-                ],key=lambda r:(r.get("filed") or "",r.get("end") or ""))
+                result[target]=latest_per_period(rows,flow=target=="operating_cash_flow")
     except Exception:
         result={"shares":[],"cash":[],"short_term_investments":[],"operating_cash_flow":[]}
     cput(key,result)

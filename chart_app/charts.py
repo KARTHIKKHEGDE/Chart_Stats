@@ -1276,6 +1276,26 @@ def _xbrl_fact_before(rows, as_of):
     return max(eligible,key=lambda row:(str(row.get('end') or ''),str(row.get('filed') or '')),default=None)
 
 
+def _period_days(row):
+    try:
+        start=dt.date.fromisoformat(str(row.get('start') or '')[:10])
+        end=dt.date.fromisoformat(str(row.get('end') or '')[:10])
+        return (end-start).days+1
+    except (TypeError,ValueError):
+        return None
+
+
+def _period_quarter(row):
+    """Classify fiscal YTD periods by duration, independent of fiscal calendar labels."""
+    days=_period_days(row)
+    if days is None:return None
+    if days<=120:return 1
+    if days<=210:return 2
+    if days<=315:return 3
+    if days<=400:return 4
+    return None
+
+
 def _xbrl_cash_summary(companyfacts, as_of):
     """Build a cash/runway input from companyfacts without treating YTD CF as QTD."""
     cash=_xbrl_fact_before(companyfacts.get('cash'),as_of)
@@ -1295,37 +1315,66 @@ def _xbrl_cash_summary(companyfacts, as_of):
     investments_value=number(investments)
     same_period=bool(cash and investments and cash.get('end')==investments.get('end'))
     total=(cash_value+(investments_value or 0)) if cash_value is not None and (investments_value is None or same_period) else cash_value
-    flow=_xbrl_fact_before(companyfacts.get('operating_cash_flow'),as_of)
+    # Cash-flow tags repeat in later filings and can contain both YTD and
+    # annual values. Limit calculation to domestic 10-Q/10-K contexts; a
+    # foreign issuer's 6-K cash release has no XBRL and remains filing-derived.
+    raw_flows=companyfacts.get('operating_cash_flow') or []
+    flow_versions={}
+    for row in raw_flows:
+        try:
+            filed=dt.date.fromisoformat(str(row.get('filed') or '')[:10])
+            end=dt.date.fromisoformat(str(row.get('end') or '')[:10])
+            start=dt.date.fromisoformat(str(row.get('start') or '')[:10])
+            form=str(row.get('form') or '').upper()
+            fp=str(row.get('fp') or '').upper()
+            if filed>as_of or end>as_of or form not in {'10-Q','10-K'}:
+                continue
+            key=(end.isoformat(),start.isoformat(),fp,form)
+            previous=flow_versions.get(key)
+            if previous is None or str(row.get('filed') or '')>=str(previous.get('filed') or ''):
+                flow_versions[key]=row
+        except (TypeError,ValueError):
+            continue
+    flows=list(flow_versions.values())
+    flow=max(flows,key=lambda row:(str(row.get('end') or ''),str(row.get('filed') or '')),default=None)
     quarterly=None
     burn_method=None
     if flow:
         try:
             flow_start=dt.date.fromisoformat(str(flow.get('start') or '')[:10])
             flow_end=dt.date.fromisoformat(str(flow.get('end') or '')[:10])
-            duration=(flow_end-flow_start).days
+            form=str(flow.get('form') or '').upper()
+            fp=str(flow.get('fp') or '').upper()
             value=float(flow.get('val'))
-            if 60<=duration<=125:
-                quarterly=-value if value<0 else 0.0
-                burn_method='direct quarterly operating cash flow'
-            elif duration>125:
-                # Use the preceding same-FY YTD fact to isolate the current
-                # quarter.  Values must share the latest period start and be
-                # filed by the selected date.
-                prior=[]
-                for row in companyfacts.get('operating_cash_flow') or []:
-                    try:
-                        row_end=dt.date.fromisoformat(str(row.get('end') or '')[:10])
-                        row_start=dt.date.fromisoformat(str(row.get('start') or '')[:10])
-                        if (row.get('filed','')<=as_of.isoformat() and row_end<flow_end and
-                            row_start==flow_start and row.get('fy')==flow.get('fy')):
-                            prior.append(row)
-                    except (TypeError,ValueError):
-                        continue
-                if prior:
-                    previous=max(prior,key=lambda row:(str(row.get('end') or ''),str(row.get('filed') or '')))
-                    quarter_value=value-float(previous.get('val'))
-                    quarterly=-quarter_value if quarter_value<0 else 0.0
-                    burn_method='latest YTD operating cash flow less prior-quarter YTD amount'
+            previous=None
+            current_quarter=_period_quarter(flow)
+            if form=='10-Q' and current_quarter in (2,3):
+                previous=max((row for row in flows
+                              if _period_quarter(row)==current_quarter-1
+                              and str(row.get('form') or '').upper()=='10-Q'
+                              and str(row.get('start') or '')==flow_start.isoformat()
+                              and str(row.get('end') or '')<flow_end.isoformat()),
+                             key=lambda row:(str(row.get('end') or ''),str(row.get('filed') or '')),default=None)
+            elif form=='10-K':
+                # Fiscal Q4 is annual YTD less the same fiscal year's ~9-month
+                # Q3 YTD fact, independent of the calendar year or fp label.
+                previous=max((row for row in flows
+                              if _period_quarter(row)==3
+                              and str(row.get('form') or '').upper()=='10-Q'
+                              and str(row.get('start') or '')==flow_start.isoformat()
+                              and str(row.get('end') or '')<flow_end.isoformat()),
+                             key=lambda row:(str(row.get('end') or ''),str(row.get('filed') or '')),default=None)
+            if form=='10-Q' and current_quarter==1:
+                quarter_value=value
+                burn_method='first fiscal quarter YTD operating cash flow, classified by period duration'
+            elif previous is not None:
+                quarter_value=value-float(previous.get('val'))
+                burn_method=('Q4 annual operating cash flow less matching Q3 YTD amount'
+                             if form=='10-K' else f'fiscal Q{current_quarter} YTD operating cash flow less prior fiscal quarter YTD amount')
+            else:
+                quarter_value=None
+            if quarter_value is not None:
+                quarterly=-quarter_value if quarter_value<0 else 0.0
         except (TypeError,ValueError):
             pass
     runway=(total/quarterly*3) if total is not None and quarterly and quarterly>0 else None
@@ -1390,7 +1439,7 @@ def sec_dilution_history():
     if asof_date>current_day:
         return jsonify({'error':'As-of date cannot be in the future.'}),400
     today=asof_date.isoformat()
-    cache_key=f'sec_dilution_history_v12_{ticker}_{today}_asof'
+    cache_key=f'sec_dilution_history_v14_{ticker}_{today}_asof'
     cached=cget(cache_key,30*60)
     if cached is not None:
         return jsonify(cached)
@@ -1419,6 +1468,12 @@ def sec_dilution_history():
         recent_material_reports=[item for item in all_filings
             if re.fullmatch(r'(?:6-K|8-K)',str(item.get('form') or ''),re.I)
             and (asof_date-dt.date.fromisoformat(item.get('filing_date','1900-01-01'))).days<=365][:12]
+        # Always include the latest 6-Ks (not only titles that happen to match
+        # financing keywords): foreign issuers commonly report cash/runway in
+        # earnings releases filed as 6-K exhibits.
+        recent_6k=[item for item in all_filings
+                   if str(item.get('form') or '').upper()=='6-K'
+                   and (asof_date-dt.date.fromisoformat(item.get('filing_date','1900-01-01'))).days<=365][:8]
         # Form 4s are useful transaction detail, but they are not a substitute
         # for the holder-level 13D/13G and proxy ownership tables needed for a
         # non-affiliate public-float calculation.
@@ -1439,6 +1494,8 @@ def sec_dilution_history():
         candidates.extend(item for item in latest_periodic if str(item.get('accession') or '') not in candidate_keys)
         candidate_keys={str(item.get('accession') or '') for item in candidates}
         candidates.extend(item for item in recent_material_reports if str(item.get('accession') or '') not in candidate_keys)
+        candidate_keys={str(item.get('accession') or '') for item in candidates}
+        candidates.extend(item for item in recent_6k if str(item.get('accession') or '') not in candidate_keys)
         candidate_keys={str(item.get('accession') or '') for item in candidates}
         candidates.extend(item for item in recent_ownership if str(item.get('accession') or '') not in candidate_keys)
         candidates=sorted(candidates,key=lambda item:item.get('filing_date',''),reverse=True)[:70]
@@ -1715,9 +1772,9 @@ def sec_dilution_history():
             "List active ATMs by name/agent, original size, sold to date, remaining capacity, share count at the selected date's price "
             "and constraints; include shelf remaining, effectiveness/expiration date, and any baby-shelf limit only when eligibility and "
             f"Registrant filing profile: {issuer_type}. If eligible for a baby shelf, use Form F-3 I.B.5 for foreign private issuers or Form S-3 I.B.6 for domestic issuers; cite the applicable instruction as {shelf_instruction}. If the issuer category is not confirmed, do not assert which test applies. "
-            "Use the supplied 60-day high closing-price input for the baby-shelf calculation, and show its exact date and price. "
-            "Subtract applicable primary securities sold in the "
-            "trailing 12 months. Keep the baby-shelf non-affiliate float separate from vendor trading float; only non-affiliate "
+            "Use the supplied 60-day high closing-price input for the baby-shelf calculation, and label it an as-of estimate; the actual float/price test applies separately at each sale. "
+            "Calculate the limit as max(0, one-third of non-affiliate public float minus primary securities sold under I.B.6 in the "
+            "trailing 12 months. Do not subtract offerings unless the filings establish they were sold under I.B.6. Keep the baby-shelf non-affiliate float separate from vendor trading float; only non-affiliate "
             "shares count for that test. Do not substitute the vendor trading-float number or display a share count as a dollar float. Calculate non-affiliate public float as non-affiliate shares × the supplied price, using outstanding shares rolled forward for documented later issuances. List each warrant tranche with outstanding quantity (not originally issued), "
             "strike after splits/resets, expiry, exercisable-now status, cashless/pre-funded status, ITM status, required "
             "stockholder approvals, and "
@@ -1736,9 +1793,9 @@ def sec_dilution_history():
             "capacity as shares sold. Treat any withdrawn registration terms as proposed only and use that withdrawal "
             "filing to determine whether any securities were sold. "
             "Return active shelf registrations separately from ATMs: identify registered capacity, primary amount sold, "
-            "remaining capacity, effective/expiration dates, and whether the shelf is currently usable. If a shelf has an effective date "
+            "remaining capacity, effective/expiration dates, and whether the shelf is currently usable. For every active ATM, calculate dollar capacity as the minimum of verified program remaining, applicable shelf remaining, and applicable baby-shelf remaining limit, then divide that capacity by the selected-date closing price for shares possible. Use only confirmed limits and say when any limit is unknown. If a shelf has an effective date "
             "but no stated expiration, calculate the Rule 415(a)(5) three-year date and label it calculated. Do not add overlapping "
-            "shelf registrations together. Use the precomputed XBRL cash and quarterly operating-cash-burn input when available; otherwise extract the latest cash and short-term investments, latest quarterly net cash used "
+            "shelf registrations together. Use the precomputed XBRL cash and quarterly operating-cash-burn input when available. Foreign private issuers' 6-K reports have no XBRL: read their supplied 6-K earnings releases for cash, operating burn, and runway rather than treating missing XBRL as missing data. Otherwise extract the latest cash and short-term investments, latest quarterly net cash used "
             "in operating activities, their evidence dates, and estimated months of runway (cash divided by quarterly burn "
             "times three); label runway approximate and do not infer burn from net loss when operating cash use is available. "
             "Also return four evidence-based qualitative risk signals: offering, cash_need, overhang, and dilution_history. "
@@ -1777,7 +1834,7 @@ def sec_dilution_history():
             "major_warrant_holders (array of {name, related_tranche, warrants_held, percent_of_outstanding, ownership_as_of, source_ids}), "
             "other_overhang (array of {instrument, status, amount, source_ids}), today_math ({price, shares_outstanding, "
             "float, adtv, active_shares_today, atm_shares_today, percent_of_float, percent_of_shares_outstanding, "
-            "adtv_multiple, fully_diluted_percent_of_float, nonaffiliate_shares, nonaffiliate_public_float, "
+            "adtv_multiple, fully_diluted_percent_of_float, nonaffiliate_shares, nonaffiliate_public_float, trailing_12_month_primary_sales, baby_shelf_limit, "
             "public_float_pricing_date, public_float_price, shelf_instruction, assumptions}), "
             "For shares, warrants, option awards, strike prices, market prices, and ADTV, use one consistently split-adjusted basis. The legacy JSON field names ending in _today mean as-of the selected date in this report. "
             "history (array of {date, event, impact, status, source_ids}); do not include an event dated after the selected date. "
@@ -1928,6 +1985,18 @@ def sec_dilution_history():
                                   ('public_float_pricing_date','public_float_pricing_date'),('public_float_price','public_float_price')):
             if market_snapshot.get(source_key) is not None:
                 today_math[target]=market_snapshot[source_key]
+        atm_price=_parse_report_number(market_snapshot.get('last_price'))
+        atm_shares=[]
+        if atm_price and atm_price>0:
+            for atm in clean_atms:
+                remaining=_parse_report_number(atm.get('remaining'))
+                if remaining is None or remaining<0:
+                    continue
+                shares=remaining/atm_price
+                atm['shares_today']=f'{shares:,.0f}'
+                atm_shares.append(shares)
+        if atm_shares:
+            today_math['atm_shares_today']=sum(atm_shares)
         active_parts=[]
         for row in clean_atms+clean_warrants+clean_convertibles:
             value=_parse_report_number(row.get('shares_today'))
@@ -1946,8 +2015,13 @@ def sec_dilution_history():
             # vendor float-share count in the dollar public-float field.
             public_float=nonaffiliate_shares*public_float_price
             today_math['nonaffiliate_public_float']=public_float
-            if _parse_report_number(today_math.get('baby_shelf_limit')) is None:
-                today_math['baby_shelf_limit']=public_float/3
+            trailing_sales=_parse_report_number(today_math.get('trailing_12_month_primary_sales'))
+            if trailing_sales is None or trailing_sales<0:
+                # A raw one-third amount is not a usable I.B.6 limit without
+                # the trailing-12-month primary-sales deduction.
+                today_math['baby_shelf_limit']='not confirmed (trailing 12-month primary sales not confirmed)'
+            else:
+                today_math['baby_shelf_limit']=max(0,public_float/3-trailing_sales)
         result={'ticker':ticker,'as_of':today,'provider':provider,
                 'summary':str(analysis.get('summary')).strip(),
                 'current_status':str(analysis.get('current_status')).strip(),
