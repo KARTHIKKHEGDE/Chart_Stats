@@ -2152,7 +2152,13 @@ Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
 
         # Compute real intraday VWAP stats from minute bars
         event_dates = [e.get('date', '') for e in (events or []) if e.get('date', '')]
-        intraday_stats = _compute_intraday_stats(ticker, event_dates)
+        stats_fingerprint=json.dumps(event_dates[:15],separators=(',',':'))
+        stats_cache_key='aio_intraday_v1_'+hashlib.sha256(
+            (ticker+'|'+stats_fingerprint).encode('utf-8')).hexdigest()[:24]
+        intraday_stats=cget(stats_cache_key,600)
+        if intraday_stats is None:
+            intraday_stats=_compute_intraday_stats(ticker,event_dates)
+            if intraday_stats is not None:cput(stats_cache_key,intraday_stats)
 
         # Format news
         news_text = "\n".join(

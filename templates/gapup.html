@@ -251,7 +251,6 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
         <strong id="gap_chart_title" style="font-size:17px;color:#e7eef5"></strong><span id="gap_chart_date" style="padding:3px 8px;border:1px solid #655516;background:#211b05;color:#ffe17d;border-radius:3px;font-size:13px"></span>
         <span id="gap_chart_stats" style="color:#9ba6b0;font-size:12px"></span><span id="gap_chart_quote_line" style="color:#e8edf3;font-size:12px;font-family:Consolas,monospace;padding:4px 8px;border:1px solid #29313a;border-radius:3px">Hover a candle · change, volume, dollar volume, float</span><a id="gap_chart_player_tag" hidden target="_blank" rel="noopener noreferrer" style="padding:4px 9px;border:1px solid #8b74ff;background:#171127;color:#c8baff;border-radius:12px;font-size:12px;text-decoration:none" title="Named in an SEC filing as placement agent or underwriter"></a>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
-          <span id="report_spike_navigation" hidden style="display:flex;align-items:center;gap:5px"><button type="button" onclick="navigateReportSpike(-1)" style="height:32px;padding:0 9px">← Previous spike</button><button type="button" onclick="navigateReportSpike(0)" style="height:32px;padding:0 9px;color:#ffe17d">Today</button><button type="button" onclick="navigateReportSpike(1)" style="height:32px;padding:0 9px">Next spike →</button></span>
           <label style="font-size:12px;color:#ddd">Interval <select id="gap_chart_tf" style="height:30px;margin:0"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label>
           <label style="font-size:12px;color:#d7ff6e"><input id="gap_chart_bz" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"> Bone Zone (9/21 EMA)</label>
           <label style="font-size:12px;color:#fff"><input id="gap_chart_vwap" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"> VWAP</label>
@@ -991,6 +990,26 @@ function warmAioSummary(tab,ticker){
   const asOf=tab?.container?.querySelector('#recent_filings_asof')?.value||'';
   getDilutionHistory(ticker,asOf).then(report=>getAioSummary(tab,ticker,report)).catch(error=>console.debug('All-in-One prefetch unavailable:',error.message));
 }
+function latestFilingsAsOfDate(){
+  const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
+  const part=type=>parts.find(item=>item.type===type)?.value||'00';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+function prewarmTickerAnalysis(value){
+  const ticker=String(value||'').trim().toUpperCase();
+  if(!/^[A-Z.\-]{1,10}$/.test(ticker)||!currentUser||!sessionToken)return;
+  const tab=openTabs[ticker],asOf=tab?.container?.querySelector('#recent_filings_asof')?.value||
+    recentFilingsAsOfByTicker[ticker]||latestFilingsAsOfDate();
+  // This job overlaps with the ticker report and is shared by the dilution
+  // button and All-in-One summary through getDilutionHistory().
+  warmDilutionHistory(ticker,asOf);
+  if(tab?.result)warmAioSummary(tab,ticker);
+}
+let tickerAnalysisWarmTimer=0;
+$('#t').addEventListener('input',()=>{
+  clearTimeout(tickerAnalysisWarmTimer);
+  tickerAnalysisWarmTimer=setTimeout(()=>prewarmTickerAnalysis($('#t').value),300);
+});
 
 async function openAioModal(event,btn){
   if(event)event.stopPropagation();
@@ -1222,6 +1241,7 @@ async function run(refresh){
   let t = ($('#t').value || '').trim().toUpperCase();
   if(!t && activeTab) t = activeTab;
   if(!t) return;
+  prewarmTickerAnalysis(t);
 
   if(!openTabs[t]){
     const cont = document.createElement('div');
@@ -2306,14 +2326,17 @@ async function loadGapDeepDiveContext(){
   state.days=days;
   state.contextCache=state.contextCache||{};
   const prefetched=state.contextCache[`${timeframe}|5`];
-  if(timeframe!=='1d'&&prefetched?.bars?.t?.length&&prefetched.dates?.includes(item.date)){
+  if(timeframe!=='1d'&&prefetched?.bars?.t?.length&&prefetched.dates?.length>=5&&prefetched.dates.includes(item.date)){
     state.bars=prefetched.bars;state.dates=prefetched.dates;state.days=5;state.loadedDays=5;state.timeframe=timeframe;state.contextLoaded=true;state.daysSelected=true;state.contextCache[timeframe]=prefetched;state.panOffset=0;cv._panOffset=0;cv._modalPanInitialized=true;renderGapDeepDiveModal();
     $('#gap_deepdive_status').textContent=`Loaded ${state.dates.length} sessions around ${item.ticker}; the gap day stays centered.`;
+    $('#gap_chart_avwap_status').textContent=`Loaded the spike session and two neighboring sessions on each side for ${item.ticker}.`;
     return;
   }
   const saved=state.contextCache[timeframe];
-  if(saved&&saved.days===days){state.bars=saved.bars;state.dates=saved.dates;state.days=saved.days;state.loadedDays=saved.days;state.timeframe=timeframe;state.contextLoaded=true;state.loading=false;renderGapDeepDiveModal();return;}
+  if(saved&&saved.days===days&&(timeframe==='1d'||(saved.dates?.length>=5&&saved.dates.includes(item.date)))){state.bars=saved.bars;state.dates=saved.dates;state.days=saved.days;state.loadedDays=saved.dates?.length||saved.days;state.timeframe=timeframe;state.contextLoaded=true;state.loading=false;renderGapDeepDiveModal();$('#gap_chart_avwap_status').textContent=`Loaded ${state.dates.length} sessions around ${item.ticker}.`;return;}
   const requestId=(state.contextRequestId||0)+1;state.contextRequestId=requestId;state.loading=true;
+  $('#gap_deepdive_status').textContent=`Loading up to two sessions before and after ${item.ticker} ${formatDateMDY(item.date)}…`;
+  $('#gap_chart_avwap_status').textContent=`Loading up to two sessions before and after ${item.ticker} ${formatDateMDY(item.date)}…`;
   const query=new URLSearchParams({ticker:item.ticker,date:item.date,days:String(days),tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1'});
   try{
     const response=await fetch('/api/chart-context?'+query.toString()),data=await gapDeepDiveJson(response);
@@ -2323,9 +2346,14 @@ async function loadGapDeepDiveContext(){
     const isCurrent=gapDeepDiveCurrent&&gapDeepDiveKey(gapDeepDiveCurrent.item)===gapDeepDiveKey(item);
     if(isCurrent)renderGapDeepDiveModal();
     const gridCv=[...$('#gap_deepdive_grid').querySelectorAll('canvas[data-key]')].find(node=>node.dataset.key===gapDeepDiveKey(item));if(gridCv)drawGapDeepDiveCanvas(gridCv,chart,timeframe,540);
-    $('#gap_deepdive_status').textContent=`Loaded ${state.dates.length} session${state.dates.length===1?'':'s'} for ${item.ticker}.`;
+    $('#gap_deepdive_status').textContent=state.dates.length>=5
+      ?`Loaded the spike session and two neighboring sessions on each side for ${item.ticker}.`
+      :`Loaded ${state.dates.length} of 5 nearby sessions for ${item.ticker}; some neighboring candles are unavailable.`;
+    $('#gap_chart_avwap_status').textContent=state.dates.length>=5
+      ?`Loaded the spike session and two neighboring sessions on each side for ${item.ticker}.`
+      :`Only ${state.dates.length} of 5 nearby sessions were available for ${item.ticker}.`;
   }catch(error){
-    if(requestId===state.contextRequestId)$('#gap_deepdive_status').textContent=`Could not load chart range: ${error.message}`;
+    if(requestId===state.contextRequestId){$('#gap_deepdive_status').textContent=`Could not load chart range: ${error.message}`;$('#gap_chart_avwap_status').textContent=`Could not load neighboring sessions: ${error.message}`;}
   }finally{if(requestId===state.contextRequestId)state.loading=false;}
 }
 async function prefetchGapDeepDiveContexts(item,state){
@@ -2418,7 +2446,6 @@ function setGapDeepDiveTimeframe(timeframe){
 }
 async function openGapDeepDiveChart(item,jobId){
   try{
-    $('#report_spike_navigation').hidden=true;
     const chart=await loadGapDeepDiveChart(item,jobId);gapDeepDiveCurrent={item,jobId,chart,float_shares:null};
     $('#gap_chart_title').textContent=item.ticker;$('#gap_chart_date').textContent=formatDateMDY(item.date);$('#gap_chart_stats').textContent=`PM high +${(item.move*100).toFixed(1)}% · $${(item.pm_dollar_volume/1e6).toFixed(1)}M premarket`;
     $('#gap_chart_player_tag').hidden=true;$('#gap_chart_player_tag').removeAttribute('href');loadGapDeepDivePlayer(item,jobId);
@@ -2429,61 +2456,60 @@ async function openGapDeepDiveChart(item,jobId){
     cv._avwapAnchors=null;cv._avwapSelectMode=false;cv._rangeMeasures=[];cv._selectedRangeId=null;cv._rangeZoom=timeframe==='1d'?1:0.2;cv._panOffset=state.panOffset||0;cv._modalPanInitialized=true;cv._yZoom=1;cv._rangeMeasureMode=false;cv._zoomSelectMode=true;cv._panToolMode=false;cv._zoomDrag=null;cv.style.cursor='crosshair';$('#gap_chart_measure_box').hidden=true;$('#gap_chart_measure').dataset.active='';$('#gap_chart_measure').style.borderColor='';$('#gap_chart_measure').textContent='Measure range';$('#gap_chart_pan').dataset.active='';$('#gap_chart_pan').style.borderColor='';$('#gap_chart_avwap_status').textContent='Hold and drag on the chart to zoom. Choose Pan to drag the chart.';
     $('#gap_chart_quote_line').textContent='Float loading · move the cursor over a candle for change and volume';$('#gap_chart_hover_time').textContent='Hover a candle to see its time · IST';$('#gap_deepdive_chart_modal').style.display='flex';setTimeout(renderGapDeepDiveModal,30);
     const requiredSessions=timeframe==='1d'?Number(state.days)||200:5;
-    const contextReady=state.contextLoaded&&state.timeframe===timeframe&&Number(state.loadedDays||0)>=requiredSessions&&state.dates?.includes(item.date);
+    const contextReady=state.contextLoaded&&state.timeframe===timeframe&&state.dates?.length>=requiredSessions&&Number(state.loadedDays||0)>=requiredSessions&&state.dates.includes(item.date);
     const contextLoad=contextReady?Promise.resolve():loadGapDeepDiveContext();
+    if(contextReady&&timeframe!=='1d')$('#gap_chart_avwap_status').textContent=`Loaded the spike session and two neighboring sessions on each side for ${item.ticker}.`;
     Promise.resolve(contextLoad).then(()=>prefetchGapDeepDiveContexts(item,state));
     loadGapDeepDiveFloat(item,jobId).then(data=>{if(!gapDeepDiveCurrent||gapDeepDiveKey(gapDeepDiveCurrent.item)!==gapDeepDiveKey(item))return;gapDeepDiveCurrent.float_shares=data.float_shares;$('#gap_chart_modal_canvas')._floatShares=data.float_shares;const value=Number(data.float_shares);$('#gap_chart_quote_line').textContent=`Float ${Number.isFinite(value)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(value)+' shares':'unavailable'} · move the cursor over a candle for change and volume`;});
   }catch(error){$('#gap_deepdive_status').textContent=`Could not load ${item.ticker} ${formatDateMDY(item.date)}: ${error.message}`;}
 }
-function closeGapDeepDiveChart(){ $('#gap_deepdive_chart_modal').style.display='none';$('#report_spike_navigation').hidden=true;const cv=$('#gap_chart_modal_canvas');cv._avwapSelectMode=false;gapDeepDiveCurrent=null;reportSpikeNavigation=null; }
-let reportSpikeNavigation=null;
-function reportSpikeItems(tab){
-  return (tab?.EV||[]).map((item,index)=>({item,index})).filter(({item})=>item.premarketSpikeChart||String(item.title||'').startsWith('TODAY '));
-}
+function closeGapDeepDiveChart(){ $('#gap_deepdive_chart_modal').style.display='none';const cv=$('#gap_chart_modal_canvas');cv._avwapSelectMode=false;gapDeepDiveCurrent=null; }
 async function openReportSpikeChart(evIndex){
   const tab=openTabs[activeTab];if(!tab)return;
-  const candidates=reportSpikeItems(tab),position=candidates.findIndex(entry=>entry.index===evIndex);if(position<0)return;
-  reportSpikeNavigation={tab,candidates,position};
-  await showReportSpikeChart(position);
-}
-async function showReportSpikeChart(position){
-  const nav=reportSpikeNavigation;if(!nav)return;
-  const entry=nav.candidates[position];if(!entry)return;
-  nav.position=position;
-  const tab=nav.tab,card=tab.container.querySelector(`[data-ev-slot="${entry.index}"]`);
-  let item=card?._chartItem||tab.EV[entry.index];
-  if(item?.premarketSpikeChart&&(!item.chart?.bars?.t?.length)){await loadPremarketSpikeChart(tab,card,item);item=card?._chartItem||tab.EV[entry.index];}
+  const card=tab.container.querySelector(`[data-ev-slot="${evIndex}"]`);
+  let item=card?._chartItem||tab.EV?.[evIndex];if(!item)return;
+  if(item.premarketSpikeChart&&(!item.chart?.bars?.t?.length)){
+    await loadPremarketSpikeChart(tab,card,item);
+    item=card?._chartItem||tab.EV?.[evIndex];
+  }
   if(!item?.chart)return;
-  const ticker=String(tab.result?.head?.ticker||item.ticker||'').toUpperCase(),timeframe=$('#gap_deepdive_tf').value||'2m';
+  const ticker=String(tab.result?.head?.ticker||item.ticker||'').toUpperCase();
+  const timeframe=card?._chartTf||$('#gap_deepdive_tf').value||'2m';
   const pct=Number(item.premarketSpikePct),move=Number.isFinite(pct)?pct/100:(Number(item.chart.premarket_gap_pct)||0);
   const deepItem={ticker,date:item.date,move,pm_dollar_volume:Number(item.premarketSpikeDollarVolume)||0};
   const chart={...item.chart,ticker,date:item.date,pm_high_pct:move,after_hours:true};
   gapDeepDiveCurrent={item:deepItem,jobId:null,chart,float_shares:Number(item.float_shares??chart.float_shares)||null};
   $('#gap_chart_title').textContent=ticker;$('#gap_chart_date').textContent=formatDateMDY(item.date);
-  $('#gap_chart_stats').textContent=item.premarketSpikeChart?`Historical premarket spike +${(move*100).toFixed(1)}% · $${(deepItem.pm_dollar_volume/1e6).toFixed(1)}M PM volume`:'Today · live chart';
-  $('#gap_chart_player_tag').hidden=true;$('#gap_chart_player_tag').removeAttribute('href');$('#report_spike_navigation').hidden=false;
+  $('#gap_chart_stats').textContent=`Historical premarket spike +${(move*100).toFixed(1)}% · $${(deepItem.pm_dollar_volume/1e6).toFixed(1)}M PM volume`;
+  $('#gap_chart_player_tag').hidden=true;$('#gap_chart_player_tag').removeAttribute('href');
   $('#gap_chart_tf').value=timeframe;$('#gap_chart_bz').checked=true;$('#gap_chart_vwap').checked=true;$('#gap_chart_twap').checked=false;
   const cv=$('#gap_chart_modal_canvas'),key=gapDeepDiveKey(deepItem),oldState=cv._gapDeepDiveState;
-  cv.dataset.key=key;cv._gapDeepDiveState=oldState?.key===key?oldState:{key,days:timeframe==='1d'?200:5,dates:[],bars:null,panOffset:0,loading:false,timeframe,daysSelected:false,loadedDays:0,contextCache:{}};
+  const state=oldState?.key===key?oldState:{key,days:timeframe==='1d'?200:5,dates:[],bars:null,panOffset:0,loading:false,timeframe,daysSelected:false,loadedDays:0,contextCache:{}};
+  cv.dataset.key=key;cv._gapDeepDiveState=state;
   configureGapDeepDiveTimeframe(timeframe);$('#gap_chart_tf').value=timeframe;
-  const state=cv._gapDeepDiveState;
-  // Report spike charts should open with the event session and two sessions
-  // on either side already loaded and visible, like the Deepdive context.
-  if(timeframe!=='1d'){state.days=5;state.daysSelected=true;}
-  cv._avwapAnchors=null;cv._avwapSelectMode=false;cv._rangeMeasures=[];cv._selectedRangeId=null;cv._rangeZoom=timeframe==='1d'?1:0.2;cv._panOffset=0;cv._modalPanInitialized=true;cv._yZoom=1;cv._rangeMeasureMode=false;cv._zoomSelectMode=true;cv._panToolMode=false;cv._zoomDrag=null;cv.style.cursor='crosshair';
+  if(timeframe!=='1d'){
+    state.days=5;state.daysSelected=true;
+    const cached=card?._contextCache?.[`${timeframe}|5|${item.date}`];
+    const bars=card?._contextChart||cached?.bars;
+    const dates=card?._contextDates||cached?.dates||bars?.d||[];
+    if(bars?.t?.length&&dates.includes(item.date)){
+      state.bars=bars;state.dates=dates;state.loadedDays=dates.length;state.timeframe=timeframe;state.contextLoaded=true;state.panOffset=0;
+      state.contextCache=state.contextCache||{};state.contextCache[timeframe]={bars,dates,days:dates.length,daily:false};
+    }
+  }
+  cv._avwapAnchors=null;cv._avwapSelectMode=false;cv._rangeMeasures=[];cv._selectedRangeId=null;
+  cv._rangeZoom=timeframe==='1d'?1:0.2;cv._panOffset=0;cv._modalPanInitialized=true;cv._yZoom=1;
+  cv._rangeMeasureMode=false;cv._zoomSelectMode=true;cv._panToolMode=false;cv._zoomDrag=null;cv.style.cursor='crosshair';
   $('#gap_chart_measure_box').hidden=true;$('#gap_chart_measure').dataset.active='';$('#gap_chart_measure').style.borderColor='';$('#gap_chart_measure').textContent='Measure range';$('#gap_chart_pan').dataset.active='';
   $('#gap_chart_avwap_status').textContent='Hold and drag on the chart to zoom. Choose Pan to drag the chart.';
   $('#gap_chart_quote_line').textContent='Hover a candle · change, volume, dollar volume, float';$('#gap_chart_hover_time').textContent='Hover a candle to see its time · IST';
-  $('#gap_deepdive_chart_modal').style.display='flex';
-  const requiredSessions=timeframe==='1d'?Number(state.days)||200:5;
-  const contextReady=state.contextLoaded&&state.timeframe===timeframe&&Number(state.loadedDays||0)>=requiredSessions&&state.dates?.includes(deepItem.date);
-  if(!contextReady){state.timeframe=timeframe;state.loading=false;loadGapDeepDiveContext().then(()=>prefetchGapDeepDiveContexts(deepItem,state));}
-  else renderGapDeepDiveModal();
-}
-function navigateReportSpike(direction){
-  const nav=reportSpikeNavigation;if(!nav)return;
-  if(direction===0){const today=nav.candidates.findIndex(({item})=>String(item.title||'').startsWith('TODAY '));if(today>=0)showReportSpikeChart(today);return;}
-  showReportSpikeChart(Math.max(0,Math.min(nav.candidates.length-1,nav.position+direction)));
+  $('#gap_deepdive_chart_modal').style.display='flex';setTimeout(renderGapDeepDiveModal,30);
+  const contextReady=state.contextLoaded&&state.timeframe===timeframe&&state.dates?.length>=5&&state.dates.includes(item.date);
+  if(contextReady)$('#gap_chart_avwap_status').textContent=`Loaded the spike session and two neighboring sessions on each side for ${ticker}.`;
+  const contextLoad=contextReady?Promise.resolve():loadGapDeepDiveContext();
+  Promise.resolve(contextLoad).then(()=>{
+    if(gapDeepDiveCurrent&&gapDeepDiveKey(gapDeepDiveCurrent.item)===key)prefetchGapDeepDiveContexts(deepItem,state);
+  });
 }
 function openGapDeepDiveFilings(){
   const item=gapDeepDiveCurrent?.item;
