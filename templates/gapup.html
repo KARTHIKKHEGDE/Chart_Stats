@@ -1023,6 +1023,7 @@ const aioWarmCache=new Map();
 function dilutionTextForAio(report){
   if(!report)return '';
   const sections=[`SEC review as of ${report.as_of||'latest'}: ${report.summary||''}`,`Current status: ${report.current_status||''}`];
+  if(report.ceo_ownership)sections.push(`CEO ownership: ${JSON.stringify(report.ceo_ownership)}`);
   for(const [label,key] of [['Active ATMs','active_atms'],['Active warrants','active_warrants'],['Convertibles','convertibles'],['Other share overhang','other_overhang']]){
     const rows=report[key]||[];if(rows.length)sections.push(`${label}: ${JSON.stringify(rows.slice(0,12))}`);
   }
@@ -1031,6 +1032,39 @@ function dilutionTextForAio(report){
   if(Object.keys(snapshot).length)sections.push(`SEC share and market snapshot: ${JSON.stringify(snapshot)}`);
   if(report.caveats)sections.push(`Coverage notes: ${report.caveats}`);
   return sections.join('\n').slice(0,10000);
+}
+function aioDilutionFacts(report){
+  if(!report)return '';
+  const snapshot=report.market_snapshot||{},price=snapshot.last_price??report.today_math?.price;
+  const priceNumber=Number(String(price??'').replace(/[$,]/g,'').trim());
+  const numeric=value=>{const parsed=Number(String(value??'').replace(/[$,]/g,'').trim());return Number.isFinite(parsed)?parsed:null;};
+  const count=value=>{const parsed=numeric(value);return parsed===null?(value==null||value==''?'Not confirmed':String(value)):Math.round(parsed).toLocaleString();};
+  const money=value=>{const parsed=numeric(value);return parsed===null?(value==null||value==''?'Not confirmed':String(value)):`$${parsed.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`;};
+  const priceText=Number.isFinite(priceNumber)&&priceNumber>0?money(priceNumber):'Not confirmed';
+  const priceDate=snapshot.market_date||report.as_of||'date not confirmed';
+  const warrants=Array.isArray(report.active_warrants)?report.active_warrants:[];
+  const warrantDetails=warrants.length?warrants.map((warrant,index)=>`
+    <div style="padding:8px 0;border-top:1px solid #1e3040">
+      <strong>${esc(warrant.tranche||`Warrant ${index+1}`)}</strong>:
+      ${esc(count(warrant.quantity_outstanding))} outstanding at a
+      ${esc(money(warrant.strike))} strike per share. The stock closed at ${esc(priceText)} on ${esc(priceDate)}.
+      Up to ${esc(count(warrant.shares_today))} shares may be issued;
+      cash to the company if exercised for cash: ${esc(money(warrant.cash_if_exercised))}.
+      Expiry: ${esc(warrant.expiry||'Not confirmed')};
+      exercisable on that date: ${esc(warrant.exercisable_today||'Not confirmed')}.
+    </div>`).join(''):'<div style="padding:8px 0;border-top:1px solid #1e3040">No active warrants were confirmed in the SEC review.</div>';
+  const ceo=report.ceo_ownership||{},ceoShares=numeric(ceo.shares_owned);
+  const calculatedValue=ceoShares!==null&&Number.isFinite(priceNumber)&&priceNumber>0?ceoShares*priceNumber:null;
+  const ceoValue=ceo.market_value_at_close??calculatedValue;
+  const ceoDetails=`<div style="padding:8px 0;border-top:1px solid #1e3040">
+    <strong>${esc(ceo.name||'CEO')} share ownership</strong>:
+    ${esc(count(ceo.shares_owned))} shares${ceo.shares_as_of?` (reported ${esc(ceo.shares_as_of)})`:''}.
+    Estimated value at the ${esc(priceText)} close: ${esc(money(ceoValue))}.
+    This estimates the value of existing shares; it is not new dilution or cash proceeds.
+  </div>`;
+  return `<div style="margin-top:8px;padding:10px;background:#080e14;border:1px solid #1e3040;border-radius:6px;color:#c8d5e0;font-size:13px;line-height:1.6">
+    <strong style="color:#ffd23f">SEC figures · price as of ${esc(priceDate)}</strong>${warrantDetails}${ceoDetails}
+  </div>`;
 }
 function aioPayload(tab,ticker,dilutionReport){
   const r=tab?.result||{},h=r.head||{},news=(r.news||[]).slice(0,8);
@@ -1098,6 +1132,7 @@ async function openAioModal(event,btn){
         <h3>2 · Most Relevant Dilution ${chip(d.dilution?.immediate_risk)}</h3>
         <p>${esc2(d.dilution?.summary||'—')}</p>
         ${li(d.dilution?.key_items)}
+        ${aioDilutionFacts(dilutionReport)}
       </div>
       <div class="aioSection">
         <h3>3 · Offering Risk ${chip(d.offering_risk?.level)}</h3>

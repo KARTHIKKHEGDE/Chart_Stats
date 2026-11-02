@@ -1532,6 +1532,9 @@ def sec_dilution_history():
             "stockholder approvals, and "
             "shares/cash possible on the selected date. List each active convertible note/preferred instrument with principal plus "
             "accrued interest, conversion formula, floor/blockers/approval status and shares possible then. Include "
+            "the CEO's disclosed common shares beneficially owned and the filing date; exclude unexercised options, unvested awards, "
+            "and shares merely issuable. If the filing combines these with owned shares and they cannot be separated, report shares_owned "
+            "as null. CEO-owned shares are existing ownership, not new dilution. "
             "For authorized-share headroom subtract outstanding and all reserved shares; distinguish reserved capacity "
             "from immediate dilution. For options include only vested and ITM shares by the selected date. Show ELOCs, resale supply "
             "and other material overhang separately. Never present registered/reserved "
@@ -1556,6 +1559,7 @@ def sec_dilution_history():
             "source_ids}), active_warrants (array of {tranche, quantity_outstanding, quantity_as_of, strike, expiry, exercisable_today, "
             "cashless, pre_funded, in_the_money, shares_today, cash_if_exercised, source_ids}), convertibles (array of "
             "{instrument, principal_and_interest, amount_as_of, conversion_terms, blockers, shares_today, status, source_ids}), "
+            "ceo_ownership ({name, shares_owned, shares_as_of, source_ids}; shares_owned must be an exact number or null), "
             "other_overhang (array of {instrument, status, amount, source_ids}), today_math ({price, shares_outstanding, "
             "float, adtv, active_shares_today, atm_shares_today, percent_of_float, percent_of_shares_outstanding, "
             "adtv_multiple, fully_diluted_percent_of_float, nonaffiliate_shares, nonaffiliate_public_float, "
@@ -1584,10 +1588,30 @@ def sec_dilution_history():
             return [str(item).strip() for item in value[:limit] if str(item).strip()] if isinstance(value,list) else []
         def source_list(value):
             return [str(item) for item in value if str(item) in source_ids] if isinstance(value,list) else []
+        def exact_share_count(value):
+            if isinstance(value,bool) or value is None:
+                return None
+            if isinstance(value,int):
+                return value if value>=0 else None
+            if isinstance(value,float):
+                return int(value) if value>=0 and value.is_integer() else None
+            text=str(value).replace(',','').strip()
+            if not re.fullmatch(r'\d+',text):
+                return None
+            return int(text)
         active_atms=analysis.get('active_atms') if isinstance(analysis.get('active_atms'),list) else []
         active_warrants=analysis.get('active_warrants') if isinstance(analysis.get('active_warrants'),list) else []
         convertibles=analysis.get('convertibles') if isinstance(analysis.get('convertibles'),list) else []
         other_overhang=analysis.get('other_overhang') if isinstance(analysis.get('other_overhang'),list) else []
+        raw_ceo_ownership=analysis.get('ceo_ownership') if isinstance(analysis.get('ceo_ownership'),dict) else {}
+        ceo_shares=exact_share_count(raw_ceo_ownership.get('shares_owned'))
+        try:
+            ceo_price=float(market_snapshot.get('last_price'))
+        except (TypeError,ValueError):
+            ceo_price=0
+        if not 0<ceo_price<float('inf'):
+            ceo_price=0
+        ceo_market_value=round(ceo_shares*ceo_price,2) if ceo_shares is not None and ceo_price>0 else None
         def clean_instruments(rows,fields):
             cleaned_rows=[]
             for row in rows[:30]:
@@ -1607,6 +1631,12 @@ def sec_dilution_history():
                 'active_atms':clean_instruments(active_atms,('name','agent','status','size','sold','remaining','remaining_as_of','shares_today','constraint','source_ids')),
                 'active_warrants':clean_instruments(active_warrants,('tranche','quantity_outstanding','quantity_as_of','strike','expiry','exercisable_today','cashless','pre_funded','in_the_money','shares_today','cash_if_exercised','source_ids')),
                 'convertibles':clean_instruments(convertibles,('instrument','principal_and_interest','amount_as_of','conversion_terms','blockers','shares_today','status','source_ids')),
+                'ceo_ownership':{'name':str(raw_ceo_ownership.get('name') or 'CEO').strip(),
+                                 'shares_owned':ceo_shares,
+                                 'shares_as_of':str(raw_ceo_ownership.get('shares_as_of') or '').strip(),
+                                 'market_value_at_close':ceo_market_value,
+                                 'price_used':ceo_price or None,
+                                 'source_ids':source_list(raw_ceo_ownership.get('source_ids'))},
                 'other_overhang':clean_instruments(other_overhang,('instrument','status','amount','source_ids')),
                 'today_math':analysis.get('today_math') if isinstance(analysis.get('today_math'),dict) else {},
                 'market_snapshot':market_snapshot,'issuer_type':issuer_type,'shelf_instruction':shelf_instruction,
@@ -2285,8 +2315,9 @@ HISTORICAL GAP BEHAVIOR:
 {intraday_block}
 Treat regular-session high stats and premarket high stats as separate measures. Use the premarket high vs cumulative premarket VWAP range when describing the premarket spike setup.
 DILUTION / SEC FILING CONTEXT (if available):
-{str(dilution_ctx)[:2000] or filing_text}
+{str(dilution_ctx)[:4000] or filing_text}
 Treat filing titles as leads, not proof that an offering is currently active. State when status is unconfirmed from the supplied filing text.
+Explain dilution in plain, direct terms. When the report lists active warrants, give the outstanding warrant count, strike per share, stock close and date, possible shares, and cash proceeds if exercised for cash. Include the CEO's disclosed owned-share count and estimated value at that close when confirmed. Say "not confirmed" when a number is missing. Explain that CEO-owned shares are existing ownership, not new dilution, and their estimated value is not cash proceeds.
 
 Return this exact JSON structure (fill every field, use null if unknown):
 {{
@@ -2296,9 +2327,9 @@ Return this exact JSON structure (fill every field, use null if unknown):
     "key_news": "headline or null"
   }},
   "dilution": {{
-    "summary": "1-2 sentences on most relevant current dilution relative to price {current_price or '?'}.",
+    "summary": "1-2 plain sentences. Give active warrant count, strike, stock close/date, and CEO share count/value when confirmed; say not confirmed for missing figures.",
     "immediate_risk": "high|medium|low|unknown",
-    "key_items": ["item1", "item2"]
+    "key_items": ["Plain-language, specific facts for active instruments; avoid generic labels when figures are available."]
   }},
   "offering_risk": {{
     "level": "high|medium|low",
@@ -2323,7 +2354,7 @@ Return this exact JSON structure (fill every field, use null if unknown):
   }},
   "final_assessment": {{
     "catalyst": "one line",
-    "dilution": "one line",
+    "dilution": "one plain-language line with active warrant count/strike and CEO shares/value when confirmed; otherwise state what is not confirmed.",
     "offering_risk": "high|medium|low",
     "historical_behavior": "fades|holds|mixed|unknown",
     "key_observation": "The single most important thing a trader should watch on the chart today."
