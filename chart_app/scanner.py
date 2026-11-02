@@ -393,9 +393,11 @@ def _normalize_yahoo_news(article, kind):
             "published": published or "", "kind": kind}
 
 
-def _fetch_yahoo_news(ticker):
+def _fetch_yahoo_news(ticker, minimum_count=2):
+    """Fetch recent press releases, querying extra Yahoo feeds only as needed."""
     items = []
     errors = []
+    minimum_count = max(1, min(100, int(minimum_count or 2)))
     press_wire_pattern = re.compile(
         r"globe.?newswire|pr\s*newswire|business\s*wire|newsfile|access\s*newswire|"
         r"the.?newswire|newsdirect|eqs.?news|cnw.?group", re.I
@@ -418,12 +420,14 @@ def _fetch_yahoo_news(ticker):
                     items.append(item)
         except Exception as exc:
             errors.append(f"Yahoo '{query}': {type(exc).__name__}: {exc}")
-        if len(items) >= 2:
+        # Yahoo's ticker search usually returns up to 20 releases. Avoid a
+        # second network request unless this page actually needs more items.
+        if len(items) >= minimum_count:
             break
 
     # Search may omit the ticker's own Yahoo Finance news feed, so also inspect
     # Yahoo's ticker news endpoint before deciding that no releases are present.
-    if len(items) < 2:
+    if len(items) < minimum_count:
         try:
             for article in (yf.Ticker(ticker.replace(".", "-")).news or []):
                 content = article.get("content") if isinstance(article.get("content"), dict) else article
@@ -464,25 +468,69 @@ def _fetch_yahoo_news(ticker):
     if not unique:
         app.logger.warning("No press releases found for %s. News fetch diagnostics: %s",
                            ticker, " | ".join(errors) if errors else "sources returned no matching press releases")
-    return unique[:2]
+    return unique
 
 
-def _get_scanner_news(ticker):
+def _get_scanner_news(ticker, limit=2):
+    limit = max(1, min(100, int(limit or 2)))
     now = time.time()
     with _scanner_details_lock:
         cached = _scanner_details.get(ticker) or {}
-        # Keep the newest two releases current; a five-minute cache made new
-        # releases invisible to the scanner for too long.
+        cached_news = list(cached.get("news") or [])
+        # Keep the full Yahoo result set in the ticker cache. The report shows
+        # two initially, while its "2 more" control pages through this same set.
         news_ttl = 60
-        if now - cached.get("news_at", 0) < news_ttl:
-            return list(cached.get("news") or [])
-    news = _fetch_yahoo_news(ticker)
+        fresh = now - cached.get("news_at", 0) < news_ttl
+        if fresh and len(cached_news) >= limit:
+            return cached_news[:limit]
+    fetched = _fetch_yahoo_news(ticker, minimum_count=limit)
+    # Keep anything already fetched if this additional Yahoo query returns a
+    # partial set. Headline and URL keys prevent duplicate rows across feeds.
+    combined, seen = [], set()
+    for item in cached_news + fetched:
+        key = re.sub(r"\W+", " ", str(item.get("title") or "").lower()).strip() or str(item.get("url") or "")
+        if key and key not in seen:
+            combined.append(item)
+            seen.add(key)
+    combined.sort(key=lambda item: _scanner_news_published_at(item), reverse=True)
     with _scanner_details_lock:
         cached = _scanner_details.setdefault(ticker, {})
-        cached.update(news=news, news_at=now,
-                      news_status=("Latest press releases found on Yahoo Finance" if news else
+        cached.update(news=combined, news_at=now,
+                      news_status=("Latest press releases found on Yahoo Finance" if combined else
                                    "No press releases found on Yahoo Finance"))
-    return news
+    return combined[:limit]
+
+
+def _scanner_news_published_at(item):
+    try:
+        stamp = pd.Timestamp(item.get("published"))
+        if stamp.tzinfo is None:
+            stamp = stamp.tz_localize("UTC")
+        return stamp.timestamp()
+    except Exception:
+        return 0
+
+
+@app.route("/api/scanner-news-more")
+def scanner_news_more_api():
+    """Return a ticker-specific page of Yahoo Finance press releases."""
+    username = (request.args.get("user") or "").strip().lower()
+    token = (request.args.get("token") or "").strip()
+    ticker = (request.args.get("ticker") or "").strip().upper()
+    try:
+        offset = int(request.args.get("offset") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid news offset."}), 400
+    if not username or not _db_validate_session(username, token):
+        return jsonify({"error": "Session expired. Please sign in again."}), 401
+    if not re.fullmatch(r"[A-Z0-9.-]{1,12}", ticker):
+        return jsonify({"error": "Invalid ticker."}), 400
+    if offset < 0 or offset > 100:
+        return jsonify({"error": "News offset is out of range."}), 400
+    all_news = _get_scanner_news(ticker, limit=offset + 3)
+    page = all_news[offset:offset + 2]
+    return jsonify({"ticker": ticker, "offset": offset, "news": page,
+                    "has_more": len(all_news) > offset + 2})
 
 
 def _scanner_approaches(ticker, previous_close):

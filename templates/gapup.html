@@ -824,6 +824,20 @@ async function initAuth(){
 
 let lastText="", timer=null, lastChart=null, EV=[];
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function newsPressReleaseRow(item,ticker){
+  const hasUrl=/^https?:\/\//i.test(item.url||'');
+  const link=hasUrl
+    ? `<button type="button" class="newsAiTrigger" style="background:none;border:0;color:#6cc4ff;cursor:pointer;font:inherit;text-align:left;padding:0;text-decoration:underline;text-underline-offset:2px" data-url="${esc(item.url)}" data-title="${esc(item.title)}" data-published="${esc(item.published||'')}" data-ticker="${esc(ticker||'')}">&#x1F4CA; ${esc(item.title)}</button>`
+    : esc(item.title);
+  let publishedDate='';
+  if(item.published){
+    const raw=String(item.published),parsed=new Date(raw),iso=/^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+    publishedDate=iso?`${iso[2]}/${iso[3]}/${iso[1]}`:(!Number.isNaN(parsed.getTime())?`${String(parsed.getUTCMonth()+1).padStart(2,'0')}/${String(parsed.getUTCDate()).padStart(2,'0')}/${parsed.getUTCFullYear()}`:'');
+  }
+  const dateTag=publishedDate?`<span style="display:inline-block;margin-right:8px;padding:1px 6px;border:1px solid #294458;border-radius:3px;background:#0b151c;color:#9fc5dc;font-size:11px;white-space:nowrap">${esc(publishedDate)}</span>`:'';
+  const key=item.url||item.title||'';
+  return `<div class="news-release-row" data-news-key="${esc(key)}" style="padding:7px 0;border-bottom:1px solid #222">${dateTag}${link}<span style="color:#777;font-size:12px"> — ${esc(item.publisher||'Yahoo Finance')}</span></div>`;
+}
 const formatDateMDY=value=>{const raw=String(value??'');const m=raw.slice(0,10).match(/^(\d{4})-(\d{2})-(\d{2})$/);return m?`${m[2]}/${m[3]}/${m[1]}`:raw;};
 const formatDateTimeMDY=value=>{const raw=String(value??'');return formatDateMDY(raw)+(raw.length>10?raw.slice(10).replace('T',' '):'');};
 const formatChartTitleDates=value=>String(value??'').replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g,(_,year,month,day)=>`${month}/${day}/${year}`);
@@ -937,6 +951,28 @@ function formatNewsReleaseTime(value){
   return `${get('month')}/${get('day')}/${get('year')} · ${get('hour')}:${get('minute')} ${get('dayPeriod')} IST`;
 }
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#news_ai_modal')?.style.display==='flex')closeNewsAiModal();});
+
+document.addEventListener('click',async e=>{
+  const btn=e.target.closest('.newsMoreBtn');
+  if(!btn||btn.disabled)return;
+  e.preventDefault();
+  const panel=btn.closest('[data-news-panel]'),list=panel?.querySelector('[data-news-list]'),status=panel?.querySelector('[data-news-more-status]');
+  if(!list)return;
+  const ticker=btn.dataset.ticker||'',offset=Number(btn.dataset.offset)||0;
+  btn.disabled=true;btn.textContent='Loading…';if(status)status.textContent='';
+  try{
+    const query=new URLSearchParams({user:currentUser||'',token:sessionToken||'',ticker,offset:String(offset)});
+    const response=await fetch(`/api/scanner-news-more?${query.toString()}`),body=await response.text();
+    let data;try{data=JSON.parse(body);}catch{throw new Error(`News service returned an invalid response (HTTP ${response.status}).`);}
+    if(!response.ok)throw new Error(data.error||`Could not load more news (HTTP ${response.status}).`);
+    const items=Array.isArray(data.news)?data.news:[],seen=new Set([...list.querySelectorAll('[data-news-key]')].map(row=>(row.dataset.newsKey||'').trim().toLowerCase()));
+    items.forEach(item=>{const key=String(item.url||item.title||'').trim().toLowerCase();if(!key||seen.has(key))return;list.insertAdjacentHTML('beforeend',newsPressReleaseRow(item,ticker));seen.add(key);});
+    btn.dataset.offset=String(offset+items.length);
+    if(!data.has_more||items.length===0){btn.hidden=true;if(status)status.textContent=items.length?'No more press releases.':'No more press releases found.';}
+    else{btn.disabled=false;btn.textContent='2 more';}
+    if(items.length)warmNewsSummaries(ticker,items);
+  }catch(error){btn.disabled=false;btn.textContent='2 more';if(status){status.textContent=error.message;status.style.color='#ff7777';}}
+});
 
 document.addEventListener('click',async e=>{
   const btn=e.target.closest('.newsAiTrigger');
@@ -1481,21 +1517,8 @@ function renderTab(tab, r, isRefresh){
     `<div>Grade: <span class="badge ${esc(h.gcls)}">${esc(h.grade)}</span> <span class="c">${esc(h.score)}</span> <span class="${esc(h.gcls)}">· ${esc(h.verdict)}</span></div>`+
     `<div class="foot">Based on ${Number(h.n)||0} similar historical gap-up setups.</div></div>`;
   const newsItems = r.news || [];
-  o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px"><span>Latest Press Releases &#x2013; Yahoo Finance</span><button type="button" class="aioBtn" onclick="openAioModal(event,this)" data-ticker="${esc(h.ticker)}" style="font-size:11px;padding:4px 10px">&#128202; All-in-One Summary</button></div>`+
-    (newsItems.length ? newsItems.map(item=>{
-      const hasUrl=/^https?:\/\//i.test(item.url||'');
-      const link=hasUrl
-        ? `<button type="button" class="newsAiTrigger" style="background:none;border:0;color:#6cc4ff;cursor:pointer;font:inherit;text-align:left;padding:0;text-decoration:underline;text-underline-offset:2px" data-url="${esc(item.url)}" data-title="${esc(item.title)}" data-published="${esc(item.published||'')}" data-ticker="${esc(tab?.result?.head?.ticker||'')}">&#x1F4CA; ${esc(item.title)}</button>`
-        : esc(item.title);
-      let publishedDate='';
-      if(item.published){
-        const raw=String(item.published), parsed=new Date(raw);
-        const iso=/^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
-        publishedDate=iso?`${iso[2]}/${iso[3]}/${iso[1]}`:(!Number.isNaN(parsed.getTime())?`${String(parsed.getUTCMonth()+1).padStart(2,'0')}/${String(parsed.getUTCDate()).padStart(2,'0')}/${parsed.getUTCFullYear()}`:'');
-      }
-      const dateTag=publishedDate?`<span style="display:inline-block;margin-right:8px;padding:1px 6px;border:1px solid #294458;border-radius:3px;background:#0b151c;color:#9fc5dc;font-size:11px;white-space:nowrap">${esc(publishedDate)}</span>`:'';
-      return `<div style="padding:7px 0;border-bottom:1px solid #222">${dateTag}${link}<span style="color:#777;font-size:12px"> — ${esc(item.publisher || 'Yahoo Finance')}</span></div>`;
-    }).join('') : `<div class="foot">${esc(r.news_status || 'No press releases found on Yahoo Finance.')}</div>`) + `</div>`;
+  o += `<div class="panel" data-news-panel><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px"><span>Latest Press Releases &#x2013; Yahoo Finance</span><button type="button" class="aioBtn" onclick="openAioModal(event,this)" data-ticker="${esc(h.ticker)}" style="font-size:11px;padding:4px 10px">&#128202; All-in-One Summary</button></div>`+
+    (newsItems.length ? `<div data-news-list>${newsItems.map(item=>newsPressReleaseRow(item,h.ticker)).join('')}</div><div style="display:flex;align-items:center;gap:10px;margin-top:8px"><button type="button" class="newsMoreBtn" data-ticker="${esc(h.ticker)}" data-offset="${newsItems.length}" style="border:1px solid #24577a;border-radius:4px;background:#102333;color:#8ed5ff;padding:6px 12px;cursor:pointer;font:inherit">2 more</button><span class="foot" data-news-more-status role="status"></span></div>` : `<div class="foot">${esc(r.news_status || 'No press releases found on Yahoo Finance.')}</div>`) + `</div>`;
   const reverseSplits=r.reverse_splits||[];
   o += `<div class="panel"><div class="ttl">Reverse Splits · ${reverseSplits.length} ${reverseSplits.length===1?'event':'events'}</div>`+
     (reverseSplits.length?`<div class="kv">${reverseSplits.map(item=>`<span>Reverse split</span><span>${esc(formatDateMDY(item.date))} · ${esc(item.ratio)} reverse${item.price_conversion?` (${esc(item.price_conversion)})`:''}</span>`).join('')}</div>`:`<div class="foot">No reverse splits found in available split history.</div>`)+`</div>`;
