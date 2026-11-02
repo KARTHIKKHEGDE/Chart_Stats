@@ -1174,6 +1174,12 @@ document.addEventListener('click',event=>{
   }
   if(event.target.closest('[data-ticker-chat-close]'))$('#ticker_ai_chat_widget').hidden=true;
 });
+document.addEventListener('keydown',event=>{
+  const question=event.target.closest('[data-ticker-chat-question]');
+  if(!question||event.key!=='Enter'||event.shiftKey||event.isComposing)return;
+  event.preventDefault();
+  question.form?.requestSubmit();
+});
 document.addEventListener('submit',async event=>{
   const form=event.target.closest('[data-ticker-chat-form]');
   if(!form)return;
@@ -1189,6 +1195,7 @@ document.addEventListener('submit',async event=>{
   if(!question)return;
   if(question.length>1200){if(status)status.textContent='Keep your question under 1,200 characters.';return;}
   if(tickerChatPending.has(ticker))return;
+  questionField.value='';
   tickerChatPending.add(ticker);syncTickerChatWidget();
   let finalStatus='';
   try{
@@ -1210,7 +1217,6 @@ document.addEventListener('submit',async event=>{
     if(openTabs[ticker]!==tab)return;
     tickerChatHistories.set(ticker,[...priorHistory,{role:'user',content:question},{role:'assistant',content:answer}].slice(-16));
     finalStatus=`Answered for ${ticker}${result.provider?` · ${result.provider}`:''}.`;
-    if(String(activeTab||'').toUpperCase()===ticker&&questionField.value===question)questionField.value='';
   }catch(error){
     finalStatus=error.message||'Could not answer this question.';
   }finally{
