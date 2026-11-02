@@ -1,4 +1,4 @@
-<!doctype html>
+﻿﻿﻿<!doctype html>
 <html><head><meta charset="utf-8"><title>Gap-Up Fade Analyzer</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?app=gapup">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1111,7 +1111,7 @@ async function run(refresh){
 }
 
 function premarketSpikeChartCard(index){
-  return `<div class="evc" data-ev-slot="${index}" onclick="openChartModal(${index})"><div class="evhead"><div class="evt" id="evtitle${index}"></div><span class="eventDateTag" data-event-date></span><div class="evcontrols"><select class="evtf" title="Timeframe"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select><select class="evdays" title="Sessions shown"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="75">75 days</option><option value="80">80 days</option><option value="200">200 days</option></select><button class="evzoom" data-zoom="out" title="Zoom out">−</button><button class="evzoom" data-zoom="in" title="Zoom in">+</button><button class="evmeasure" type="button" title="Drag across bars to measure volume, dollar volume, and float rotation">Measure</button><button class="evtoday" type="button" title="Return to today's live chart">Today</button></div></div><canvas id="ev${index}"></canvas></div>`;
+  return `<div class="evc" data-ev-slot="${index}" onclick="openChartModal(${index})"><div class="evhead"><div class="evt" id="evtitle${index}"></div><span class="eventDateTag" data-event-date></span><div class="evcontrols"><select class="evtf" title="Timeframe"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select><select class="evdays" title="Sessions shown"><option value="1">1 day</option><option value="3">3 days</option><option value="5" selected>5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="75">75 days</option><option value="80">80 days</option><option value="200">200 days</option></select><button class="evzoom" data-zoom="out" title="Zoom out">−</button><button class="evzoom" data-zoom="in" title="Zoom in">+</button><button class="evmeasure" type="button" title="Drag across bars to measure volume, dollar volume, and float rotation">Measure</button><button class="evtoday" type="button" title="Return to today's live chart">Today</button></div></div><canvas id="ev${index}"></canvas></div>`;
 }
 
 function renderPremarketSpikeDays(tab,report,days){
@@ -1236,7 +1236,7 @@ function renderTab(tab, r, isRefresh){
   o += `<div class="panel" data-premarket-spikes><div class="ttl">Premarket Spike Days · PM high &gt; +40% · PM $ volume &gt; $10M · last year</div>`+
     (surgeDays?`<div class="foot">Loading premarket spike days…</div>`:`<div class="foot" data-surge-status>Checking this history in the background…</div>`)+`</div>`;
   o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">`+
-     `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:7px">${esc(T.p6)}<label style="font-size:11px;color:#aaa">All charts <select id="ev_all_tf" class="evtf"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label><select id="ev_all_days" class="evtf" title="Days for all charts"><option value="1" selected>1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="75">75 days</option><option value="80">80 days</option><option value="200">200 days</option></select><select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
+     `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:7px">${esc(T.p6)}<label style="font-size:11px;color:#aaa">All charts <select id="ev_all_tf" class="evtf"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label><select id="ev_all_days" class="evtf" title="Days for all charts"><option value="1">1 day</option><option value="3">3 days</option><option value="5" selected>5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="75">75 days</option><option value="80">80 days</option><option value="200">200 days</option></select><select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
      (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" checked style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/21 EMA cloud + BB)</label></div>`+
      `<span style="font-size:12px;color:#29a8ff;font-weight:normal">🔍 Click any chart to enlarge</span></div>`+
   `<div class="evgrid">`+tab.EV.map((_,i)=>premarketSpikeChartCard(i)).join('')+
@@ -1263,8 +1263,8 @@ function renderTab(tab, r, isRefresh){
   const sigSelect = tab.container.querySelector('#sig');
   const bzCheck = tab.container.querySelector('#bz');
   const allTf=tab.container.querySelector('#ev_all_tf'),allDays=tab.container.querySelector('#ev_all_days');
-  const applyAllChartSettings=()=>{tab.EV.forEach((_,i)=>{const card=tab.container.querySelector(`[data-ev-slot="${i}"]`);if(!card)return;card._chartTf=allTf.value;card._chartDays=Number(allDays.value)||1;card._panOffset=0;card._yZoom=1;card._zoom=1;card._contextEdgeDone={};const tf=card.querySelector('.evtf'),days=card.querySelector('.evdays');if(tf)tf.value=card._chartTf;if(days)days.value=String(card._chartDays);});drawEvAll(tab.EV,tab.container);};
-  if(allTf)allTf.onchange=()=>{allDays.value=allTf.value==='1d'?'200':'1';applyAllChartSettings();};
+  const applyAllChartSettings=()=>{tab.EV.forEach((_,i)=>{const card=tab.container.querySelector(`[data-ev-slot="${i}"]`);if(!card)return;card._chartTf=allTf.value;card._chartDays=Number(allDays.value)||5;card._panOffset=0;card._yZoom=1;card._zoom=1;card._contextEdgeDone={};const tf=card.querySelector('.evtf'),days=card.querySelector('.evdays');if(tf)tf.value=card._chartTf;if(days)days.value=String(card._chartDays);});drawEvAll(tab.EV,tab.container);};
+  if(allTf)allTf.onchange=()=>{allDays.value=allTf.value==='1d'?'200':'5';applyAllChartSettings();};
   if(allDays)allDays.onchange=applyAllChartSettings;
   if(sigSelect) sigSelect.onchange = () => drawEvAll(tab.EV, tab.container);
   if(bzCheck) bzCheck.onchange = () => drawEvAll(tab.EV, tab.container);
@@ -1302,14 +1302,14 @@ function drawEvAll(evList, containerEl){
   const bzEl = cEl.querySelector('#bz');
   const bzChecked = bzEl ? bzEl.checked : false;
   const tabForCharts=Object.values(openTabs).find(tab=>tab.container===cEl);
-  if(!window.evLazyObserver)window.evLazyObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){entry.target._chartVisible=true;const t=Object.values(openTabs).find(x=>x.container.contains(entry.target));if(t){if(entry.target._chartItem?.premarketSpikeChart)loadPremarketSpikeChart(t,entry.target,entry.target._chartItem);drawEvAll(t.EV,t.container);}window.evLazyObserver.unobserve(entry.target);}}),{rootMargin:'450px 0px'});
+  if(!window.evLazyObserver)window.evLazyObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){entry.target._chartVisible=true;const t=Object.values(openTabs).find(x=>x.container.contains(entry.target));if(t){if(entry.target._chartItem?.premarketSpikeChart)loadPremarketSpikeChart(t,entry.target,entry.target._chartItem);prefetchEvCardContexts(entry.target,t);drawEvAll(t.EV,t.container);}window.evLazyObserver.unobserve(entry.target);}}),{rootMargin:'450px 0px'});
   list.forEach((c,i)=>{
     const card=cEl.querySelector(`[data-ev-slot="${i}"]`), cv=cEl.querySelector('#ev'+i);
     if(!card || !cv) return;
     if(!card._chartItem) card._chartItem=c;
     if(!card._sessionDate) card._sessionDate=card._chartItem.date||c.date;
     if(!card._chartTf) card._chartTf='2m';
-    if(!card._chartDays) card._chartDays=1;
+    if(!card._chartDays) card._chartDays=5; // default ±2 days
     const item=card._chartItem || c;
     if(!card._eventDate)card._eventDate=item.date||c.date;
     const dateList=tabForCharts?tabForCharts.sessionDates:[];
@@ -1317,7 +1317,7 @@ function drawEvAll(evList, containerEl){
     const title=card.querySelector(`#evtitle${i}`), tf=card.querySelector('.evtf');
     if(title) title.innerHTML=esc(formatChartTitleDates(item.title))+(item.sim?'':'<span class="d"> (not in similar set)</span>');
     const eventDateTag=card.querySelector('[data-event-date]');if(eventDateTag){eventDateTag.textContent=`Event ${formatDateMDY(card._eventDate)||'date'}`;}
-    if(tf){tf.value=card._chartTf;tf.onclick=e=>e.stopPropagation();tf.onchange=e=>{e.stopPropagation();const previousTf=card._chartTf;card._chartTf=tf.value;card._panOffset=0;card._yZoom=1;card._zoom=1;card._contextEdgeDone={};if(tf.value==='1d')card._chartDays=200;else if(previousTf==='1d')card._chartDays=1;const daysSelect=card.querySelector('.evdays');if(daysSelect)daysSelect.value=String(card._chartDays);if(card._chartDays===1&&tf.value!=='1d')loadChartContext(card,tabForCharts);else if((tf.value==='1d')!==!!card._contextDaily||!card._contextChart||(tf.value==='1d'&&(card._contextDates||[]).length<card._chartDays))loadChartContext(card,tabForCharts);else drawEvAll(tabForCharts.EV,tabForCharts.container);};}
+    if(tf){tf.value=card._chartTf;tf.onclick=e=>e.stopPropagation();tf.onchange=e=>{e.stopPropagation();const previousTf=card._chartTf;card._chartTf=tf.value;card._panOffset=0;card._yZoom=1;card._zoom=1;card._contextEdgeDone={};if(tf.value==='1d')card._chartDays=200;else if(previousTf==='1d')card._chartDays=5;const daysSelect=card.querySelector('.evdays');if(daysSelect)daysSelect.value=String(card._chartDays);card._contextChart=null;loadChartContext(card,tabForCharts);};}
     const days=card.querySelector('.evdays');if(days){days.value=String(card._chartDays);days.onclick=e=>e.stopPropagation();days.onchange=e=>{e.stopPropagation();card._chartDays=Number(days.value);card._panOffset=0;loadChartContext(card,tabForCharts);};}
     card.querySelectorAll('.evzoom').forEach(btn=>btn.onclick=e=>{e.stopPropagation();card._zoom=Math.max(.5,Math.min(8,(card._zoom||1)*(btn.dataset.zoom==='in'?1.25:.8)));drawEvAll(list,cEl);});
     const measureBtn=card.querySelector('.evmeasure');if(measureBtn){measureBtn.onclick=e=>{e.stopPropagation();openChartModal(i);setTimeout(()=>{const modalCv=$('#cm_canvas');if(modalCv._featureUi){setGapDeepDiveMouseMode('measure',modalCv,modalCv._featureUi);modalCv._featureUi.status.textContent='Drag between any two points to measure.';}},45);};}
@@ -1339,9 +1339,42 @@ function drawEvAll(evList, containerEl){
     if(!card._chartVisible&&$('#chart_modal').style.display!=='flex'){window.evLazyObserver.observe(card);return;}
     const markerDates=card._contextDates?.length?card._contextDates:[card._sessionDate||item.date],markerKey=`${String(tabForCharts?.result?.head?.ticker||'').toUpperCase()}|${[...new Set(markerDates)].sort().join(',')}`;
     if(tabForCharts&&cv._marketEventKey!==markerKey){cv._marketEventKey=markerKey;cv._marketEvents=[];loadChartMarketEvents(tabForCharts.result?.head?.ticker,markerDates).then(events=>{if(cv._marketEventKey!==markerKey||!cv.isConnected)return;cv._marketEvents=events;if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);if($('#chart_modal').style.display==='flex'&&currentModalSlot===i)renderModalChart();});}
-    if((card._chartDays>1||card._chartTf==='1d')&&!card._contextChart&&!card._contextLoading&&!card._contextError)loadChartContext(card,tabForCharts);
+    if(!card._contextChart&&!card._contextLoading&&!card._contextError)loadChartContext(card,tabForCharts);
     drawEv(cv,renderItem.chart,sel,bzChecked,undefined,card._chartTf,card._zoom||1);
   });
+}
+// Pre-warm the card's context cache for 1m/2m/5m timeframes in a single round-trip.
+// Mirrors deepdive's prefetchGapDeepDiveContexts — result is stored in card._contextCache
+// so subsequent TF switches are served instantly without an additional fetch.
+async function prefetchEvCardContexts(card, tab) {
+  if(!card||!tab||card._contextPrefetched||card._contextPrefetchPromise) return;
+  const ticker=tab.result?.head?.ticker;
+  if(!ticker||!card._sessionDate) return;
+  const query=new URLSearchParams({ticker,date:card._sessionDate,user:currentUser||'',token:sessionToken||''});
+  card._contextPrefetchPromise=(async()=>{
+    try{
+      const response=await fetch('/api/chart-context/prefetch?'+query.toString());
+      const data=await response.json();
+      if(!response.ok||!data.contexts)return;
+      card._contextCache=card._contextCache||{};
+      for(const tf of ['1m','2m','5m']){
+        const ctx=data.contexts[tf];
+        if(ctx?.bars&&ctx.dates?.length){
+          const cacheKey=`${tf}|5|${card._sessionDate}`;
+          card._contextCache[cacheKey]={bars:ctx.bars,dates:ctx.dates};
+        }
+      }
+      card._contextPrefetched=true;
+      // If the currently active TF is one we just prefetched and context is not yet loaded, serve it now
+      const activeTf=card._chartTf||'2m';
+      if(activeTf!=='1d'&&!card._contextChart){
+        const cacheKey=`${activeTf}|5|${card._sessionDate}`;
+        const cached=card._contextCache[cacheKey];
+        if(cached){card._contextChart=cached.bars;card._contextDates=cached.dates;card._contextDaily=false;card._contextError='';card._contextLoading=false;card._chartDays=5;card._contextEdgeDone={};drawEvAll(tab.EV,tab.container);}
+      }
+    }catch(e){/* silent — main fetch in loadChartContext will still run */}
+    finally{card._contextPrefetchPromise=null;}
+  })();
 }
 function mergeDailyChartBars(current,incoming){
   const byDate=new Map(),fields=['o','h','l','c','v','vw'];
@@ -1351,12 +1384,26 @@ function mergeDailyChartBars(current,incoming){
 }
 async function loadChartContext(card,tab,anchorDate,extendDaily=false,extendSide=0){
   if(!card||!tab)return;
-  const days=card._chartDays||1, tf=card._chartTf||'2m';
-  if(days===1&&tf!=='1d'){card._contextChart=null;card._contextDates=[];card._contextDaily=false;card._contextError='';card._contextLoading=false;drawEvAll(tab.EV,tab.container);return;}
+  const days=card._chartDays||5, tf=card._chartTf||'2m';
+  card._contextCache=card._contextCache||{};
+  // Check cache for all TFs (intraday + 1d) — enables instant TF switching
+  if(!anchorDate&&!extendDaily){
+    const cacheKey=`${tf}|${days}|${card._sessionDate}`;
+    const cached=card._contextCache[cacheKey];
+    if(cached){
+      card._contextChart=cached.bars;card._contextDates=cached.dates;card._contextDaily=false;card._contextError='';card._contextLoading=false;card._contextEdgeDone={};
+      drawEvAll(tab.EV,tab.container);
+      if($('#chart_modal').style.display==='flex'&&currentModalSlot===Number(card.dataset.evSlot))renderModalChart();
+      return;
+    }
+  }
   card._contextLoading=true;card._contextError='';
   const requestId=(card._contextRequestId||0)+1;card._contextRequestId=requestId;
   const query=new URLSearchParams({ticker:tab.result?.head?.ticker||'',date:anchorDate||card._sessionDate,days:String(days),tf,user:currentUser||'',token:sessionToken||'',postmarket:'1'});
-  try{const response=await fetch('/api/chart-context?'+query.toString()),data=await response.json();if(requestId!==card._contextRequestId)return;if(!response.ok)throw new Error(data.error||'Could not load chart range');if(extendDaily&&tf==='1d'&&card._contextDaily&&card._contextChart){const previousDates=card._contextDates||[],merged=mergeDailyChartBars(card._contextChart,data.bars),addedBefore=previousDates.length?merged.d.indexOf(previousDates[0]):0,addedAfter=previousDates.length?merged.d.length-merged.d.indexOf(previousDates[previousDates.length-1])-1:0;card._contextChart=merged;card._contextDates=merged.d;card._panOffset=(card._panOffset||0)-addedBefore;if(extendSide&&((extendSide<0&&!addedBefore)||(extendSide>0&&!addedAfter))){card._contextEdgeDone=card._contextEdgeDone||{};card._contextEdgeDone[extendSide]=true;}else card._contextEdgeDone={};}else{card._contextChart=data.bars;card._contextDates=data.dates;card._contextDaily=!!data.daily;card._contextEdgeDone={};}if(anchorDate)card._sessionDate=extendDaily?card._sessionDate:anchorDate;}
+  try{const response=await fetch('/api/chart-context?'+query.toString()),data=await response.json();if(requestId!==card._contextRequestId)return;if(!response.ok)throw new Error(data.error||'Could not load chart range');if(extendDaily&&tf==='1d'&&card._contextDaily&&card._contextChart){const previousDates=card._contextDates||[],merged=mergeDailyChartBars(card._contextChart,data.bars),addedBefore=previousDates.length?merged.d.indexOf(previousDates[0]):0,addedAfter=previousDates.length?merged.d.length-merged.d.indexOf(previousDates[previousDates.length-1])-1:0;card._contextChart=merged;card._contextDates=merged.d;card._panOffset=(card._panOffset||0)-addedBefore;if(extendSide&&((extendSide<0&&!addedBefore)||(extendSide>0&&!addedAfter))){card._contextEdgeDone=card._contextEdgeDone||{};card._contextEdgeDone[extendSide]=true;}else card._contextEdgeDone={};}else{card._contextChart=data.bars;card._contextDates=data.dates;card._contextDaily=!!data.daily;card._contextEdgeDone={};
+    // Save to per-TF cache (all TFs incl. 1d, not during anchor-change extends)
+    if(!anchorDate&&!extendDaily){const cacheKey=`${tf}|${days}|${card._sessionDate}`;card._contextCache[cacheKey]={bars:data.bars,dates:data.dates};}
+  }if(anchorDate)card._sessionDate=extendDaily?card._sessionDate:anchorDate;}
   catch(error){if(!extendDaily)card._contextChart=null;card._contextError=error.message;}
   card._contextLoading=false;
   drawEvAll(tab.EV,tab.container);
@@ -1387,9 +1434,11 @@ async function navigateEvCard(card, step, tab){
   }
   if(requestId!==card._loadRequestId)return;
   card._chartItem=item;
-  card._contextChart=null;
+  card._contextChart=null; // clear so loadChartContext re-serves from cache or fetches
+  card._contextPrefetched=false; // allow re-prefetch for new session
+  card._contextCache={}; // clear cached TFs from old session
   drawEvAll(tab.EV,tab.container);
-  if((card._chartDays||1)>1||card._chartTf==='1d')loadChartContext(card,tab);
+  loadChartContext(card,tab); // always: cache lookup is instant
   if($('#chart_modal').style.display==='flex'&&currentModalSlot===Number(card.dataset.evSlot))renderModalChart();
 }
 
@@ -1412,7 +1461,7 @@ window.openChartModal = function(i){
   $('#cm_sig').value = 'none';
   if(mainBz) $('#cm_bz').checked = mainBz.checked;
   $('#cm_tf').value = card && card._chartTf ? card._chartTf : '2m';
-  $('#cm_days').value=String(card?card._chartDays||1:1);
+  $('#cm_days').value=String(card?card._chartDays||5:5);
   $('#cm_vwap').checked=card?._showVWAP!==false;$('#cm_twap').checked=card?._showTWAP===true;
 
   $('#chart_modal').style.display = 'flex';
@@ -1447,7 +1496,7 @@ window.renderModalChart = function(){
 
   const chart=card?._contextChart?{...item.chart,bars:card._contextChart}:item.chart;
   const sourceCanvas=card?.querySelector(`#ev${currentModalSlot}`);
-  cv._chart=chart;cv._event=item;cv._marketEvents=sourceCanvas?._marketEvents||[];cv._timeframe=$('#cm_tf').value||(card?card._chartTf:'2m');cv._anchorDate=card?._sessionDate||item.date;cv._activeDate=cv._anchorDate;cv._chartDays=card?._chartDays||1;cv._panOffset=card?._panOffset||0;cv._yZoom=card?._yZoom||1;cv._zoom=card?._zoom||1;cv._rangeZoom=cv._zoom;cv._rangeMeasures=card?._rangeMeasures||(card._rangeMeasures=[]);cv._selectedRangeId=card?._selectedRangeId||null;cv._avwapAnchors=card?._avwapAnchors||null;cv._showVWAP=card?._showVWAP!==false;cv._showTWAP=card?._showTWAP===true;cv._floatShares=Number(item.float_shares??chart.float_shares)||null;
+  cv._chart=chart;cv._event=item;cv._marketEvents=sourceCanvas?._marketEvents||[];cv._timeframe=$('#cm_tf').value||(card?card._chartTf:'2m');cv._anchorDate=card?._sessionDate||item.date;cv._activeDate=cv._anchorDate;cv._chartDays=card?._chartDays||5;cv._panOffset=card?._panOffset||0;cv._yZoom=card?._yZoom||1;cv._zoom=card?._zoom||1;cv._rangeZoom=cv._zoom;cv._rangeMeasures=card?._rangeMeasures||(card._rangeMeasures=[]);cv._selectedRangeId=card?._selectedRangeId||null;cv._avwapAnchors=card?._avwapAnchors||null;cv._showVWAP=card?._showVWAP!==false;cv._showTWAP=card?._showTWAP===true;cv._floatShares=Number(item.float_shares??chart.float_shares)||null;
   cv._onPanChange=value=>{if(card)card._panOffset=value;};cv._onYZoomChange=value=>{if(card)card._yZoom=value;};cv._onPanEdge=card?._onPanEdge?side=>{card._panOffset=cv._panOffset;card._onPanEdge(side);}:null;
   const ui=chartFeatureUi('cm');bindUnifiedChartFeatures(cv,ui,()=>{if(!card)return;card._panOffset=cv._panOffset||0;card._yZoom=cv._yZoom||1;card._zoom=cv._rangeZoom||1;card._avwapAnchors=cv._avwapAnchors;card._rangeMeasures=cv._rangeMeasures||[];card._selectedRangeId=cv._selectedRangeId;card._showVWAP=cv._showVWAP;card._showTWAP=cv._showTWAP;},renderModalChart);
   syncGapDeepDiveMouseMode(cv,ui);
@@ -1486,9 +1535,24 @@ $('#cm_sig').onchange = () => {
 
 $('#cm_tf').onchange = () => {
   if(!activeTab || !openTabs[activeTab]) return;
-  const tab=openTabs[activeTab],allTf=tab.container.querySelector('#ev_all_tf');
-  if(allTf){allTf.value=$('#cm_tf').value;allTf.dispatchEvent(new Event('change'));}
-  const card=tab.container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);if(card)$('#cm_days').value=String(card._chartDays||1);
+  const newTf=$('#cm_tf').value, tab=openTabs[activeTab];
+  // Sync the global TF dropdown display only — do NOT dispatch 'change' which triggers
+  // applyAllChartSettings and resets ALL cards (zoom/days/pan), causing TF mismatch on modal close
+  const allTf=tab.container.querySelector('#ev_all_tf');
+  if(allTf && allTf.value!==newTf) allTf.value=newTf;
+  // Update only the card shown in the modal
+  const card=tab.container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);
+  if(card){
+    const prevTf=card._chartTf;
+    card._chartTf=newTf;card._panOffset=0;card._yZoom=1;card._zoom=1;card._contextEdgeDone={};
+    if(newTf==='1d') card._chartDays=200;
+    else if(prevTf==='1d') card._chartDays=5;
+    const daysEl=card.querySelector('.evdays');if(daysEl)daysEl.value=String(card._chartDays);
+    const tfEl=card.querySelector('.evtf');if(tfEl)tfEl.value=newTf;
+    $('#cm_days').value=String(card._chartDays);
+    card._contextChart=null;
+    loadChartContext(card,tab);
+  }
   renderModalChart();
 };
 

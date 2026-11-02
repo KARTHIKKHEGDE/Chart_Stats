@@ -1,4 +1,4 @@
-<!doctype html><html><head><meta charset="utf-8"><title>Runner Stats – Multiday Rally & FRD</title>
+﻿﻿﻿<!doctype html><html><head><meta charset="utf-8"><title>Runner Stats – Multiday Rally & FRD</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 :root{--g:#26d974;--r:#ff4d4d;--y:#ffd23f;--b:#6cc4ff;--c:#29a8ff;--w:#e8e8e8;--d:#8a8a8a;--line:#262626}
@@ -263,7 +263,7 @@ function render(j){
       +'<h2 style="margin:0;border:0;padding:0">Rally chart</h2>'
       +'<span style="color:var(--d);font-size:12px">1-minute OHLCV · Postmarket to 20:00 ET · X-axis IST</span>'
       +'<label style="margin-left:auto;flex-direction:row;align-items:center;gap:5px;color:#ddd">Interval <select id="runner_chart_tf" style="height:30px"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label>'
-      +'<label style="flex-direction:row;align-items:center;gap:5px;color:#ddd">Sessions <select id="runner_chart_days" style="height:30px"><option value="1">1</option><option value="3">3</option><option value="5">5</option><option value="10">10</option><option value="20">20</option><option value="60" selected>60</option></select></label>'
+      +'<label style="flex-direction:row;align-items:center;gap:5px;color:#ddd">Sessions <select id="runner_chart_days" style="height:30px"><option value="1">1</option><option value="3">3</option><option value="5" selected>5</option><option value="10">10</option><option value="20">20</option><option value="60">60</option></select></label>'
       +'<label style="flex-direction:row;align-items:center;gap:5px;color:#d7ff6e"><input type="checkbox" id="runner_chart_bz" checked style="width:14px;height:14px"> Bone Zone (9/21 EMA)</label>'
       +'<label style="flex-direction:row;align-items:center;gap:5px;color:#fff"><input type="checkbox" id="runner_chart_vwap" checked style="width:14px;height:14px"> VWAP</label>'
       +'<label style="flex-direction:row;align-items:center;gap:5px;color:#c084fc"><input type="checkbox" id="runner_chart_twap" style="width:14px;height:14px"> TWAP</label>'
@@ -562,7 +562,7 @@ async function loadRunnerStockChartContext(state){
     if(requestId!==runnerChartRequestId)return;
     state.chart={ticker:state.ticker,date:state.anchorDate,bars:data.bars,after_hours:data.after_hours!==false,off:runnerIstOffset(state.anchorDate),float_shares:state.floatShares,sig:[]};
     state.dates=data.dates||[];state.panOffset=0;state.yZoom=1;
-    state.zoom=state.timeframe==='1d'?1:1/Math.max(1,state.dates.length);
+    state.zoom=1;
     $('runner_chart_status').textContent=`Loaded ${state.dates.length} session${state.dates.length===1?'':'s'} for ${state.ticker}.`;
     renderRunnerStockChart();
     const eventData={ticker:state.ticker,bars:state.dates.map(date=>({date}))};
@@ -575,15 +575,15 @@ function initChart15(data){
   const dates=[...new Set((data.bars||[]).map(bar=>bar.date).filter(Boolean))].sort();
   if(!dates.length)return;
   const anchorDate=dates[Math.floor((dates.length-1)/2)],state={
-    ticker:data.ticker,source:data,anchorDate,days:60,timeframe:'2m',dates:[],chart:null,events:[],
+    ticker:data.ticker,source:data,anchorDate,days:5,timeframe:'2m',dates:[],chart:null,events:[],
     floatShares:Number(data.float_val)||null,panOffset:0,zoom:1,yZoom:1,rangeMeasures:[],selectedRangeId:null,avwapAnchors:null,loading:false
   };
-  _chartState=state;$('runner_chart_tf').value=state.timeframe;$('runner_chart_days').value='60';
+  _chartState=state;$('runner_chart_tf').value=state.timeframe;$('runner_chart_days').value='5';
   $('runner_chart_vwap').checked=true;$('runner_chart_twap').checked=false;$('runner_chart_bz').checked=true;
   loadRunnerStockChartContext(state);
   $('runner_chart_tf').onchange=()=>{
     const previous=state.timeframe;state.timeframe=$('runner_chart_tf').value;
-    if(state.timeframe==='1d')state.days=60;else if(previous==='1d')state.days=1;
+    if(state.timeframe==='1d')state.days=200;else if(previous==='1d')state.days=5;
     $('runner_chart_days').value=String(state.days);state.panOffset=0;state.zoom=1;state.avwapAnchors=null;
     loadRunnerStockChartContext(state);
   };
