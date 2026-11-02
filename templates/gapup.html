@@ -919,6 +919,13 @@ function renderRecentFilingsFeed(target,items,error='',ticker=''){
   if(!items?.length){target.innerHTML=`<div style="padding:18px 0;color:#8da6bd;font:12px Consolas,monospace">No recent public filings found for ${esc(ticker||'public companies')}.</div>`;return;}
   target.innerHTML=items.map(item=>{const title=item.description||item.title||item.form;return `<div class="recent-filing-row${item.is_dilution?' is-dilution':''}" role="group" tabindex="0" aria-label="Explain ${esc(title)} in simple language" data-row-explain data-accession="${esc(item.accession||'')}" data-ticker="${esc(item.ticker||ticker)}" data-title="${esc(title)}"><div class="recent-filing-head">${item.ticker?`<strong class="recent-filing-ticker">${esc(item.ticker)}</strong>`:''}<span class="recent-filing-form">${esc(item.form)}</span>${item.is_dilution?'<span class="recent-filing-dilution">Dilution related</span>':''}<span class="recent-filing-company">${esc(item.company)}</span><button class="recent-filing-explain" type="button" data-accession="${esc(item.accession||'')}" data-ticker="${esc(item.ticker||ticker)}" data-title="${esc(title)}">Explain simply</button><a class="recent-filing-open" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open filing ↗</a></div><div class="recent-filing-foot"><span class="recent-filing-title">${esc(title)}</span><time class="recent-filing-age" datetime="${esc(item.filed_at||'')}">${esc(formatDateMDY(item.filed_at))} · ${esc(recentFilingAge(item.filed_at))}</time></div></div>`;}).join('');
 }
+async function recentFilingsJson(response){
+  const body=await response.text();
+  if(!body.trim())throw new Error(`SEC filings returned an empty response (HTTP ${response.status}). The filing service may be temporarily unavailable; retrying usually works.`);
+  let data;try{data=JSON.parse(body);}catch{throw new Error(`SEC filings returned an invalid response (HTTP ${response.status}).`);}
+  if(!response.ok)throw new Error(data.error||`Could not load SEC filings (HTTP ${response.status}).`);
+  return data;
+}
 
 // ─── News AI Summary Modal ────────────────────────────────────────────────
 function closeNewsAiModal(){const m=$('#news_ai_modal');if(m)m.style.display='none';}
@@ -1155,11 +1162,11 @@ async function loadRecentFilingsFeed(target,ticker='',asof=''){
   if(asof)query.set('asof',asof);
   if(ticker){
     const requestId=(Number(target.dataset.requestId)||0)+1;target.dataset.requestId=String(requestId);
-    try{const response=await fetch('/api/recent-filings?'+query.toString()),data=await response.json();if(requestId!==Number(target.dataset.requestId))return;if(!response.ok)throw new Error(data.error||'Could not load SEC filings.');renderRecentFilingsFeed(target,data.filings||[],'',ticker);}
+    try{const response=await fetch('/api/recent-filings?'+query.toString()),data=await recentFilingsJson(response);if(requestId!==Number(target.dataset.requestId))return;if(data.pending){target.innerHTML=`<div style="padding:18px 0;color:#8da6bd;font:12px Consolas,monospace">SEC filings are loading for ${esc(ticker)}. This panel will update automatically…</div>`;await new Promise(resolve=>setTimeout(resolve,1200));if(!target.isConnected||requestId!==Number(target.dataset.requestId))return;return loadRecentFilingsFeed(target,ticker,asof);}renderRecentFilingsFeed(target,data.filings||[],'',ticker);}
     catch(error){if(requestId===Number(target.dataset.requestId))renderRecentFilingsFeed(target,[],error.message,ticker);}
     return;
   }
-  if(!recentFilingsCache.pending){const pending=(async()=>{const response=await fetch('/api/recent-filings?'+query.toString()),data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load SEC filings.');recentFilingsCache.items=data.filings||[];recentFilingsCache.savedAt=Date.now();return recentFilingsCache.items;})();recentFilingsCache.pending=pending;pending.then(()=>{if(recentFilingsCache.pending===pending)recentFilingsCache.pending=null;},()=>{if(recentFilingsCache.pending===pending)recentFilingsCache.pending=null;});}
+  if(!recentFilingsCache.pending){const pending=(async()=>{const response=await fetch('/api/recent-filings?'+query.toString()),data=await recentFilingsJson(response);recentFilingsCache.items=data.filings||[];recentFilingsCache.savedAt=Date.now();return recentFilingsCache.items;})();recentFilingsCache.pending=pending;pending.then(()=>{if(recentFilingsCache.pending===pending)recentFilingsCache.pending=null;},()=>{if(recentFilingsCache.pending===pending)recentFilingsCache.pending=null;});}
   try{renderRecentFilingsFeed(target,await recentFilingsCache.pending);}catch(error){renderRecentFilingsFeed(target,[],error.message);}
 }
 

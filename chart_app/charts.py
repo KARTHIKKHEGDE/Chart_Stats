@@ -45,6 +45,10 @@ _FILING_AI_KEY_POS = {"groq": 0, "gemini": 0}
 _SEC_DILUTION_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix='sec-dilution')
 _SEC_DILUTION_DATA_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix='sec-dilution-data')
 _SEC_DILUTION_JOB_LOCK = threading.Lock()
+_RECENT_FILINGS_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix='sec-recent-filings')
+_RECENT_FILINGS_LOCK = threading.RLock()
+_RECENT_FILINGS_PENDING = {}
+_RECENT_FILINGS_ERRORS = {}
 _GAP_DEEPDIVE_DAILY_LOCK = threading.Lock()
 _GAP_DEEPDIVE_DAILY_PENDING = {}
 _GAP_CHART_CHUNK_LOCK = threading.Lock()
@@ -929,28 +933,60 @@ def recent_filings_feed():
         cached=cget(ticker_cache_key,120)
         if cached is not None:
             return jsonify({'filings':cached,'cached':True})
-        try:
-            filings=[
-                {'ticker':ticker,'company':item.get('company',''),
-                 'form':item.get('form',''),'description':item.get('title',''),
-                 'is_dilution':bool(re.search(r'\b(?:S-1|S-3|F-1|F-3|424B[1-7]|EFFECT|RW)\b|\b(?:offering|warrant|convertible|dilut|at.the.market|\bATM\b|equity line|shelf registration|resale registration|registered direct|private placement)\b',
-                                              f"{item.get('form','')} {item.get('title','')}",re.I)),
-                 'filed_at':item.get('published_at') or item.get('filing_date',''),
-                 'filing_date':item.get('filing_date',''),
-                 'url':item.get('url',''),'title':item.get('title',''),
-                 'accession':item.get('accession',''),'cik':item.get('cik',''),
-                 'document_url':item.get('document_url','')}
-                for item in _gap_deepdive_sec_filings(ticker)
-            ]
-            if asof:
-                filings=[item for item in filings if (item.get('filing_date') or item.get('filed_at','')[:10]) <= asof]
-            filings.sort(key=lambda item:item.get('filed_at',''),reverse=True)
-            filings=filings[:24]
-            cput(ticker_cache_key,filings)
-            return jsonify({'filings':filings,'cached':False})
-        except Exception as exc:
-            app.logger.exception('Recent SEC filings lookup failed for %s',ticker)
-            return jsonify({'error':f'Recent filings unavailable: {type(exc).__name__}'}),502
+        raw_cache_key=f'sec_recent_ticker_filings_raw_v1_{ticker}'
+        raw_filings=cget(raw_cache_key,3600)
+        if raw_filings is None:
+            with _RECENT_FILINGS_LOCK:
+                recent_error=_RECENT_FILINGS_ERRORS.get(ticker)
+                pending=_RECENT_FILINGS_PENDING.get(ticker)
+                if recent_error and time.monotonic()-recent_error[0]<20 and pending is None:
+                    return jsonify({'error':recent_error[1]}),502
+                if pending is None:
+                    def load_raw_filings():
+                        try:
+                            result=_gap_deepdive_sec_filings(ticker)
+                            cput(raw_cache_key,result)
+                            with _RECENT_FILINGS_LOCK:
+                                _RECENT_FILINGS_ERRORS.pop(ticker,None)
+                            return result
+                        except Exception as exc:
+                            message=f'Recent filings unavailable: {type(exc).__name__}'
+                            with _RECENT_FILINGS_LOCK:
+                                _RECENT_FILINGS_ERRORS[ticker]=(time.monotonic(),message)
+                            raise
+                    pending=_RECENT_FILINGS_EXECUTOR.submit(load_raw_filings)
+                    _RECENT_FILINGS_PENDING[ticker]=pending
+                    def forget_completed(future):
+                        with _RECENT_FILINGS_LOCK:
+                            if _RECENT_FILINGS_PENDING.get(ticker) is future:
+                                _RECENT_FILINGS_PENDING.pop(ticker,None)
+                    pending.add_done_callback(forget_completed)
+            if not pending.done():
+                return jsonify({'ticker':ticker,'filings':[],'pending':True}),202
+            try:
+                raw_filings=pending.result()
+            except Exception:
+                with _RECENT_FILINGS_LOCK:
+                    recent_error=_RECENT_FILINGS_ERRORS.get(ticker)
+                return jsonify({'error':recent_error[1] if recent_error else 'Recent filings are temporarily unavailable.'}),502
+        filings=[
+            {'ticker':ticker,'company':item.get('company',''),
+             'form':item.get('form',''),'description':item.get('title',''),
+             'is_dilution':bool(re.search(r'\b(?:S-1|S-3|F-1|F-3|424B[1-7]|EFFECT|RW)\b|\b(?:offering|warrant|convertible|dilut|at.the.market|\bATM\b|equity line|shelf registration|resale registration|registered direct|private placement)\b',
+                                          f"{item.get('form','')} {item.get('title','')}",re.I)),
+             'filed_at':item.get('published_at') or item.get('filing_date',''),
+             'filing_date':item.get('filing_date',''),
+             'url':item.get('url',''),'title':item.get('title',''),
+             'accession':item.get('accession',''),'cik':item.get('cik',''),
+             'document_url':item.get('document_url','')}
+            for item in raw_filings
+        ]
+        if asof:
+            filings=[item for item in filings if (item.get('filing_date') or item.get('filed_at','')[:10]) <= asof]
+        filings.sort(key=lambda item:item.get('filed_at',''),reverse=True)
+        filings=filings[:24]
+        cput(ticker_cache_key,filings)
+        return jsonify({'filings':filings,'cached':False})
     cache_key='sec_recent_ticker_filings_feed_v1'
     cached=cget(cache_key,120)
     if cached is not None:
