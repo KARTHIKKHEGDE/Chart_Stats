@@ -2465,15 +2465,15 @@ function prewarmGapDeepDiveContext(item,canvas){
   state.contextPrefetchKey=key;
   const pending=enqueueGapDeepDiveContextWarm(async()=>{
     if(!canvas.isConnected||canvas._gapDeepDiveState!==state||state.contextPrefetchKey!==key||state.timeframe!==timeframe)return null;
-    const query=new URLSearchParams({ticker:item.ticker,date:item.date,seed_date:item.date,days:'5',tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1',source});
+    const requestedDays=timeframe==='1d'?400:5,query=new URLSearchParams({ticker:item.ticker,date:item.date,seed_date:item.date,days:String(requestedDays),tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1',source});
     const response=await fetch('/api/chart-context?'+query.toString());
     return gapDeepDiveJson(response);
   });
   state.contextPrefetchPromise=pending.then(data=>{
     if(!data)return null;
     if(canvas._gapDeepDiveState!==state||state.contextPrefetchKey!==key||state.timeframe!==timeframe)return data;
-    const context={bars:data.bars,dates:data.dates||[],days:5,daily:!!data.daily};
-    state.bars=context.bars;state.dates=context.dates;state.days=5;state.loadedDays=context.dates.length;state.timeframe=timeframe;state.contextLoaded=true;state.daysSelected=true;state.contextCache=state.contextCache||{};state.contextCache[`${timeframe}|5`]=context;state.contextCache[timeframe]=context;state.panOffset=0;
+    const requestedDays=timeframe==='1d'?400:5,context={bars:data.bars,dates:data.dates||[],days:requestedDays,daily:!!data.daily};
+    state.bars=context.bars;state.dates=context.dates;state.days=requestedDays;state.loadedDays=context.dates.length;state.timeframe=timeframe;state.contextLoaded=true;state.daysSelected=true;state.contextCache=state.contextCache||{};state.contextCache[`${timeframe}|${requestedDays}`]=context;state.contextCache[timeframe]=context;state.panOffset=0;
     if(gapDeepDiveCurrent&&gapDeepDiveKey(gapDeepDiveCurrent.item)===gapDeepDiveKey(item)){
       const cv=$('#gap_chart_modal_canvas');cv._panOffset=0;cv._modalPanInitialized=true;renderGapDeepDiveModal();
       $('#gap_deepdive_status').textContent=`Loaded the gap-up session and two neighboring sessions on each side for ${item.ticker}.`;
@@ -2657,9 +2657,9 @@ async function loadGapDeepDiveContext(){
   const timeframe=$('#gap_chart_tf').value||'2m',days=timeframe==='1d'?(Number(state.days)||5):Math.max(5,Number(state.days)||5);
   state.days=days;
   state.contextCache=state.contextCache||{};
-  const prefetched=state.contextCache[`${timeframe}|5`];
-  if(timeframe!=='1d'&&prefetched?.bars?.t?.length&&prefetched.dates?.length>=5&&prefetched.dates.includes(item.date)){
-    state.bars=prefetched.bars;state.dates=prefetched.dates;state.days=5;state.loadedDays=prefetched.dates.length;state.timeframe=timeframe;state.contextLoaded=true;state.daysSelected=true;state.contextCache[timeframe]=prefetched;state.panOffset=0;cv._panOffset=0;cv._modalPanInitialized=true;renderGapDeepDiveModal();
+  const prefetched=state.contextCache[`${timeframe}|${days}`];
+  if(prefetched?.bars?.t?.length&&prefetched.dates?.length>=days&&prefetched.dates.includes(item.date)){
+    state.bars=prefetched.bars;state.dates=prefetched.dates;state.days=days;state.loadedDays=prefetched.dates.length;state.timeframe=timeframe;state.contextLoaded=true;state.daysSelected=true;state.contextCache[timeframe]=prefetched;state.panOffset=0;cv._panOffset=0;cv._modalPanInitialized=true;renderGapDeepDiveModal();
     $('#gap_deepdive_status').textContent=`Loaded ${state.dates.length} sessions around ${item.ticker}; the gap-up day stays centered.`;
     $('#gap_chart_avwap_status').textContent=`Loaded the gap-up session and two neighboring sessions on each side for ${item.ticker}.`;
     return;
@@ -2728,16 +2728,16 @@ function configureGapDeepDiveTimeframe(timeframe){
   const cv=$('#gap_chart_modal_canvas'),state=cv._gapDeepDiveState;
   if(!state)return;
   if(state.timeframe!==timeframe){
-    state.contextRequestId=(state.contextRequestId||0)+1;state.moreRequestId=null;state.morePromise=null;state.exhaustedTimeframe=null;state.timeframe=timeframe;state.bars=null;state.dates=[];state.days=5;state.daysSelected=false;state.contextLoaded=false;state.loading=false;state.panOffset=0;cv._rangeZoom=1;cv._yZoom=1;cv._panOffset=0;
+    state.contextRequestId=(state.contextRequestId||0)+1;state.moreRequestId=null;state.morePromise=null;state.exhaustedTimeframe=null;state.timeframe=timeframe;state.bars=null;state.dates=[];state.days=timeframe==='1d'?400:5;state.daysSelected=false;state.contextLoaded=false;state.loading=false;state.panOffset=0;cv._rangeZoom=1;cv._yZoom=1;cv._panOffset=0;
   }else if(!state.daysSelected){
-    state.days=5;
+    state.days=timeframe==='1d'?400:5;
   }
 }
 async function loadGapDeepDiveGridDaily(cv,chart){
   const state=cv._gapDeepDiveState;if(!state||!chart)return;
   if(state.timeframe!=='1d'){
-    state.contextRequestId=(state.contextRequestId||0)+1;state.timeframe='1d';state.bars=null;state.dates=[];state.days=5;state.daysSelected=false;state.contextLoaded=false;state.loading=false;state.panOffset=0;
-  }else if(!state.daysSelected)state.days=5;
+    state.contextRequestId=(state.contextRequestId||0)+1;state.timeframe='1d';state.bars=null;state.dates=[];state.days=400;state.daysSelected=false;state.contextLoaded=false;state.loading=false;state.panOffset=0;
+  }else if(!state.daysSelected)state.days=400;
   const savedDaily=state.contextCache?.['1d'];if(savedDaily&&savedDaily.days===state.days){state.bars=savedDaily.bars;state.dates=savedDaily.dates;state.contextLoaded=true;state.loadedDays=savedDaily.days;drawGapDeepDiveCanvas(cv,chart,'1d',540);return;}if(state.contextLoaded&&state.loadedDays===state.days){drawGapDeepDiveCanvas(cv,chart,'1d',540);return;}
   const requestId=(state.contextRequestId||0)+1;state.contextRequestId=requestId;state.loading=true;
   const query=new URLSearchParams({ticker:chart.ticker,date:chart.date,days:String(state.days||75),tf:'1d',user:currentUser||'',token:sessionToken||'',source:chart.chartSource||'deepdive',seed_date:chart.date});
