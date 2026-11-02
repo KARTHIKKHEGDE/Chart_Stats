@@ -218,12 +218,18 @@ def ticker_type(t):
     return d["type"]
 
 
-def load_shares_out(t):
-    """SEC EDGAR cover-page shares outstanding with filing dates (point-in-time)."""
-    d = cget(f"{t}_sec", 3 * 86400)
-    if d is not None:
-        return d
-    out = []
+def load_companyfacts(t):
+    """Selected SEC companyfacts, normalized for point-in-time SEC analysis.
+
+    This deliberately keeps the raw fact dimensions needed to calculate a
+    quarterly operating-cash burn.  A 10-Q/20-F cash-flow fact is often YTD,
+    so treating its value as a single quarter materially overstates burn.
+    """
+    key=f"{str(t).upper()}_sec_companyfacts_v1"
+    cached=cget(key,3*86400)
+    if isinstance(cached,dict):
+        return cached
+    result={"shares":[],"cash":[],"short_term_investments":[],"operating_cash_flow":[]}
     try:
         h = {"User-Agent": SEC_UA}
         m = cget("sec_tickers", 7 * 86400)
@@ -235,13 +241,47 @@ def load_shares_out(t):
         if cik:
             j = requests.get(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{int(cik):010d}.json",
                              headers=h, timeout=40).json()
-            rows = j["facts"]["dei"]["EntityCommonStockSharesOutstanding"]["units"]["shares"]
-            out = sorted([{"filed": r["filed"], "end": r["end"], "val": r["val"]}
-                          for r in rows if r.get("val", 0) > 0], key=lambda r: r["filed"])
+            facts=j.get("facts") or {}
+            def units(namespace, name, unit):
+                concept=(facts.get(namespace) or {}).get(name) or {}
+                return (concept.get("units") or {}).get(unit) or []
+            share_rows=units("dei","EntityCommonStockSharesOutstanding","shares")
+            result["shares"]=sorted([
+                {"filed":r.get("filed",""),"end":r.get("end",""),"val":r.get("val")}
+                for r in share_rows if float(r.get("val") or 0)>0
+            ],key=lambda r:r["filed"])
+            # SEC domestic filers normally use us-gaap; foreign issuers can use
+            # ifrs-full.  If a concept is unavailable, leave it absent rather
+            # than guessing from a similarly named balance-sheet line.
+            concepts={
+                "cash":("CashAndCashEquivalentsAtCarryingValue","CashAndCashEquivalents"),
+                "short_term_investments":("ShortTermInvestments",),
+                "operating_cash_flow":("NetCashProvidedByUsedInOperatingActivities","CashFlowsFromUsedInOperatingActivities"),
+            }
+            for target,concept_names in concepts.items():
+                rows=[]
+                for namespace in ("us-gaap","ifrs-full"):
+                    for concept in concept_names:
+                        rows.extend(units(namespace,concept,"USD"))
+                result[target]=sorted([
+                    {key:r.get(key) for key in ("filed","end","start","val","fy","fp","form","frame")}
+                    for r in rows if r.get("filed") and r.get("end") and r.get("val") is not None
+                ],key=lambda r:(r.get("filed") or "",r.get("end") or ""))
     except Exception:
-        out = []
-    cput(f"{t}_sec", out)
-    return out
+        result={"shares":[],"cash":[],"short_term_investments":[],"operating_cash_flow":[]}
+    cput(key,result)
+    return result
+
+
+def load_shares_out(t):
+    """SEC EDGAR cover-page shares outstanding with filing dates (point-in-time)."""
+    # Keep the legacy key/API for callers outside the dilution report while
+    # sourcing it from the same companyfacts response as cash-flow analysis.
+    d=cget(f"{t}_sec",3*86400)
+    if d is None:
+        d=load_companyfacts(t).get("shares") or []
+        cput(f"{t}_sec",d)
+    return d
 
 
 def poly_frame(rows):

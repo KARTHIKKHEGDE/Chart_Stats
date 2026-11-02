@@ -1262,6 +1262,115 @@ def sec_filing_explanation():
         return jsonify({'error': f'Could not explain this filing ({type(exc).__name__}).'}), 502
 
 
+def _xbrl_fact_before(rows, as_of):
+    """Return the latest filed XBRL fact that existed on an as-of date."""
+    eligible=[]
+    for row in rows if isinstance(rows,list) else []:
+        try:
+            filed=dt.date.fromisoformat(str(row.get('filed') or '')[:10])
+            end=dt.date.fromisoformat(str(row.get('end') or '')[:10])
+            if filed<=as_of and end<=as_of:
+                eligible.append(row)
+        except (TypeError,ValueError):
+            continue
+    return max(eligible,key=lambda row:(str(row.get('end') or ''),str(row.get('filed') or '')),default=None)
+
+
+def _xbrl_cash_summary(companyfacts, as_of):
+    """Build a cash/runway input from companyfacts without treating YTD CF as QTD."""
+    cash=_xbrl_fact_before(companyfacts.get('cash'),as_of)
+    investments_rows=companyfacts.get('short_term_investments') or []
+    investments=None
+    if cash:
+        # Prefer the same balance-sheet date.  A different period is still
+        # useful but is not silently added to cash.
+        investments=next((row for row in reversed(investments_rows)
+                          if row.get('end')==cash.get('end') and row.get('filed','')<=as_of.isoformat()),None)
+    if not investments:
+        investments=_xbrl_fact_before(investments_rows,as_of)
+    def number(row):
+        try:return float(row.get('val')) if row else None
+        except (TypeError,ValueError):return None
+    cash_value=number(cash)
+    investments_value=number(investments)
+    same_period=bool(cash and investments and cash.get('end')==investments.get('end'))
+    total=(cash_value+(investments_value or 0)) if cash_value is not None and (investments_value is None or same_period) else cash_value
+    flow=_xbrl_fact_before(companyfacts.get('operating_cash_flow'),as_of)
+    quarterly=None
+    burn_method=None
+    if flow:
+        try:
+            flow_start=dt.date.fromisoformat(str(flow.get('start') or '')[:10])
+            flow_end=dt.date.fromisoformat(str(flow.get('end') or '')[:10])
+            duration=(flow_end-flow_start).days
+            value=float(flow.get('val'))
+            if 60<=duration<=125:
+                quarterly=-value if value<0 else 0.0
+                burn_method='direct quarterly operating cash flow'
+            elif duration>125:
+                # Use the preceding same-FY YTD fact to isolate the current
+                # quarter.  Values must share the latest period start and be
+                # filed by the selected date.
+                prior=[]
+                for row in companyfacts.get('operating_cash_flow') or []:
+                    try:
+                        row_end=dt.date.fromisoformat(str(row.get('end') or '')[:10])
+                        row_start=dt.date.fromisoformat(str(row.get('start') or '')[:10])
+                        if (row.get('filed','')<=as_of.isoformat() and row_end<flow_end and
+                            row_start==flow_start and row.get('fy')==flow.get('fy')):
+                            prior.append(row)
+                    except (TypeError,ValueError):
+                        continue
+                if prior:
+                    previous=max(prior,key=lambda row:(str(row.get('end') or ''),str(row.get('filed') or '')))
+                    quarter_value=value-float(previous.get('val'))
+                    quarterly=-quarter_value if quarter_value<0 else 0.0
+                    burn_method='latest YTD operating cash flow less prior-quarter YTD amount'
+        except (TypeError,ValueError):
+            pass
+    runway=(total/quarterly*3) if total is not None and quarterly and quarterly>0 else None
+    return {
+        'cash_and_short_term_investments':total,'cash_as_of':str(cash.get('end') or '') if cash else None,
+        'cash_filed':str(cash.get('filed') or '') if cash else None,
+        'short_term_investments':investments_value,'short_term_investments_as_of':str(investments.get('end') or '') if investments else None,
+        'quarterly_operating_cash_burn':quarterly,'burn_as_of':str(flow.get('end') or '') if flow else None,
+        'burn_filed':str(flow.get('filed') or '') if flow else None,'burn_method':burn_method,
+        'runway_months':runway,
+    }
+
+
+def _parse_report_date(value):
+    """Accept SEC-style ISO and common US dates for post-analysis safeguards."""
+    text=str(value or '').strip()
+    for pattern,format_string in ((r'\b\d{4}-\d{2}-\d{2}\b','%Y-%m-%d'),
+                                  (r'\b\d{1,2}/\d{1,2}/\d{2,4}\b','%m/%d/%Y'),
+                                  (r'\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b','%B %d, %Y')):
+        match=re.search(pattern,text)
+        if not match:
+            continue
+        candidate=match.group(0)
+        if format_string=='%m/%d/%Y' and len(candidate.rsplit('/',1)[-1])==2:
+            candidate=candidate[:-2]+'20'+candidate[-2:]
+        if format_string=='%B %d, %Y' and ',' not in candidate:
+            format_string='%B %d %Y'
+        try:return dt.datetime.strptime(candidate,format_string).date()
+        except ValueError:continue
+    return None
+
+
+def _parse_report_number(value):
+    """Parse compact report quantities (for example, 4.3M) without guessing."""
+    text=str(value or '').strip().lower().replace(',','').replace('$','')
+    match=re.search(r'(?<![\w.])(-?\d+(?:\.\d+)?)\s*([kmb])?\b',text)
+    if not match:
+        return None
+    try:
+        multiplier={'k':1_000,'m':1_000_000,'b':1_000_000_000}.get(match.group(2),1)
+        return float(match.group(1))*multiplier
+    except (TypeError,ValueError):
+        return None
+
+
 @app.route('/api/sec-dilution-history', methods=['POST'])
 def sec_dilution_history():
     """Summarize dilution-related filings and status as known on a selected date."""
@@ -1281,7 +1390,7 @@ def sec_dilution_history():
     if asof_date>current_day:
         return jsonify({'error':'As-of date cannot be in the future.'}),400
     today=asof_date.isoformat()
-    cache_key=f'sec_dilution_history_v11_{ticker}_{today}_asof'
+    cache_key=f'sec_dilution_history_v12_{ticker}_{today}_asof'
     cached=cget(cache_key,30*60)
     if cached is not None:
         return jsonify(cached)
@@ -1310,7 +1419,10 @@ def sec_dilution_history():
         recent_material_reports=[item for item in all_filings
             if re.fullmatch(r'(?:6-K|8-K)',str(item.get('form') or ''),re.I)
             and (asof_date-dt.date.fromisoformat(item.get('filing_date','1900-01-01'))).days<=365][:12]
-        ownership_form=re.compile(r'^(?:4|4/A|5|5/A|SC 13D|SC 13D/A|SC 13G|SC 13G/A|DEF 14A|DEFA14A)$',re.I)
+        # Form 4s are useful transaction detail, but they are not a substitute
+        # for the holder-level 13D/13G and proxy ownership tables needed for a
+        # non-affiliate public-float calculation.
+        ownership_form=re.compile(r'^(?:SC 13D|SC 13D/A|SC 13G|SC 13G/A|DEF 14A|DEFA14A)$',re.I)
         recent_ownership=[item for item in all_filings
             if ownership_form.fullmatch(str(item.get('form') or ''))
             and (asof_date-dt.date.fromisoformat(item.get('filing_date','1900-01-01'))).days<=365][:12]
@@ -1329,7 +1441,7 @@ def sec_dilution_history():
         candidates.extend(item for item in recent_material_reports if str(item.get('accession') or '') not in candidate_keys)
         candidate_keys={str(item.get('accession') or '') for item in candidates}
         candidates.extend(item for item in recent_ownership if str(item.get('accession') or '') not in candidate_keys)
-        candidates=sorted(candidates,key=lambda item:item.get('filing_date',''),reverse=True)[:55]
+        candidates=sorted(candidates,key=lambda item:item.get('filing_date',''),reverse=True)[:70]
         app.logger.info('SEC dilution review %s: selected %d filings from %d candidates',
                         ticker,len(candidates),len(all_filings))
         update_progress('selecting_filings',
@@ -1479,11 +1591,13 @@ def sec_dilution_history():
             return jsonify({'error':f'No relevant filings were found in the SEC submissions available for {ticker} as of {today}. This does not confirm that no dilution exists.'}),404
         update_progress('market_data','SEC filings are read. Finishing the as-of price, shares, and float snapshot…')
         market_inputs=market_inputs_future.result()
+        xbrl_cash=_xbrl_cash_summary(market_inputs.get('companyfacts') or {},asof_date)
         market_snapshot={'market_date':None,'last_price':None,'shares_outstanding':None,
                          'shares_filed':None,'shares_as_of':None,'float_shares':None,
                          'float_as_of':None,'adtv_20d':None,'public_float_pricing_date':None,
-                         'public_float_price':None,'requested_pricing_date':'latest completed trading session on or before as-of date',
-                         'pricing_method':'Latest completed daily close (last sale)','notes':[]}
+                         'public_float_price':None,'requested_pricing_date':'highest completed close in the preceding 60 calendar days',
+                         'pricing_method':'Highest completed daily close in the preceding 60 calendar days',
+                         'xbrl_cash':xbrl_cash,'notes':[]}
         daily_rows=market_inputs['daily']
         if market_inputs['errors']['daily']:
             exc=market_inputs['errors']['daily']
@@ -1501,9 +1615,23 @@ def sec_dilution_history():
                 market_snapshot['market_date']=actual_date.isoformat()
                 market_snapshot['last_price']=float(price_row.get('c'))
                 market_snapshot['adtv_20d']=float(pd.Series([float(row.get('v') or 0) for row in eligible[-20:]]).mean()) if eligible else None
-                if actual_date<=asof_date and (asof_date-actual_date).days<=60:
-                    market_snapshot['public_float_pricing_date']=actual_date.isoformat()
-                    market_snapshot['public_float_price']=float(price_row.get('c'))
+                # A baby-shelf report should not blend an arbitrary current
+                # close with an older non-affiliate share count.  Use one
+                # explicit, reproducible 60-day high-close basis for all
+                # issuers, as requested by the report methodology.
+                price_window=[]
+                for row in eligible:
+                    try:
+                        row_date=dt.date.fromisoformat(str(row.get('date')))
+                        close=float(row.get('c'))
+                        if 0<=((asof_date-row_date).days)<=60 and close>0:
+                            price_window.append((close,row_date))
+                    except (TypeError,ValueError):
+                        continue
+                if price_window:
+                    high_close,high_date=max(price_window,key=lambda value:(value[0],value[1]))
+                    market_snapshot['public_float_pricing_date']=high_date.isoformat()
+                    market_snapshot['public_float_price']=high_close
             if not market_snapshot['public_float_pricing_date']:
                 market_snapshot['notes'].append('No completed daily closing price was available within 60 days before the selected as-of date.')
         except Exception as exc:
@@ -1546,7 +1674,7 @@ def sec_dilution_history():
         snapshot_context=(
             f"Selected as-of date: {today}\nLatest completed close available by that date: ${fmt(market_snapshot['last_price'])} "
             f"(market data date {market_snapshot['market_date'] or 'unavailable'}).\n"
-            f"Public-float pricing input: automatically selected latest completed trading session on or before the as-of date; "
+            f"Public-float pricing input: highest completed daily close in the 60 calendar days through the as-of date; "
             f"date actually used {market_snapshot['public_float_pricing_date'] or 'unavailable'}; "
             f"last-sale/closing price ${fmt(market_snapshot['public_float_price'])}; method {market_snapshot['pricing_method']}.\n"
             f"Latest SEC shares-outstanding fact: {fmt(market_snapshot['shares_outstanding'])} shares "
@@ -1556,6 +1684,9 @@ def sec_dilution_history():
             f"(effective date {market_snapshot['float_as_of'] or 'unavailable'}; vendor estimate, not a holder-by-holder calculation).\n"
             f"20-session average daily volume: {fmt(market_snapshot['adtv_20d'])} shares "
             f"(through market data date {market_snapshot['market_date'] or 'unavailable'}).\n"
+            f"Precomputed XBRL cash input: cash plus short-term investments {fmt(xbrl_cash.get('cash_and_short_term_investments'))} "
+            f"as of {xbrl_cash.get('cash_as_of') or 'unavailable'}; quarterly operating-cash burn {fmt(xbrl_cash.get('quarterly_operating_cash_burn'))} "
+            f"as of {xbrl_cash.get('burn_as_of') or 'unavailable'} ({xbrl_cash.get('burn_method') or 'not available'}).\n"
             f"Snapshot notes: {'; '.join(market_snapshot['notes']) or 'None'}")
         forms_seen={str(item.get('form') or '').upper() for item in all_filings}
         is_fpi=bool(forms_seen.intersection({'F-1','F-3','20-F','40-F','6-K'}))
@@ -1564,6 +1695,16 @@ def sec_dilution_history():
                      'U.S. domestic issuer' if is_domestic else 'not established from available filings')
         shelf_instruction=('Form F-3 General Instruction I.B.5' if is_fpi else
                            'Form S-3 General Instruction I.B.6' if is_domestic else 'not confirmed')
+        split_context=[]
+        for split in market_inputs.get('splits') or []:
+            try:
+                split_date=dt.date.fromisoformat(str(split.get('date') or '')[:10])
+                split_from=float(split.get('from'))
+                split_to=float(split.get('to'))
+                if split_date<=asof_date and split_from>0 and split_to>0:
+                    split_context.append(f'{split_date.isoformat()}: {split_from:g}-for-{split_to:g}')
+            except (TypeError,ValueError):
+                continue
         prompt=(
             "Prepare a clear point-in-time dilution report for this issuer as of the selected date, using only information publicly available by that date. "
             "Ignore every filing, amendment, market data point, issuance, exercise, approval, and status change dated after the selected date; do not use later knowledge to determine what was active then. "
@@ -1574,11 +1715,10 @@ def sec_dilution_history():
             "List active ATMs by name/agent, original size, sold to date, remaining capacity, share count at the selected date's price "
             "and constraints; include shelf remaining, effectiveness/expiration date, and any baby-shelf limit only when eligibility and "
             f"Registrant filing profile: {issuer_type}. If eligible for a baby shelf, use Form F-3 I.B.5 for foreign private issuers or Form S-3 I.B.6 for domestic issuers; cite the applicable instruction as {shelf_instruction}. If the issuer category is not confirmed, do not assert which test applies. "
-            "Use the automatically selected latest completed trading session on or before the selected as-of date and last-sale price supplied below; "
-            "Form instructions allow the last sale price or average bid/ask as of a date within 60 days before sale. "
-            "Show the actual date and price used. Never silently substitute the highest close. Subtract applicable primary securities sold in the "
+            "Use the supplied 60-day high closing-price input for the baby-shelf calculation, and show its exact date and price. "
+            "Subtract applicable primary securities sold in the "
             "trailing 12 months. Keep the baby-shelf non-affiliate float separate from vendor trading float; only non-affiliate "
-            "shares count for that test. Do not substitute the vendor trading-float number. List each warrant tranche with outstanding quantity (not originally issued), "
+            "shares count for that test. Do not substitute the vendor trading-float number or display a share count as a dollar float. Calculate non-affiliate public float as non-affiliate shares × the supplied price, using outstanding shares rolled forward for documented later issuances. List each warrant tranche with outstanding quantity (not originally issued), "
             "strike after splits/resets, expiry, exercisable-now status, cashless/pre-funded status, ITM status, required "
             "stockholder approvals, and "
             "shares/cash possible on the selected date. List each active convertible note/preferred instrument with principal plus "
@@ -1596,8 +1736,9 @@ def sec_dilution_history():
             "capacity as shares sold. Treat any withdrawn registration terms as proposed only and use that withdrawal "
             "filing to determine whether any securities were sold. "
             "Return active shelf registrations separately from ATMs: identify registered capacity, primary amount sold, "
-            "remaining capacity, effective/expiration dates, and whether the shelf is currently usable. Do not add overlapping "
-            "shelf registrations together. Extract the latest cash and short-term investments, latest quarterly net cash used "
+            "remaining capacity, effective/expiration dates, and whether the shelf is currently usable. If a shelf has an effective date "
+            "but no stated expiration, calculate the Rule 415(a)(5) three-year date and label it calculated. Do not add overlapping "
+            "shelf registrations together. Use the precomputed XBRL cash and quarterly operating-cash-burn input when available; otherwise extract the latest cash and short-term investments, latest quarterly net cash used "
             "in operating activities, their evidence dates, and estimated months of runway (cash divided by quarterly burn "
             "times three); label runway approximate and do not infer burn from net loss when operating cash use is available. "
             "Also return four evidence-based qualitative risk signals: offering, cash_need, overhang, and dilution_history. "
@@ -1617,7 +1758,7 @@ def sec_dilution_history():
             "filings available by the selected date to estimate affiliate/insider/10% holder shares and label the float assumption; otherwise use the "
             "vendor estimate only for the current date and label it clearly. For historical dates, do not use today's vendor float. Attach an evidence date to ATM sold/remaining, outstanding warrant "
             "quantity, note principal, and other time-sensitive amounts. If the latest evidence is not current, show "
-            "the latest disclosed amount with its date and mark the selected-date remaining amount not confirmed. Do not use "
+            "the latest disclosed amount with its date and mark the selected-date remaining amount not confirmed. Exclude every warrant or other instrument with an explicit expiration before the selected as-of date from active lists; preserve it only in history/other overhang as expired. Do not use "
             "stale amounts in the selected-date share total or ratios. If a required number, "
             "expiry, sale-to-date amount, approval, eligibility, or current status cannot be verified, write 'not confirmed' "
             "and explain which source is missing; do not guess. Distinguish verified active items from no active item found. "
@@ -1638,11 +1779,13 @@ def sec_dilution_history():
             "float, adtv, active_shares_today, atm_shares_today, percent_of_float, percent_of_shares_outstanding, "
             "adtv_multiple, fully_diluted_percent_of_float, nonaffiliate_shares, nonaffiliate_public_float, "
             "public_float_pricing_date, public_float_price, shelf_instruction, assumptions}), "
-            "The legacy JSON field names ending in _today mean as-of the selected date in this report. "
+            "For shares, warrants, option awards, strike prices, market prices, and ADTV, use one consistently split-adjusted basis. The legacy JSON field names ending in _today mean as-of the selected date in this report. "
             "history (array of {date, event, impact, status, source_ids}); do not include an event dated after the selected date. "
             "caveats (array of short strings). "
             "Use [] for empty lists. Keep the JSON compact but do not omit an active instrument merely to save space.\n\n"
-            f"Ticker: {ticker}\n{snapshot_context}\n\nSEC filings read ({len(sources)}; source IDs link to filings):\n"+'\n\n'.join(excerpts))
+            f"Ticker: {ticker}\n{snapshot_context}\nRecorded splits through the selected date: {'; '.join(split_context) or 'none found from market data'}. "
+            "For a figure stated before a listed split, multiply share counts by split-to/split-from and divide strike/price by that ratio before combining it with later figures.\n\n"
+            f"SEC filings read ({len(sources)}; source IDs link to filings):\n"+'\n\n'.join(excerpts))
         update_progress('ai_analysis',f'Analyzing {len(sources)} SEC filing documents for active dilution and history…')
         answer,provider=_call_filing_ai(prompt,max_tokens=6000)
         app.logger.info('SEC dilution review %s: AI response received from %s after %.1fs total',
@@ -1713,11 +1856,45 @@ def sec_dilution_history():
                 clean_row['source_ids']=source_list(row.get('source_ids'))
                 cleaned_rows.append(clean_row)
             return cleaned_rows
+        # The model receives the same instruction, but this date gate makes it
+        # impossible for a warrant with an explicit past expiry to appear in
+        # the active/exercisable panel.
+        expired_warrants=[]
+        unexpired_warrants=[]
+        for row in active_warrants:
+            expiry=_parse_report_date(row.get('expiry') if isinstance(row,dict) else '')
+            if expiry and expiry<asof_date:
+                expired_warrants.append(row)
+            else:
+                unexpired_warrants.append(row)
+        active_warrants=unexpired_warrants
+        for row in expired_warrants:
+            if not isinstance(row,dict):
+                continue
+            other_overhang.append({'instrument':str(row.get('tranche') or 'Warrant tranche'),
+                                   'status':f'Expired {row.get("expiry")}',
+                                   'amount':str(row.get('quantity_outstanding') or row.get('shares_today') or 'quantity not confirmed'),
+                                   'source_ids':row.get('source_ids') or []})
         raw_cash_position=analysis.get('cash_position') if isinstance(analysis.get('cash_position'),dict) else {}
         cash_position={key:('' if raw_cash_position.get(key) is None else str(raw_cash_position.get(key)).strip())
                        for key in ('cash_and_short_term_investments','cash_as_of','quarterly_operating_cash_burn',
                                    'burn_as_of','runway_months','calculation')}
         cash_position['source_ids']=source_list(raw_cash_position.get('source_ids'))
+        xbrl_cash=market_snapshot.get('xbrl_cash') or {}
+        xbrl_cash_sources=[source['id'] for source in sources
+                            if source.get('filing_date') in {xbrl_cash.get('cash_filed'),xbrl_cash.get('burn_filed')}]
+        if xbrl_cash.get('cash_and_short_term_investments') is not None:
+            cash_position['cash_and_short_term_investments']=f'${float(xbrl_cash["cash_and_short_term_investments"]):,.0f}'
+            cash_position['cash_as_of']=str(xbrl_cash.get('cash_as_of') or '')
+        if xbrl_cash.get('quarterly_operating_cash_burn') is not None:
+            cash_position['quarterly_operating_cash_burn']=f'${float(xbrl_cash["quarterly_operating_cash_burn"]):,.0f}'
+            cash_position['burn_as_of']=str(xbrl_cash.get('burn_as_of') or '')
+            if xbrl_cash.get('runway_months') is not None:
+                cash_position['runway_months']=f'{float(xbrl_cash["runway_months"]):.1f}'
+                cash_position['calculation']=(f'XBRL cash and short-term investments / quarterly operating cash burn × 3; '
+                                              f'{xbrl_cash.get("burn_method") or "quarterly method"}.')
+        if xbrl_cash_sources:
+            cash_position['source_ids']=xbrl_cash_sources
         raw_risk_signals=analysis.get('risk_signals') if isinstance(analysis.get('risk_signals'),dict) else {}
         risk_signals={}
         for category in ('offering','cash_need','overhang','dilution_history'):
@@ -1728,14 +1905,56 @@ def sec_dilution_history():
         caveat_value=analysis.get('caveats')
         caveat=(' '.join(text_list(caveat_value,10)) if isinstance(caveat_value,list)
                 else str(caveat_value or '').strip())
-        coverage=f"Review used {len(sources)} readable financing-related SEC documents, from up to 24 recent filings plus selected agreement exhibits and periodic, material-event, and ownership reports."
+        coverage=f"Review used {len(sources)} readable financing-related SEC documents, including selected offering, periodic, material-event, ownership, and agreement-exhibit sources."
+        clean_shelves=clean_instruments(active_shelves,('name','status','registered_amount','sold','remaining','remaining_as_of','effective_date','expiration_date','currently_usable','source_ids'))
+        usable_shelves=[]
+        for shelf in clean_shelves:
+            effective=_parse_report_date(shelf.get('effective_date'))
+            expiration=_parse_report_date(shelf.get('expiration_date'))
+            if effective and not expiration:
+                try:
+                    expiration=effective.replace(year=effective.year+3)
+                except ValueError:  # Feb. 29 three years later
+                    expiration=effective.replace(year=effective.year+3,day=28)
+                shelf['expiration_date']=expiration.isoformat()+' (calculated: effective date + 3 years)'
+            if not expiration or expiration>=asof_date:
+                usable_shelves.append(shelf)
+        clean_atms=clean_instruments(active_atms,('name','agent','status','size','sold','remaining','remaining_as_of','shares_today','constraint','source_ids'))
+        clean_warrants=clean_instruments(active_warrants,('tranche','quantity_outstanding','quantity_as_of','strike','expiry','exercisable_today','cashless','pre_funded','in_the_money','shares_today','cash_if_exercised','source_ids'))
+        clean_convertibles=clean_instruments(convertibles,('instrument','principal_and_interest','amount_as_of','conversion_terms','blockers','shares_today','status','source_ids'))
+        today_math=analysis.get('today_math') if isinstance(analysis.get('today_math'),dict) else {}
+        # Price and volume are source-of-truth market inputs, not model output.
+        for target,source_key in (('price','last_price'),('adtv','adtv_20d'),
+                                  ('public_float_pricing_date','public_float_pricing_date'),('public_float_price','public_float_price')):
+            if market_snapshot.get(source_key) is not None:
+                today_math[target]=market_snapshot[source_key]
+        active_parts=[]
+        for row in clean_atms+clean_warrants+clean_convertibles:
+            value=_parse_report_number(row.get('shares_today'))
+            if value is not None and value>=0:
+                active_parts.append(value)
+        if active_parts:
+            active_total=sum(active_parts)
+            today_math['active_shares_today']=active_total
+            adtv=_parse_report_number(market_snapshot.get('adtv_20d'))
+            if adtv and adtv>0:
+                today_math['adtv_multiple']=active_total/adtv
+        nonaffiliate_shares=_parse_report_number(today_math.get('nonaffiliate_shares'))
+        public_float_price=_parse_report_number(market_snapshot.get('public_float_price'))
+        if nonaffiliate_shares is not None and public_float_price and public_float_price>0:
+            # This prevents the common (and severe) unit error of placing a
+            # vendor float-share count in the dollar public-float field.
+            public_float=nonaffiliate_shares*public_float_price
+            today_math['nonaffiliate_public_float']=public_float
+            if _parse_report_number(today_math.get('baby_shelf_limit')) is None:
+                today_math['baby_shelf_limit']=public_float/3
         result={'ticker':ticker,'as_of':today,'provider':provider,
                 'summary':str(analysis.get('summary')).strip(),
                 'current_status':str(analysis.get('current_status')).strip(),
-                'active_atms':clean_instruments(active_atms,('name','agent','status','size','sold','remaining','remaining_as_of','shares_today','constraint','source_ids')),
-                'active_warrants':clean_instruments(active_warrants,('tranche','quantity_outstanding','quantity_as_of','strike','expiry','exercisable_today','cashless','pre_funded','in_the_money','shares_today','cash_if_exercised','source_ids')),
-                'active_shelves':clean_instruments(active_shelves,('name','status','registered_amount','sold','remaining','remaining_as_of','effective_date','expiration_date','currently_usable','source_ids')),
-                'convertibles':clean_instruments(convertibles,('instrument','principal_and_interest','amount_as_of','conversion_terms','blockers','shares_today','status','source_ids')),
+                'active_atms':clean_atms,
+                'active_warrants':clean_warrants,
+                'active_shelves':usable_shelves,
+                'convertibles':clean_convertibles,
                 'cash_position':cash_position,'risk_signals':risk_signals,
                 'ceo_ownership':{'name':str(raw_ceo_ownership.get('name') or 'CEO').strip(),
                                  'shares_owned':ceo_shares,
@@ -1746,7 +1965,7 @@ def sec_dilution_history():
                 'active_participants':clean_instruments(active_participants,('name','role','related_instrument','involvement_as_of','source_ids')),
                 'major_warrant_holders':clean_instruments(major_warrant_holders,('name','related_tranche','warrants_held','percent_of_outstanding','ownership_as_of','source_ids')),
                 'other_overhang':clean_instruments(other_overhang,('instrument','status','amount','source_ids')),
-                'today_math':analysis.get('today_math') if isinstance(analysis.get('today_math'),dict) else {},
+                'today_math':today_math,
                 'market_snapshot':market_snapshot,'issuer_type':issuer_type,'shelf_instruction':shelf_instruction,
                 'history':history,'filings':sources,
                 'caveats':(caveat+' '+coverage).strip()}
@@ -1798,21 +2017,23 @@ def _run_sec_dilution_job(job_id, body):
 
 def _load_sec_dilution_market_inputs(ticker, as_of_date, current_day):
     """Fetch independent market/share inputs concurrently for a dilution report."""
-    from chart_app.market_data import latest_security_stats, load_shares_out, load_splits
+    from chart_app.market_data import latest_security_stats, load_companyfacts, load_splits
     def safe_call(function):
         try:return function(),None
         except Exception as exc:return None,exc
     with ThreadPoolExecutor(max_workers=4,thread_name_prefix='dilution-input') as pool:
         daily_future=pool.submit(safe_call,lambda:load_daily(ticker))
-        shares_future=pool.submit(safe_call,lambda:load_shares_out(ticker))
+        facts_future=pool.submit(safe_call,lambda:load_companyfacts(ticker))
         splits_future=pool.submit(safe_call,lambda:load_splits(ticker))
         stats_future=(pool.submit(safe_call,lambda:latest_security_stats(ticker))
                       if as_of_date==current_day else None)
         daily,daily_error=daily_future.result()
-        shares,shares_error=shares_future.result()
+        companyfacts,shares_error=facts_future.result()
         splits,splits_error=splits_future.result()
         stats,stats_error=stats_future.result() if stats_future else (None,None)
-    return {'daily':daily or [],'shares':shares or [],'splits':splits or [],'stats':stats or {},
+    companyfacts=companyfacts if isinstance(companyfacts,dict) else {}
+    return {'daily':daily or [],'shares':companyfacts.get('shares') or [],'companyfacts':companyfacts,
+            'splits':splits or [],'stats':stats or {},
             'errors':{'daily':daily_error,'shares':shares_error,'splits':splits_error,'stats':stats_error}}
 
 
@@ -1990,7 +2211,7 @@ def _gap_chart_context_minute_chunk(ticker, first, last):
 
 @app.route('/api/chart-context/prefetch')
 def chart_context_prefetch():
-    """Warm a chart's selected session and two neighboring sessions on either side."""
+    """Warm the selected session and up to two neighboring sessions per interval."""
     user=(request.args.get('user') or '').strip().lower();token=(request.args.get('token') or '').strip()
     ticker=(request.args.get('ticker') or '').strip().upper();day=(request.args.get('date') or '').strip()
     if user not in _auth.ALLOWED_USERS or not _db_validate_session(user,token):
@@ -2001,8 +2222,7 @@ def chart_context_prefetch():
     except ValueError: return jsonify({'error':'Invalid session date'}),400
     contexts={}
     try:
-        # Keep the initial view at one session. Cache the five-session ranges
-        # for every requested interval so panning can reveal them immediately.
+        # Cache the event day plus two neighboring sessions on each side.
         for timeframe in ('1m','2m','5m'):
             with app.test_request_context('/api/chart-context',query_string={
                     'user':user,'token':token,'ticker':ticker,'date':day,
@@ -2017,13 +2237,13 @@ def chart_context_prefetch():
                 payload=response.get_json(silent=True) if hasattr(response,'get_json') else None
             if status<200 or status>=300 or not isinstance(payload,dict):
                 return jsonify({'error':(payload or {}).get('error') or
-                                f'Could not preload {timeframe} neighboring candles (HTTP {status}).'}),status if 400<=status<600 else 502
+                                f'Could not preload the {timeframe} gap-up chart context (HTTP {status}).'}),status if 400<=status<600 else 502
             contexts[timeframe]={'bars':payload.get('bars') or {},'dates':payload.get('dates') or [],
                                  'days':5,'daily':False}
         return jsonify({'contexts':contexts,'preloaded_sessions':contexts.get('2m',{}).get('dates',[])})
     except Exception as exc:
-        app.logger.exception('Gap chart neighboring-candle prefetch failed for %s %s',ticker,day)
-        return jsonify({'error':f'Could not preload neighboring candles ({type(exc).__name__}).'}),502
+        app.logger.exception('Gap chart context prefetch failed for %s %s',ticker,day)
+        return jsonify({'error':f'Could not preload the gap-up chart context ({type(exc).__name__}).'}),502
 
 
 @app.route("/api/chart-context")
