@@ -2627,11 +2627,13 @@ async function loadGapDeepDiveAdjacent(cv,baseChart,side){
   const item=gapDeepDiveCurrent?.item||{ticker:baseChart.ticker};
   const timeframe=cv.id==='gap_chart_modal_canvas'?$('#gap_chart_tf').value:$('#gap_deepdive_tf').value||'2m';
   const maxSessions=timeframe==='1d'?550:400;state.days=Math.min(maxSessions,(Number(state.days)||5)+20);state.daysSelected=true;state.loading=true;const requestId=(state.contextRequestId||0)+1;state.contextRequestId=requestId;
-  const query=new URLSearchParams({ticker:item.ticker,date:anchor,days:String(state.days),tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1',source:gapDeepDiveCurrent?.item?.chartSource||'deepdive',seed_date:gapDeepDiveCurrent?.item?.date||baseChart.date});
+  // The initial five-session window may use the bundled Deepdive bars. Any
+  // extension is fetched from Polygon so panning can always move beyond it.
+  const query=new URLSearchParams({ticker:item.ticker,date:anchor,days:String(state.days),tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1',source:'polygon',seed_date:gapDeepDiveCurrent?.item?.date||baseChart.date});
   try{
     const response=await fetch('/api/chart-context?'+query.toString()),data=await gapDeepDiveJson(response);
     if(requestId!==state.contextRequestId)return;
-    state.bars=data.bars;state.dates=data.dates||[];state.timeframe=timeframe;state.contextLoaded=true;state.loadedDays=state.days;state.contextCache=state.contextCache||{};state.contextCache[timeframe]={bars:state.bars,dates:state.dates,days:state.days,daily:!!data.daily};const anchorIndex=state.dates.indexOf(baseChart.date);if(timeframe==='1d'){const span=state.bars.t.length,viewSpan=span/Math.max(1,cv._rangeZoom||1),panLimit=Math.max(0,span-viewSpan)/2;state.panOffset=side>0?panLimit:-panLimit;}else state.panOffset=anchorIndex<0?0:(side>0?(state.dates.length-anchorIndex-1)*960:-anchorIndex*960);
+    state.bars=data.bars;state.dates=data.dates||[];state.timeframe=timeframe;state.contextLoaded=true;state.loadedDays=state.dates.length;state.days=Math.max(state.days,state.loadedDays);state.contextCache=state.contextCache||{};state.contextCache[timeframe]={bars:state.bars,dates:state.dates,days:state.days,daily:!!data.daily};const anchorIndex=state.dates.indexOf(baseChart.date);if(timeframe==='1d'){const span=state.bars.t.length,viewSpan=span/Math.max(1,cv._rangeZoom||1),panLimit=Math.max(0,span-viewSpan)/2;state.panOffset=side>0?panLimit:-panLimit;}else state.panOffset=anchorIndex<0?0:(side>0?(state.dates.length-anchorIndex-1)*960:-anchorIndex*960);
     $('#gap_deepdive_status').textContent=timeframe==='1d'?`Loaded ${state.dates.length} daily candles for ${item.ticker}.`:`Loaded ${state.dates.length} sessions for ${item.ticker}.`;
   }catch(error){if(requestId===state.contextRequestId)$('#gap_deepdive_status').textContent=`Could not load adjacent candles: ${error.message}`;}
   finally{if(requestId===state.contextRequestId)state.loading=false;}
@@ -2679,7 +2681,9 @@ async function loadGapDeepDiveContext(){
   const requestId=(state.contextRequestId||0)+1;state.contextRequestId=requestId;state.loading=true;
   $('#gap_deepdive_status').textContent=`Loading the gap-up session and up to two neighboring sessions on each side for ${item.ticker} ${formatDateMDY(item.date)}…`;
   $('#gap_chart_avwap_status').textContent=`Loading the gap-up session and neighboring sessions for ${item.ticker} ${formatDateMDY(item.date)}…`;
-  const query=new URLSearchParams({ticker:item.ticker,date:item.date,days:String(days),tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1',source:item.chartSource||'deepdive',seed_date:item.date});
+  // Keep the initial ±2-session context fast, then use Polygon for every
+  // zoom-out request so Deepdive is not limited to its bundled JSON window.
+  const query=new URLSearchParams({ticker:item.ticker,date:item.date,days:String(days),tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1',source:'polygon',seed_date:item.date});
   try{
     const response=await fetch('/api/chart-context?'+query.toString()),data=await gapDeepDiveJson(response);
     if(requestId!==state.contextRequestId)return;
@@ -2709,10 +2713,10 @@ async function loadGapDeepDiveMore(cv,requiredSessions=0){
       if(requestId!==state.contextRequestId)return false;
       const previousSessionCount=(state.dates||[]).length,returnedSessionCount=(data.dates||[]).length;
       if(returnedSessionCount<=previousSessionCount){state.exhaustedTimeframe=timeframe;$('#gap_deepdive_status').textContent='No more candles are available beyond this range.';return false;}
-      state.bars=data.bars;state.dates=data.dates||[];state.days=days;state.loadedDays=days;state.timeframe=timeframe;state.contextLoaded=true;state.contextCache=state.contextCache||{};state.contextCache[timeframe]={bars:state.bars,dates:state.dates,days,daily:!!data.daily};state.panOffset=0;cv._panOffset=0;
+      state.bars=data.bars;state.dates=data.dates||[];state.days=days;state.loadedDays=returnedSessionCount;state.timeframe=timeframe;state.contextLoaded=true;state.contextCache=state.contextCache||{};state.contextCache[timeframe]={bars:state.bars,dates:state.dates,days,daily:!!data.daily};state.panOffset=0;cv._panOffset=0;
       const stillCurrent=gapDeepDiveCurrent&&gapDeepDiveKey(gapDeepDiveCurrent.item)===gapDeepDiveKey(item)&&cv._gapDeepDiveState===state;
       if(!stillCurrent)return false;
-      $('#gap_deepdive_status').textContent=`Loaded ${state.dates.length} sessions for ${item.ticker}. Zoom out again to load more.`;
+      $('#gap_deepdive_status').textContent=`Loaded ${state.dates.length} Polygon sessions for ${item.ticker}. Zoom out again to load more.`;
       renderGapDeepDiveModal();return true;
     }catch(error){$('#gap_deepdive_status').textContent=`Could not load more candles: ${error.message}`;return false;}
     finally{if(state.moreRequestId===requestId){if(requestId===state.contextRequestId)state.loading=false;state.morePromise=null;state.moreRequestId=null;}}
