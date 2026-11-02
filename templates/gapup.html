@@ -1,4 +1,4 @@
-﻿﻿﻿<!doctype html>
+﻿﻿﻿﻿﻿﻿﻿<!doctype html>
 <html><head><meta charset="utf-8"><title>Gap-Up Fade Analyzer</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?app=gapup">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -29,6 +29,8 @@ select{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;f
 .recent-filings-list{max-height:520px;overflow:auto;padding-right:5px}
 .recent-filing-row{padding:9px 0;border-bottom:1px solid #20272c}.recent-filing-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.recent-filing-foot{display:flex;align-items:center;gap:12px;justify-content:space-between;padding-top:5px;color:#e8edf3;font-size:12px}.recent-filing-explain{height:auto;min-height:0;background:#101b20;border:1px solid #2e5960;border-radius:3px;color:#8de8e7;padding:3px 8px;font:11px Consolas,monospace;line-height:1.4;cursor:pointer}.recent-filing-explain:hover{background:#173036}.recent-filing-title{height:auto;min-height:0;background:transparent;border:0;color:#e8edf3;padding:0;font:inherit;text-align:left;cursor:pointer}.recent-filing-title:hover{color:#76d9ff;text-decoration:underline}
 .filingExplainOverlay{position:fixed;inset:0;z-index:100200;display:none;align-items:center;justify-content:center;padding:18px;background:rgba(0,0,0,.86)}.filingExplainDialog{width:min(760px,96vw);max-height:90vh;overflow:auto;background:#0a0d10;border:1px solid #35424c;border-radius:8px;padding:18px;color:#e8edf3;box-shadow:0 16px 60px #000}.filingExplainHeader{display:flex;align-items:flex-start;gap:12px;border-bottom:1px solid #263039;padding-bottom:12px}.filingExplainHeader h2{flex:1;margin:0;color:#e8edf3;font-size:17px;letter-spacing:0;text-transform:none;border:0;padding:0;overflow-wrap:anywhere}.filingExplainClose{background:#15191d;border:1px solid #39434c;color:#dce5ec;border-radius:4px;padding:4px 10px;cursor:pointer}.filingExplainSection{margin-top:16px}.filingExplainSection h3{font-size:12px;color:#67c6ff;letter-spacing:.08em;text-transform:uppercase;margin:0 0 6px}.filingExplainSection p,.filingExplainSection li{font:13px/1.6 Consolas,monospace;color:#dce5ec}.filingExplainSection ul{padding-left:20px;margin:6px 0}.filingExplainMeta{font-size:11px;color:#91a0ad;margin-top:5px}.filingExplainLinks{display:grid;gap:7px}.filingExplainRelatedRow{display:flex;align-items:center;gap:8px}.filingExplainLink{flex:1;display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px;text-align:left;background:#101519;border:1px solid #29343d;border-radius:4px;color:#91d5ff;cursor:pointer;font:12px Consolas,monospace}.filingExplainLink:hover{border-color:#5085a1;background:#151f26}.filingExplainStatus{white-space:pre-wrap;color:#bdc9d2;font:13px/1.55 Consolas,monospace;min-height:22px}
+.newsAiOverlay{position:fixed;inset:0;z-index:100300;display:none;align-items:center;justify-content:center;padding:14px;background:rgba(0,0,0,.88)}.newsAiDialog{width:min(680px,96vw);max-height:88vh;overflow:auto;background:#080d10;border:1px solid #1e3040;border-radius:8px;padding:18px;color:#e8edf3;box-shadow:0 16px 60px #000}.newsAiHead{display:flex;align-items:flex-start;gap:10px;border-bottom:1px solid #1e2d38;padding-bottom:12px;margin-bottom:14px}.newsAiHead h2{flex:1;margin:0;font-size:15px;color:#e8edf3;line-height:1.4;font-weight:600}.newsAiClose{background:#15191d;border:1px solid #39434c;color:#dce5ec;border-radius:4px;padding:4px 10px;cursor:pointer;flex-shrink:0}.newsAiSentiment{display:inline-block;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:600;letter-spacing:.04em}.newsAiSentiment.bullish{background:#0d2a1a;border:1px solid #1e6640;color:#3ddc84}.newsAiSentiment.bearish{background:#2a0d0d;border:1px solid #662020;color:#ff7777}.newsAiSentiment.neutral{background:#1a1a0d;border:1px solid #4a4a20;color:#ddd070}.newsAiSection{margin-bottom:14px}.newsAiSection h3{font-size:11px;color:#67c6ff;letter-spacing:.08em;text-transform:uppercase;margin:0 0 6px}.newsAiSection p{font-size:13px;line-height:1.65;color:#dce5ec;margin:0}.newsAiQuote{background:#0a1520;border-left:3px solid #29a8ff;padding:8px 12px;border-radius:0 4px 4px 0;font:italic 13px/1.6 Georgia,serif;color:#b8cede;margin:4px 0}.newsAiLink{display:inline-flex;align-items:center;gap:5px;color:#4ab8ff;font-size:12px;text-decoration:none;padding:6px 10px;border:1px solid #1e3f58;border-radius:4px;background:#080f16;margin-top:4px}.newsAiLink:hover{border-color:#29a8ff}.newsAiStatus{color:#89939e;font:13px/1.5 Consolas,monospace}
+.aioOverlay{position:fixed;inset:0;z-index:100400;display:none;align-items:center;justify-content:center;padding:14px;background:rgba(0,0,0,.9)}.aioDialog{width:min(800px,96vw);max-height:92vh;overflow:auto;background:#060a0d;border:1px solid #1e3040;border-radius:10px;padding:22px;color:#e8edf3;box-shadow:0 20px 80px #000}.aioHead{display:flex;align-items:center;gap:12px;border-bottom:1px solid #1e2d38;padding-bottom:14px;margin-bottom:18px}.aioHead h2{flex:1;margin:0;font-size:18px;color:#e8edf3;letter-spacing:.02em}.aioClose{background:#15191d;border:1px solid #39434c;color:#dce5ec;border-radius:4px;padding:5px 12px;cursor:pointer}.aioSection{margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid #111c22}.aioSection:last-child{border-bottom:0;margin-bottom:0}.aioSection h3{font-size:11px;color:#ffd23f;letter-spacing:.1em;text-transform:uppercase;margin:0 0 8px;display:flex;align-items:center;gap:8px}.aioSection p{font-size:13px;line-height:1.7;color:#dce5ec;margin:0 0 6px}.aioChip{display:inline-block;padding:2px 9px;border-radius:12px;font-size:11px;font-weight:600;letter-spacing:.04em;margin-left:6px}.aioChip.high{background:#2a0d0d;border:1px solid #662020;color:#ff7777}.aioChip.medium{background:#1f1a0a;border:1px solid #5a4a10;color:#ffd23f}.aioChip.low{background:#0d2a1a;border:1px solid #1e6640;color:#3ddc84}.aioChip.confirmed{background:#0d2a1a;border:1px solid #1e6640;color:#3ddc84}.aioChip.possible{background:#1f1a0a;border:1px solid #5a4a10;color:#ffd23f}.aioChip.unknown{background:#1a1a1a;border:1px solid #444;color:#888}.aioFinalGrid{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;font-size:13px}.aioFinalGrid span:nth-child(odd){color:#8da6bd;white-space:nowrap}.aioStatus{color:#89939e;font:13px/1.5 Consolas,monospace;text-align:center;padding:20px 0}.aioBtn{display:inline-flex;align-items:center;gap:6px;background:#0d1e2e;border:1px solid #1e4060;color:#60c0ff;border-radius:5px;padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer;letter-spacing:.02em;transition:background .12s,border-color .12s}.aioBtn:hover{background:#0f2a40;border-color:#29a8ff}.aioBtn svg{width:15px;height:15px;flex-shrink:0}
 .recent-filing-row{padding:9px 0;border-bottom:1px solid #20272d;font:13px/1.35 Arial,sans-serif}
 .recent-filing-row:last-child{border-bottom:0}
 .recent-filing-head{display:flex;align-items:center;gap:8px;min-width:0}
@@ -437,6 +439,30 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
     <div class="cmFooter"><div id="cm_status">Hold and drag on the chart to zoom. Choose Pan to drag the chart.</div></div>
   </div>
 </div>
+
+<!-- News AI Summary Modal -->
+<div id="news_ai_modal" class="newsAiOverlay" role="dialog" aria-modal="true" onclick="if(event.target===this)closeNewsAiModal()">
+  <article class="newsAiDialog">
+    <div class="newsAiHead">
+      <h2 id="news_ai_title">News Summary</h2>
+      <button class="newsAiClose" type="button" onclick="closeNewsAiModal()">Close</button>
+    </div>
+    <div id="news_ai_status" class="newsAiStatus"></div>
+    <div id="news_ai_content" hidden></div>
+  </article>
+</div>
+
+<!-- All-in-One Summary Modal -->
+<div id="aio_modal" class="aioOverlay" role="dialog" aria-modal="true" onclick="if(event.target===this)closeAioModal()">
+  <article class="aioDialog">
+    <div class="aioHead">
+      <h2 id="aio_title">All-in-One Summary</h2>
+      <button class="aioClose" type="button" onclick="closeAioModal()">Close</button>
+    </div>
+    <div id="aio_status" class="aioStatus"></div>
+    <div id="aio_content" hidden></div>
+  </article>
+</div>
 <div id="filing_explanation_modal" class="filingExplainOverlay" role="dialog" aria-modal="true" aria-labelledby="filing_explanation_title" onclick="if(event.target===this)closeFilingExplanation()">
   <article class="filingExplainDialog">
     <header class="filingExplainHeader"><h2 id="filing_explanation_title">SEC filing</h2><button class="filingExplainClose" type="button" onclick="closeFilingExplanation()">Close</button></header>
@@ -826,6 +852,114 @@ function renderRecentFilingsFeed(target,items,error='',ticker=''){
   if(!items?.length){target.innerHTML=`<div style="padding:18px 0;color:#8da6bd;font:12px Consolas,monospace">No recent public filings found for ${esc(ticker||'public companies')}.</div>`;return;}
   target.innerHTML=items.map(item=>{const title=item.description||item.title||item.form;return `<div class="recent-filing-row${item.is_dilution?' is-dilution':''}" role="group" tabindex="0" aria-label="Explain ${esc(title)} in simple language" data-row-explain data-accession="${esc(item.accession||'')}" data-ticker="${esc(item.ticker||ticker)}" data-title="${esc(title)}"><div class="recent-filing-head">${item.ticker?`<strong class="recent-filing-ticker">${esc(item.ticker)}</strong>`:''}<span class="recent-filing-form">${esc(item.form)}</span>${item.is_dilution?'<span class="recent-filing-dilution">Dilution related</span>':''}<span class="recent-filing-company">${esc(item.company)}</span><button class="recent-filing-explain" type="button" data-accession="${esc(item.accession||'')}" data-ticker="${esc(item.ticker||ticker)}" data-title="${esc(title)}">Explain simply</button><a class="recent-filing-open" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open filing ↗</a></div><div class="recent-filing-foot"><span class="recent-filing-title">${esc(title)}</span><time class="recent-filing-age" datetime="${esc(item.filed_at||'')}">${esc(formatDateMDY(item.filed_at))} · ${esc(recentFilingAge(item.filed_at))}</time></div></div>`;}).join('');
 }
+
+// ─── News AI Summary Modal ────────────────────────────────────────────────
+function closeNewsAiModal(){const m=$('#news_ai_modal');if(m)m.style.display='none';}
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#news_ai_modal')?.style.display==='flex')closeNewsAiModal();});
+
+document.addEventListener('click',async e=>{
+  const btn=e.target.closest('.newsAiTrigger');
+  if(!btn)return;
+  e.preventDefault();e.stopPropagation();
+  const url=btn.dataset.url,title=btn.dataset.title,ticker=btn.dataset.ticker||'';
+  const modal=$('#news_ai_modal'),status=$('#news_ai_status'),content=$('#news_ai_content');
+  $('#news_ai_title').textContent=title||'News Summary';
+  modal.style.display='flex';content.hidden=true;content.innerHTML='';
+  status.textContent='Reading article and generating AI summary…';
+  try{
+    const r=await fetch('/api/news-summary',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({user:currentUser||'',token:sessionToken||'',url,title,ticker})});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||'Could not summarize this article.');
+    const sentClass=d.sentiment||'neutral';
+    const catMap={'product/partnership':'🤝','financing/offering':'💸','regulatory':'⚖️','earnings/revenue':'📈',
+                  'lawsuit/legal':'⚠️','macro/sector':'🌐','unrelated fluff':'📰','unknown':'❓'};
+    const catIcon=catMap[d.catalyst_type]||'📰';
+    content.innerHTML=`
+      <div class="newsAiSection">
+        <h3>Summary <span class="newsAiSentiment ${sentClass}">${sentClass.toUpperCase()}</span> <span style="font-size:12px;color:#8da6bd">${catIcon} ${esc(d.catalyst_type||'unknown')}</span></h3>
+        <p>${esc(d.summary||'No summary available.')}</p>
+      </div>
+      ${d.management_comment?`<div class="newsAiSection"><h3>Management Comment</h3><blockquote class="newsAiQuote">${esc(d.management_comment)}</blockquote></div>`:''}
+      <div class="newsAiSection">
+        <a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="newsAiLink">&#x1F4F0; Read full article on Yahoo Finance / Source ↗</a>
+      </div>
+      <div style="color:#4a5a65;font-size:11px;margin-top:8px">AI: ${esc(d.provider||'AI')} ${d.cached?'· cached':''}</div>`;
+    status.textContent='';content.hidden=false;
+  }catch(err){status.textContent=err.message;content.hidden=true;}
+});
+
+// ─── All-in-One Summary Modal ─────────────────────────────────────────────
+function closeAioModal(){const m=$('#aio_modal');if(m)m.style.display='none';}
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#aio_modal')?.style.display==='flex')closeAioModal();});
+
+async function openAioModal(event,btn){
+  if(event)event.stopPropagation();
+  const ticker=(btn||event?.target?.closest('[data-ticker]'))?.dataset?.ticker||activeTab||'';
+  const tab=openTabs[activeTab]||Object.values(openTabs)[0];
+  const r=tab?.result||{};
+  const h=r.head||{};
+  const modal=$('#aio_modal'),status=$('#aio_status'),content=$('#aio_content');
+  $('#aio_title').textContent=`All-in-One Summary — ${ticker||'loading…'}`;
+  modal.style.display='flex';content.hidden=true;content.innerHTML='';
+  status.textContent='Gathering data and generating comprehensive AI summary…';
+  // Collect context from the loaded report
+  const news=(r.news||[]).slice(0,8);
+  const events=(tab?.EV||[]).filter(x=>!x.sim).slice(0,20).map(x=>({
+    date:x.date,gap_pct:x.gap||x.gapPct,grade:x.grade,verdict:x.verdict,
+    close_pct:x.closePct??x.close_pct??0
+  }));
+  const grade={grade:h.grade,verdict:h.verdict,score:h.score,n:h.n};
+  try{
+    const res=await fetch('/api/all-in-one-summary',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({user:currentUser||'',token:sessionToken||'',ticker,news,events,grade,
+        current_price:h.price||h.last_price||'',gap_pct:h.gap_pct||h.gap||''})});
+    const d=await res.json();
+    if(!res.ok)throw new Error(d.error||'Could not generate summary.');
+    const chip=level=>{const l=(level||'').toLowerCase();return`<span class="aioChip ${l}">${(level||'?').toUpperCase()}</span>`;};
+    const esc2=s=>typeof s==='string'?s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'):'—';
+    const li=arr=>(arr||[]).length?`<ul style="margin:4px 0 0 16px;padding:0">${(arr||[]).map(x=>`<li style="font-size:13px;color:#c8d5e0;line-height:1.6">${esc2(x)}</li>`).join('')}</ul>`:'';
+    content.innerHTML=`
+      <div class="aioSection">
+        <h3>1 · Why Is It Moving?</h3>
+        <p>${esc2(d.why_moving?.catalyst||'—')} ${chip(d.why_moving?.catalyst_type)}</p>
+        ${d.why_moving?.key_news?`<p style="color:#8da6bd;font-size:12px;margin-top:4px">📰 ${esc2(d.why_moving.key_news)}</p>`:''}
+      </div>
+      <div class="aioSection">
+        <h3>2 · Most Relevant Dilution ${chip(d.dilution?.immediate_risk)}</h3>
+        <p>${esc2(d.dilution?.summary||'—')}</p>
+        ${li(d.dilution?.key_items)}
+      </div>
+      <div class="aioSection">
+        <h3>3 · Offering Risk ${chip(d.offering_risk?.level)}</h3>
+        <p>${esc2(d.offering_risk?.reason||'—')}</p>
+      </div>
+      <div class="aioSection">
+        <h3>4 · Historical Behavior</h3>
+        <p>${esc2(d.historical_behavior?.summary||'—')}</p>
+        <p style="color:#8da6bd;font-size:12px;margin-top:4px">Sample size: ${d.historical_behavior?.sample_size||0} gaps · Fade rate: ${d.historical_behavior?.fade_rate_pct??'?'}%</p>
+        ${(()=>{const hb=d.historical_behavior||{},is_=d.intraday_stats;if(!is_&&!hb.median_high_vs_vwap_pct)return'';const n=is_?.sample_size||hb.intraday_sample_size||0;const hvw=is_?.median_high_vs_vwap_pct??hb.median_high_vs_vwap_pct;const hvo=is_?.median_high_vs_open_pct??hb.median_high_vs_open_pct;const cvo=is_?.median_close_vs_open_pct??hb.median_close_vs_open_pct;const cvw=is_?.median_close_vs_vwap_pct??hb.median_close_vs_vwap_pct;const tht=is_?.typical_high_time_et||hb.typical_high_time_et;const fr=is_?.fade_rate_pct??hb.fade_rate_pct;return`<div style="margin-top:10px;background:#080e14;border:1px solid #1e3040;border-radius:6px;padding:10px"><div style="font-size:11px;font-weight:600;color:#56a0d3;letter-spacing:.5px;margin-bottom:8px">📊 INTRADAY VWAP STATS · ${n} SESSIONS</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:5px 14px">${[[`High vs Open`,hvw!=null?`+${hvo}%`:'—'],[`High vs VWAP`,hvw!=null?`+${hvw}%`:'—'],[`Typical High Time (ET)`,tht||'—'],[`Close vs Open`,cvo!=null?`${cvo>0?'+':''}${cvo}%`:'—'],[`Close vs VWAP`,cvw!=null?`${cvw>0?'+':''}${cvw}%`:'—'],[`Fade Rate`,fr!=null?`${fr}%`:'—']].map(([k,v])=>`<span style="color:#6a8090;font-size:12px">${k}</span><span style="color:#e0eaf3;font-size:13px;font-weight:600">${v}</span>`).join('')}</div>${is_?.rows?.length?`<details style="margin-top:8px"><summary style="color:#3d7aad;font-size:11px;cursor:pointer">Per-session detail (${is_.rows.length} days)</summary><div style="margin-top:6px;display:flex;flex-direction:column;gap:3px">${is_.rows.slice(0,10).map(r=>`<div style="display:flex;gap:10px;font-size:11px;color:#7a9ab5"><span style="width:82px;flex-shrink:0">${r.date}</span><span style="color:#4fc97e">H:+${r.high_vs_open_pct}%</span>${r.high_vs_vwap_pct!=null?`<span style="color:#56a0d3">VWAP:+${r.high_vs_vwap_pct}%</span>`:''}<span style="${r.faded?'color:#e05c5c':'color:#4fc97e'}">C:${r.close_vs_open_pct>0?'+':''}${r.close_vs_open_pct}%</span><span style="color:#888">@${r.time_of_high_et}</span></div>`).join('')}</div></details>`:''}`;})()}
+      </div>
+      <div class="aioSection">
+        <h3>5 · Similar-Day Pattern <span class="aioChip ${(d.similar_day_pattern?.confidence||'').toLowerCase()}">${(d.similar_day_pattern?.confidence||'?').toUpperCase()}</span></h3>
+        <p>${esc2(d.similar_day_pattern?.summary||'—')}</p>
+        ${(()=>{const is_=d.intraday_stats;const hvw=is_?.median_high_vs_vwap_pct??d.historical_behavior?.median_high_vs_vwap_pct;const tht=is_?.typical_high_time_et||d.historical_behavior?.typical_high_time_et;const fr=is_?.fade_rate_pct??d.historical_behavior?.fade_rate_pct;if(hvw==null&&!tht)return'';return`<div style="margin-top:8px;font-size:12px;color:#8da6bd;line-height:1.8">${hvw!=null?`<span>📈 Typical high: <strong style="color:#56a0d3">+${hvw}% above VWAP</strong></span> &nbsp;`:''} ${tht?`<span>⏰ High usually at: <strong style="color:#ffd23f">${tht} ET</strong></span> &nbsp;`:''} ${fr!=null?`<span>📉 Fade rate: <strong style="color:#e05c5c">${fr}%</strong></span>`:''}</div>`;})()}
+        ${(d.similar_day_pattern?.example_dates||[]).length?`<p style="color:#8da6bd;font-size:12px;margin-top:4px">Examples: ${d.similar_day_pattern.example_dates.map(esc2).join(', ')}</p>`:''}
+      </div>
+      <div class="aioSection" style="background:#080e14;border-radius:6px;padding:12px;border:1px solid #1e3040">
+        <h3 style="color:#ffd23f">⚡ Final Quick Assessment</h3>
+        <div class="aioFinalGrid">
+          <span>Catalyst</span><span>${esc2(d.final_assessment?.catalyst||'—')}</span>
+          <span>Dilution</span><span>${esc2(d.final_assessment?.dilution||'—')}</span>
+          <span>Offering Risk</span><span>${chip(d.final_assessment?.offering_risk)}</span>
+          <span>Historical</span><span>${esc2(d.final_assessment?.historical_behavior||'—')}</span>
+          <span>Watch</span><span style="color:#ffd23f">${esc2(d.final_assessment?.key_observation||'—')}</span>
+        </div>
+      </div>
+      <div style="color:#4a5a65;font-size:11px;margin-top:12px">AI: ${esc2(d.provider||'AI')} ${d.cached?'· cached':''} · Data may be incomplete; verify before trading.</div>`;
+    status.textContent='';content.hidden=false;
+  }catch(err){status.textContent=err.message;content.hidden=true;}
+}
 function closeFilingExplanation(){const modal=$('#filing_explanation_modal');if(modal)modal.style.display='none';}
 function renderFilingExplanation(data){
   const status=$('#filing_explanation_status'),content=$('#filing_explanation_content'),title=$('#filing_explanation_title');
@@ -1214,10 +1348,11 @@ function renderTab(tab, r, isRefresh){
     `<div>Grade: <span class="badge ${esc(h.gcls)}">${esc(h.grade)}</span> <span class="c">${esc(h.score)}</span> <span class="${esc(h.gcls)}">· ${esc(h.verdict)}</span></div>`+
     `<div class="foot">Based on ${Number(h.n)||0} similar historical gap-up setups.</div></div>`;
   const newsItems = r.news || [];
-  o += `<div class="panel"><div class="ttl">Latest Press Releases · Yahoo Finance</div>`+
+  o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px"><span>Latest Press Releases &#x2013; Yahoo Finance</span><button type="button" class="aioBtn" onclick="openAioModal(event,this)" data-ticker="${esc(h.ticker)}" style="font-size:11px;padding:4px 10px">&#128202; All-in-One Summary</button></div>`+
     (newsItems.length ? newsItems.map(item=>{
-      const link = /^https?:\/\//i.test(item.url || '')
-        ? `<a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer" style="color:#6cc4ff">${esc(item.title)}</a>`
+      const hasUrl=/^https?:\/\//i.test(item.url||'');
+      const link=hasUrl
+        ? `<button type="button" class="newsAiTrigger" style="background:none;border:0;color:#6cc4ff;cursor:pointer;font:inherit;text-align:left;padding:0;text-decoration:underline;text-underline-offset:2px" data-url="${esc(item.url)}" data-title="${esc(item.title)}" data-ticker="${esc(tab?.result?.head?.ticker||'')}">&#x1F4CA; ${esc(item.title)}</button>`
         : esc(item.title);
       let publishedDate='';
       if(item.published){

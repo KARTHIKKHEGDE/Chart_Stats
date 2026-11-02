@@ -1963,3 +1963,296 @@ def chart_context():
         cput(context_key,result)
         return jsonify(result)
     except Exception as exc: return jsonify({"error":f"{type(exc).__name__}: {exc}"}),502
+
+
+# ---------------------------------------------------------------------------
+#  NEWS SUMMARY  – fetch article text via requests, summarise with AI
+# ---------------------------------------------------------------------------
+def _fetch_article_text(url, max_chars=8000):
+    """Fetch plain text from a news article URL."""
+    try:
+        resp = requests.get(url, headers={"User-Agent": "GapFadeAnalyzer/1.0 news-fetch"},
+                            timeout=12, allow_redirects=True)
+        resp.raise_for_status()
+        parser = _SecFilingTextParser()
+        parser.feed(resp.text)
+        text = " ".join(parser.text)
+        return text[:max_chars]
+    except Exception as exc:
+        return f"[Could not fetch article: {exc}]"
+
+
+def _compute_intraday_stats(ticker, dates, max_dates=15):
+    """Compute real intraday VWAP/high/close stats for historical gap dates from minute_df data."""
+    import statistics as _stats
+    rows = []
+    for date in (dates or [])[:max_dates]:
+        try:
+            bars = minute_df(ticker, date)
+            if bars is None or bars.empty:
+                continue
+            mins = bars.index.hour * 60 + bars.index.minute
+            rth = bars[(mins >= 570) & (mins < 960)]   # 9:30–16:00 ET
+            if rth.empty:
+                continue
+            open_price = float(rth.iloc[0]['o'])
+            if open_price <= 0:
+                continue
+            # VWAP computed from first available bar (includes premarket if present)
+            typical = (bars['h'] + bars['l'] + bars['c']) / 3
+            cum_vol  = bars['v'].cumsum().replace(0, float('nan'))
+            vwap_s   = (typical * bars['v']).cumsum() / cum_vol
+            # Session high (RTH)
+            high_idx   = rth['h'].idxmax()
+            high_price = float(rth['h'].max())
+            close_price= float(rth.iloc[-1]['c'])
+            vwap_at_high  = float(vwap_s.reindex([high_idx]).iloc[0]) if high_idx in vwap_s.index else float(vwap_s.iloc[-1])
+            vwap_at_close = float(vwap_s.iloc[-1])
+            high_time_et  = high_idx.strftime('%H:%M') if hasattr(high_idx, 'strftime') else str(high_idx)
+            rows.append({
+                'date':             date,
+                'high_vs_open_pct': round((high_price / open_price - 1) * 100, 1),
+                'high_vs_vwap_pct': round((high_price / vwap_at_high - 1) * 100, 1) if vwap_at_high > 0 else None,
+                'close_vs_open_pct':round((close_price / open_price - 1) * 100, 1),
+                'close_vs_vwap_pct':round((close_price / vwap_at_close - 1) * 100, 1) if vwap_at_close > 0 else None,
+                'time_of_high_et':  high_time_et,
+                'faded':            close_price < open_price,
+            })
+        except Exception:
+            continue
+    if not rows:
+        return None
+    def _med(lst):
+        lst = [x for x in lst if x is not None]
+        return round(_stats.median(lst), 1) if lst else None
+    high_vs_open  = [r['high_vs_open_pct']  for r in rows]
+    high_vs_vwap  = [r['high_vs_vwap_pct']  for r in rows]
+    close_vs_open = [r['close_vs_open_pct'] for r in rows]
+    close_vs_vwap = [r['close_vs_vwap_pct'] for r in rows]
+    fade_count    = sum(1 for r in rows if r['faded'])
+    try:
+        common_high_time = _stats.mode([r['time_of_high_et'] for r in rows])
+    except Exception:
+        times_sorted = sorted(rows, key=lambda r: r['time_of_high_et'])
+        common_high_time = times_sorted[len(times_sorted)//2]['time_of_high_et']
+    return {
+        'sample_size':              len(rows),
+        'median_high_vs_open_pct':  _med(high_vs_open),
+        'median_high_vs_vwap_pct':  _med(high_vs_vwap),
+        'median_close_vs_open_pct': _med(close_vs_open),
+        'median_close_vs_vwap_pct': _med(close_vs_vwap),
+        'fade_rate_pct':            round(100 * fade_count / len(rows)),
+        'typical_high_time_et':     common_high_time,
+        'rows':                     rows,
+    }
+
+
+def register_news_ai_routes(app, db_validate_session):
+
+    @app.route("/api/news-summary", methods=["POST"])
+    def news_summary_api():
+        data = request.get_json(silent=True) or {}
+        user  = str(data.get("user", "")).strip().lower()
+        token = str(data.get("token", "")).strip()
+        if not user or not db_validate_session(user, token):
+            return jsonify({"error": "Session expired."}), 401
+        url   = str(data.get("url", "")).strip()
+        title = str(data.get("title", "")).strip()
+        ticker = str(data.get("ticker", "")).strip().upper()
+        if not url or not url.startswith("http"):
+            return jsonify({"error": "Invalid URL."}), 400
+
+        # Cache key
+        cache_key = "news_ai_" + __import__('hashlib').sha1(url.encode()).hexdigest()[:16]
+        cached = cget(cache_key, 86400)  # 24 h cache
+        if cached:
+            return jsonify({**cached, "cached": True})
+
+        text = _fetch_article_text(url)
+        prompt = f"""You are a concise stock-market analyst. Read the following news article about {ticker or 'a company'} and return a JSON object with exactly these keys:
+
+"summary": 2-3 short punchy sentences in plain English — what happened, why it matters for the stock. No jargon.
+"management_comment": if the article contains any quotes from management/executives/CEO/CFO, extract the most relevant one verbatim. If none, return null.
+"catalyst_type": one of: "product/partnership", "financing/offering", "regulatory", "earnings/revenue", "lawsuit/legal", "macro/sector", "unrelated fluff", "unknown"
+"sentiment": one of: "bullish", "bearish", "neutral"
+
+Article title: {title}
+Article text: {text[:6000]}
+
+Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
+
+        try:
+            answer, provider = _call_filing_ai(prompt, max_tokens=400)
+            result = _parse_ai_json_object(answer)
+            out = {
+                "summary": str(result.get("summary") or "No summary available."),
+                "management_comment": result.get("management_comment") or None,
+                "catalyst_type": str(result.get("catalyst_type") or "unknown"),
+                "sentiment": str(result.get("sentiment") or "neutral"),
+                "url": url,
+                "title": title,
+                "provider": provider,
+            }
+            cput(cache_key, out)
+            return jsonify(out)
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 502
+
+
+    @app.route("/api/all-in-one-summary", methods=["POST"])
+    def all_in_one_summary_api():
+        data = request.get_json(silent=True) or {}
+        user  = str(data.get("user", "")).strip().lower()
+        token = str(data.get("token", "")).strip()
+        if not user or not db_validate_session(user, token):
+            return jsonify({"error": "Session expired."}), 401
+        ticker  = str(data.get("ticker", "")).strip().upper()
+        if not re.fullmatch(r"[A-Z.\-]{1,10}", ticker):
+            return jsonify({"error": "Invalid ticker."}), 400
+
+        # Gather context: news + grade + gap history + sec data already in report
+        news_items   = data.get("news", [])          # from frontend report
+        grade_info   = data.get("grade", {})          # grade/verdict
+        events       = data.get("events", [])         # historical gap events
+        dilution_ctx = data.get("dilution_text", "")  # last dilution summary text
+        current_price= data.get("current_price", "")
+        gap_pct      = data.get("gap_pct", "")
+
+        cache_key = "aio_" + __import__('hashlib').sha1(
+            f"{ticker}|{len(news_items)}|{len(events)}".encode()).hexdigest()[:16]
+        cached = cget(cache_key, 3600)   # 1 h cache (news may change)
+        if cached:
+            return jsonify({**cached, "cached": True})
+
+        # Compute real intraday VWAP stats from minute bars
+        event_dates = [e.get('date', '') for e in (events or []) if e.get('date', '')]
+        intraday_stats = _compute_intraday_stats(ticker, event_dates)
+
+        # Format news
+        news_text = "\n".join(
+            f"- [{item.get('published','')[:10]}] {item.get('title','')} ({item.get('publisher','')})"
+            for item in (news_items or [])[:8]
+        ) or "No recent news available."
+
+        # Format gap history
+        fade_count = sum(1 for e in events if float(e.get("close_pct", e.get("fade_pct", 0)) or 0) < 0)
+        hold_count = len(events) - fade_count
+        events_text = (
+            f"{len(events)} historical gap-up sessions found. "
+            f"Faded ({fade_count}), Held/Continued ({hold_count}). "
+            f"Fade rate: {round(100*fade_count/len(events))}% of gaps." if events else "No historical gap data."
+        )
+        sample_events = "\n".join(
+            f"  {e.get('date','')}: gap {e.get('gap_pct',e.get('move',''))}%"
+            f", grade {e.get('grade','')}, verdict {e.get('verdict','')}"
+            for e in (events or [])[:6]
+        )
+
+        # Format VWAP / intraday stats block for the prompt
+        if intraday_stats:
+            is_ = intraday_stats
+            vwap_detail_lines = "\n".join(
+                f"    {r['date']}: high +{r['high_vs_open_pct']}% from open"
+                + (f", +{r['high_vs_vwap_pct']}% above VWAP" if r['high_vs_vwap_pct'] is not None else "")
+                + f", close {r['close_vs_open_pct']:+}% from open, high at {r['time_of_high_et']} ET"
+                for r in is_['rows'][:8]
+            )
+            intraday_block = (
+                f"\nQUANTITATIVE INTRADAY STATS (computed from {is_['sample_size']} real sessions):\n"
+                f"  Median intraday high vs open:       +{is_['median_high_vs_open_pct']}%\n"
+                f"  Median intraday high vs VWAP:       +{is_['median_high_vs_vwap_pct']}%\n"
+                f"  Typical time of day high (ET):      {is_['typical_high_time_et']}\n"
+                f"  Median close vs open:               {is_['median_close_vs_open_pct']:+}%\n"
+                f"  Median close vs VWAP:               {is_['median_close_vs_vwap_pct']:+}%\n"
+                f"  Actual fade rate (close < open):    {is_['fade_rate_pct']}%\n"
+                f"  Per-session detail:\n{vwap_detail_lines}\n"
+            )
+        else:
+            intraday_block = "\nQUANTITATIVE INTRADAY STATS: Not available (no minute-bar data cached for this ticker).\n"
+
+        grade_text = (f"Fade grade: {grade_info.get('grade','?')} — {grade_info.get('verdict','')}."
+                      f" Score: {grade_info.get('score','?')}. Based on {grade_info.get('n','?')} setups."
+                      if grade_info else "No grade data.")
+
+        prompt = f"""You are a sharp, no-nonsense stock trader and analyst. Analyze {ticker} and return a SINGLE JSON object.
+
+CONTEXT:
+Ticker: {ticker}
+Current price: {current_price or 'unknown'}
+Today's gap: {gap_pct or 'unknown'}
+{grade_text}
+
+RECENT NEWS:
+{news_text}
+
+HISTORICAL GAP BEHAVIOR:
+{events_text}
+{sample_events}
+{intraday_block}
+DILUTION / SEC FILING CONTEXT (if available):
+{str(dilution_ctx)[:2000] or 'Not available — check SEC filings separately.'}
+
+Return this exact JSON structure (fill every field, use null if unknown):
+{{
+  "why_moving": {{
+    "catalyst": "1-2 sentences: the actual reason. Distinguish confirmed vs possible vs unknown.",
+    "catalyst_type": "confirmed|possible|unknown",
+    "key_news": "headline or null"
+  }},
+  "dilution": {{
+    "summary": "1-2 sentences on most relevant current dilution relative to price {current_price or '?'}.",
+    "immediate_risk": "high|medium|low|unknown",
+    "key_items": ["item1", "item2"]
+  }},
+  "offering_risk": {{
+    "level": "high|medium|low",
+    "reason": "1 sentence why"
+  }},
+  "historical_behavior": {{
+    "summary": "1-2 sentences on how {ticker} has behaved on previous gap-ups. Include the VWAP high % and typical high time if available.",
+    "fade_rate_pct": {fade_count * 100 // max(len(events),1) if events else 'null'},
+    "sample_size": {len(events)},
+    "median_high_vs_vwap_pct": {intraday_stats['median_high_vs_vwap_pct'] if intraday_stats else 'null'},
+    "median_high_vs_open_pct": {intraday_stats['median_high_vs_open_pct'] if intraday_stats else 'null'},
+    "typical_high_time_et": "{intraday_stats['typical_high_time_et'] if intraday_stats else ''}",
+    "median_close_vs_open_pct": {intraday_stats['median_close_vs_open_pct'] if intraday_stats else 'null'},
+    "intraday_sample_size": {intraday_stats['sample_size'] if intraday_stats else 0}
+  }},
+  "similar_day_pattern": {{
+    "summary": "What typically happens after the open spike. Reference the actual VWAP high % and high time if available from the intraday stats.",
+    "confidence": "high|medium|low|insufficient_data",
+    "example_dates": []
+  }},
+  "final_assessment": {{
+    "catalyst": "one line",
+    "dilution": "one line",
+    "offering_risk": "high|medium|low",
+    "historical_behavior": "fades|holds|mixed|unknown",
+    "key_observation": "The single most important thing a trader should watch on the chart today."
+  }}
+}}
+
+Be direct. No fluff. Use actual data from context. Do not invent numbers not in the context."""
+
+        try:
+            answer, provider = _call_filing_ai(prompt, max_tokens=900)
+            result = _parse_ai_json_object(answer)
+            # Inject computed intraday_stats so frontend can render data tables
+            if intraday_stats:
+                if 'historical_behavior' not in result or not isinstance(result.get('historical_behavior'), dict):
+                    result['historical_behavior'] = {}
+                result['historical_behavior'].update({
+                    'median_high_vs_vwap_pct':  intraday_stats['median_high_vs_vwap_pct'],
+                    'median_high_vs_open_pct':  intraday_stats['median_high_vs_open_pct'],
+                    'typical_high_time_et':     intraday_stats['typical_high_time_et'],
+                    'median_close_vs_open_pct': intraday_stats['median_close_vs_open_pct'],
+                    'median_close_vs_vwap_pct': intraday_stats['median_close_vs_vwap_pct'],
+                    'intraday_sample_size':     intraday_stats['sample_size'],
+                    'fade_rate_pct':            intraday_stats['fade_rate_pct'],
+                })
+                result['intraday_stats'] = intraday_stats
+            out = {**result, "ticker": ticker, "provider": provider}
+            cput(cache_key, out)
+            return jsonify(out)
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 502

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Historical Gap-Up Fade Analyzer (Flask app with modular feature handlers)
 
@@ -994,6 +994,13 @@ def premarket_spikes_api():
 
 # Load account records only after auth and settings handlers are defined.
 _db_sync_users()
+
+# Register AI summary routes from charts module
+try:
+    from chart_app.charts import register_news_ai_routes as _reg_news_ai
+    _reg_news_ai(app, _db_validate_session)
+except Exception as _e:
+    print(f'[news-ai routes] Could not register: {_e}')
 
 def main():
     _load_env_file()
