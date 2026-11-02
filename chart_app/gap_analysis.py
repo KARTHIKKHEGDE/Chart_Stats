@@ -718,7 +718,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     T = {
         "p1": f"[1] CURRENT DAY SETUP ({day_display} — latest data)",
         "p6": "[6] 2-MIN CHARTS — today + historical premarket spike sessions, premarket → close, volume + VWAP + TWAP + running-HOD AVWAP",
-        "p7": "[7] VWAP-CONDITIONED EXPECTED PATH",
+        "p7": "[7] TODAY VS HISTORICAL PREMARKET SPIKES — VWAP / TWAP COMPARISON",
         "pd": "[D] ENTRY MODELS (similar setups)",
     }
     dilution_url = f"https://finviz.com/stock?b=2&p=m&t={quote(t, safe='')}&ta=1&ty=di"

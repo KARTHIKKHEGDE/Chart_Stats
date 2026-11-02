@@ -735,6 +735,44 @@ def favicon():
     return Response(icons.get(name, icons["gapup"]), mimetype="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
 
 
+
+@app.route("/favicon.ico")
+def favicon_ico():
+    """Return a minimal 32x32 ICO so Chrome/Edge show the tab icon reliably."""
+    import struct, zlib
+    W, H = 32, 32
+    bg = (10, 17, 25, 255)
+    ac = (61, 220, 132, 255)
+    bl = (41, 168, 255, 255)
+    ln = (82, 103, 123, 255)
+    hl = (232, 245, 255, 180)
+    def _px(x, y):
+        if y >= 28: return ln
+        if 21 <= x <= 24 and y >= 8:  return ac
+        if 14 <= x <= 17 and y >= 13: return bl
+        if 7  <= x <= 10 and y >= 18: return bl
+        if y == 6 and 5 <= x <= 23: return hl
+        if y == 7 and x == 5: return hl
+        if y == 7 and x == 23: return hl
+        return bg
+    raw = b""
+    for y in range(H):
+        raw += b"\x00"
+        for x in range(W):
+            raw += bytes(_px(x, y))
+    def _chunk(tag, data):
+        c = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", c)
+    ihdr = struct.pack(">IIBBBBB", W, H, 8, 6, 0, 0, 0)
+    png = (b"\x89PNG\r\n\x1a\n"
+           + _chunk(b"IHDR", ihdr)
+           + _chunk(b"IDAT", zlib.compress(raw, 9))
+           + _chunk(b"IEND", b""))
+    ico_hdr  = struct.pack("<HHH", 0, 1, 1)
+    ico_dir  = struct.pack("<BBBBHHII", 32, 32, 0, 0, 1, 32, len(png), 22)
+    ico = ico_hdr + ico_dir + png
+    return Response(ico, mimetype="image/x-icon", headers={"Cache-Control": "public, max-age=86400"})
+
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
@@ -898,10 +936,11 @@ def premarket_spikes_api():
         return jsonify({"error": "Session expired. Please sign in again."}), 401
     if not re.fullmatch(r"[A-Z.-]{1,10}", ticker):
         return jsonify({"error": "Invalid ticker."}), 400
-    cache_key = f"{ticker}_premarket_spikes_v5"
+    cache_key = f"{ticker}_premarket_spikes_v6"
     cached = cget(cache_key, 6 * 3600)
     if cached is not None:
-        return jsonify({"days": cached, "cached": True})
+        if isinstance(cached, dict) and "days" in cached:
+            return jsonify({**cached, "cached": True})
     try:
         daily = load_daily(ticker)
         if not daily:
@@ -928,6 +967,7 @@ def premarket_spikes_api():
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 list(pool.map(_prefetch_minute, [(ticker, index, daily) for index in candidates]))
         found = []
+        spike_paths = {"price": [], "vwap": [], "dev": [], "twap": [], "dt": [], "spread": [], "active_twap": [], "gap": []}
         for index in candidates:
             day = daily[index]["date"]
             prior_close = float(daily[index - 1].get("c") or 0)
@@ -970,10 +1010,32 @@ def premarket_spikes_api():
                         (((pm_through_high["h"] + pm_through_high["l"] + pm_through_high["c"]) / 3)
                          * pm_through_high["v"]).sum()
                     )
+                    price_path = path_full(bars, prior_close, True)
+                    _, vwap_path, dev_path = vwap_frame_paths(bars, prior_close, True)
+                    twap_height, dt_path, spread_path, active_twap = twap_frame_paths(bars, prior_close, True)
+                    pm_high_minute = int(high_index.hour * 60 + high_index.minute)
+                    spike_gap_path = [None] * 217
+                    gap_size = high / prior_close - 1
+                    for offset in range(-360, 721, 5):
+                        k = (pm_high_minute + offset - PM_START) / 5
+                        if not gap_size or k < 0 or k > len(price_path)-1: continue
+                        left, right = int(math.floor(k)), int(math.ceil(k))
+                        if price_path[left] is None or price_path[right] is None: continue
+                        frac = k-left
+                        spike_gap_path[(offset+360)//5] = round((price_path[left] + (price_path[right]-price_path[left])*frac) / gap_size, 4)
+                    spike_paths["price"].append(price_path)
+                    spike_paths["vwap"].append(vwap_path)
+                    spike_paths["dev"].append(dev_path)
+                    spike_paths["twap"].append(twap_height)
+                    spike_paths["dt"].append(dt_path)
+                    spike_paths["spread"].append(spread_path)
+                    spike_paths["active_twap"].append(active_twap)
+                    spike_paths["gap"].append(spike_gap_path)
                     found.append({
                         "date": day,
                         "pm_high_pct": round((high / prior_close - 1) * 100, 2),
                         "pm_high_time": high_index.tz_convert(IST).strftime("%H:%M"),
+                        "pm_high_minute_et": pm_high_minute,
                         "rth_open_gap_pct": round(rth_open_gap, 2) if rth_open_gap is not None else None,
                         "rth_open_high_pct": round(rth_open_high, 2) if rth_open_high is not None else None,
                         "rth_open_close_pct": round(rth_open_close, 2) if rth_open_close is not None else None,
@@ -987,8 +1049,19 @@ def premarket_spikes_api():
             except Exception:
                 continue
         found.sort(key=lambda item: item["date"], reverse=True)
-        cput(cache_key, found)
-        return jsonify({"days": found, "cached": False})
+        def summarize_paths(paths):
+            if not paths:return {"paths": [], "med": [], "p25": [], "p75": []}
+            medians=[];p25=[];p75=[]
+            for k in range(max(map(len,paths))):
+                values=[path[k] for path in paths if len(path)>k and path[k] is not None and np.isfinite(path[k])]
+                medians.append(round(float(np.percentile(values,50)),4) if values else None)
+                p25.append(round(float(np.percentile(values,25)),4) if values else None)
+                p75.append(round(float(np.percentile(values,75)),4) if values else None)
+            return {"paths":paths,"med":medians,"p25":p25,"p75":p75}
+        spike_chart={name:summarize_paths(paths) for name,paths in spike_paths.items()}
+        result={"days":found,"spike_chart":spike_chart}
+        cput(cache_key, result)
+        return jsonify({**result, "cached": False})
     except Exception as exc:
         return jsonify({"error": f"Premarket history scan failed: {exc}"}), 502
 

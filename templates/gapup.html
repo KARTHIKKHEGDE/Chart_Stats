@@ -1,6 +1,7 @@
-﻿﻿﻿﻿﻿﻿﻿<!doctype html>
+﻿﻿﻿﻿﻿﻿<!doctype html>
 <html><head><meta charset="utf-8"><title>Gap-Up Fade Analyzer</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?app=gapup">
+<link rel="shortcut icon" href="/favicon.ico">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 :root{--g:#3ddc84;--r:#ff5a5a;--y:#ffd23f;--b:#6cc4ff;--c:#29a8ff;--w:#e8e8e8;--d:#8a8a8a;--line:#333}
@@ -71,6 +72,27 @@ select{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;f
 .dilutionStatusCard{margin-top:16px;padding:15px 17px;border:1px solid #a55a21;border-left:4px solid #ff8a3d;border-radius:6px;background:#21150f}.dilutionStatusCard h3{margin:0 0 7px;color:#ffb16e;font-size:13px;letter-spacing:.07em;text-transform:uppercase}.dilutionStatusCard p{margin:0;color:#fff;font:600 16px/1.6 Arial,sans-serif}
 .dilutionSnapshotGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin-top:8px}.dilutionSnapshotGrid>span{display:flex;flex-direction:column;gap:3px;min-width:0;padding:10px 12px;border:1px solid #283842;border-radius:5px;background:#0e151a;color:#eaf1f5;font:14px/1.45 Arial,sans-serif}.dilutionSnapshotGrid b{color:#88b9d2;font:11px Consolas,monospace;text-transform:uppercase;letter-spacing:.03em}.dilutionSnapshotGrid small{color:#8da6b7;font:11px/1.4 Consolas,monospace}
 .dilutionInstrumentDetails{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:7px 12px;margin-top:9px}.dilutionInstrumentDetails>span{color:#d5dfe6;font:13px/1.5 Arial,sans-serif}.dilutionInstrumentDetails b{color:#8da6b7;font-size:12px}
+/* Give the research dialogs room to breathe and keep text readable at 100% zoom. */
+.newsAiDialog,.aioDialog,.filingExplainDialog{width:min(1120px,96vw);max-height:94vh;padding:clamp(22px,3vw,38px);font-family:Arial,sans-serif}
+.newsAiHead h2,.aioHead h2,.filingExplainHeader h2{font-size:clamp(21px,2vw,27px);line-height:1.35}
+.newsAiSection h3,.aioSection h3,.filingExplainSection h3{font-size:14px;letter-spacing:.06em}
+.newsAiSection p,.aioSection p,.filingExplainSection p,.filingExplainSection li{font-size:17px;line-height:1.75}
+.newsAiQuote{font-size:17px;line-height:1.7;padding:14px 16px}
+.newsAiStatus,.aioStatus{font:16px/1.6 Arial,sans-serif;padding:28px 8px}
+.newsAiClose,.aioClose,.filingExplainClose{min-height:44px;padding:8px 16px;font-size:16px}
+.dilutionSourceButton{font-size:15px;line-height:1.55;min-height:48px}
+.dilutionSnapshotGrid>span{font-size:16px}.dilutionInstrumentDetails>span{font-size:15px}
+/* The dilution report is a long research view; use most of the screen while it loads and after it renders. */
+#filing_explanation_modal{padding:3vh 3vw}
+#filing_explanation_modal .filingExplainDialog{width:min(1480px,94vw);max-height:94vh;padding:clamp(28px,3.5vw,52px)}
+#filing_explanation_modal .filingExplainHeader{align-items:center;padding-bottom:18px}
+#filing_explanation_modal .filingExplainHeader h2{font-size:clamp(24px,2.2vw,32px);line-height:1.3}
+#filing_explanation_modal .filingExplainClose{min-width:84px;min-height:50px;font-size:18px}
+#filing_explanation_modal .filingExplainStatus{font:18px/1.7 Arial,sans-serif;min-height:34px;padding:10px 0;color:#cbd6df}
+#filing_explanation_modal .filingExplainSection{margin-top:22px}
+#filing_explanation_modal .filingExplainSection h3{font-size:16px;margin-bottom:10px}
+#filing_explanation_modal .filingExplainSection p,#filing_explanation_modal .filingExplainSection li{font:18px/1.75 Arial,sans-serif}
+#filing_explanation_modal .filingExplainMeta{font-size:14px}
 @media(max-width:700px){.recent-filings-panel{padding:12px}.recent-filings-heading{align-items:flex-start}.recent-filing-head{align-items:flex-start}.recent-filing-foot{align-items:flex-start;flex-direction:column;gap:6px}.recent-filing-company{flex-basis:65%}.recent-filing-age{white-space:normal}.dilutionHistoryHead{flex-direction:column}}
 @media(max-width:900px){.three.recent-layout{grid-template-columns:1fr}.recent-filings-panel{grid-column:span 1}}
 @media(max-width:1500px) and (min-width:701px){
@@ -81,7 +103,7 @@ select{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;f
   #gap_deepdive_chart_modal>section>header>div>button{height:29px!important;padding:0 7px!important;font-size:14px!important;white-space:nowrap}
   #gap_chart_quote_line{max-width:32vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   #gap_chart_modal_body{padding:5px!important}
-  #gap_chart_navigator_wrap{height:64px!important;flex-basis:64px!important}
+  #gap_chart_navigator_wrap{height:82px!important;flex-basis:82px!important}
   #gap_chart_avwap_status{padding:5px 10px!important;font-size:11px!important}
 }
 .kv{display:grid;grid-template-columns:max-content 1fr;column-gap:34px;row-gap:2px}
@@ -229,6 +251,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
         <strong id="gap_chart_title" style="font-size:17px;color:#e7eef5"></strong><span id="gap_chart_date" style="padding:3px 8px;border:1px solid #655516;background:#211b05;color:#ffe17d;border-radius:3px;font-size:13px"></span>
         <span id="gap_chart_stats" style="color:#9ba6b0;font-size:12px"></span><span id="gap_chart_quote_line" style="color:#e8edf3;font-size:12px;font-family:Consolas,monospace;padding:4px 8px;border:1px solid #29313a;border-radius:3px">Hover a candle · change, volume, dollar volume, float</span><a id="gap_chart_player_tag" hidden target="_blank" rel="noopener noreferrer" style="padding:4px 9px;border:1px solid #8b74ff;background:#171127;color:#c8baff;border-radius:12px;font-size:12px;text-decoration:none" title="Named in an SEC filing as placement agent or underwriter"></a>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto">
+          <span id="report_spike_navigation" hidden style="display:flex;align-items:center;gap:5px"><button type="button" onclick="navigateReportSpike(-1)" style="height:32px;padding:0 9px">← Previous spike</button><button type="button" onclick="navigateReportSpike(0)" style="height:32px;padding:0 9px;color:#ffe17d">Today</button><button type="button" onclick="navigateReportSpike(1)" style="height:32px;padding:0 9px">Next spike →</button></span>
           <label style="font-size:12px;color:#ddd">Interval <select id="gap_chart_tf" style="height:30px;margin:0"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label>
           <label style="font-size:12px;color:#d7ff6e"><input id="gap_chart_bz" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"> Bone Zone (9/21 EMA)</label>
           <label style="font-size:12px;color:#fff"><input id="gap_chart_vwap" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"> VWAP</label>
@@ -249,7 +272,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
       </header>
       <div id="gap_chart_modal_body" style="display:flex;flex-direction:column;position:relative;flex:1;min-height:0;padding:8px;background:#050607">
         <div id="gap_chart_plot_wrap" style="position:relative;flex:1;min-height:0"><canvas id="gap_chart_modal_canvas" style="display:block;width:100%;height:100%"></canvas><canvas id="gap_chart_range_overlay" style="position:absolute;inset:0;display:block;width:100%;height:100%;pointer-events:none"></canvas><div id="gap_chart_crosshair_v" hidden style="position:absolute;z-index:4;top:0;width:0;border-left:1px dashed rgba(220,232,244,.75);pointer-events:none"></div><div id="gap_chart_crosshair_h" hidden style="position:absolute;z-index:4;left:0;height:0;border-top:1px dashed rgba(220,232,244,.75);pointer-events:none"></div><div id="gap_chart_measure_box" hidden style="position:absolute;right:12px;top:12px;z-index:5;max-width:300px;padding:8px 10px;background:rgba(6,13,21,.96);border:1px solid #62c8ff;border-radius:4px;color:#edf6ff;font:13px/1.55 Consolas,monospace;white-space:pre-wrap;pointer-events:none"></div></div>
-        <div id="gap_chart_navigator_wrap" style="height:76px;flex:0 0 76px;margin-top:5px;border:1px solid #242b33;background:#090c10;display:flex;flex-direction:column"><div id="gap_chart_hover_time" style="height:18px;flex:0 0 18px;padding:1px 8px;color:#9ba6b0;font:11px/16px Consolas,monospace">Hover a candle to see its time · IST</div><canvas id="gap_chart_navigator" style="display:block;width:100%;height:calc(100% - 18px);flex:1;min-height:0;touch-action:none;cursor:grab"></canvas></div>
+        <div id="gap_chart_navigator_wrap" style="height:88px;flex:0 0 88px;margin-top:5px;border:1px solid #242b33;background:#090c10;display:flex;flex-direction:column"><div id="gap_chart_hover_time" style="min-height:24px;flex:0 0 auto;padding:4px 8px;color:#9ba6b0;font:11px/16px Consolas,monospace;white-space:normal;overflow-wrap:anywhere">Hover a candle to see its time · IST</div><canvas id="gap_chart_navigator" style="display:block;width:100%;height:calc(100% - 32px);flex:1;min-height:0;touch-action:none;cursor:grab"></canvas></div>
       </div>
       <footer id="gap_chart_avwap_status" style="padding:8px 14px;border-top:1px solid #252b31;color:#aab4bf;font-size:12px">VWAP and TWAP are shown. Choose AVWAP to click anchor A, then anchor B.</footer>
     </section>
@@ -830,6 +853,51 @@ window.gapDeepDiveFilingsJump=null;
 let gapDeepDiveFilingsJumpStarted=false;
 const recentFilingsAsOfByTicker={};
 let recentFilingsCache={items:null,savedAt:0,pending:null};
+const dilutionWarmJobs=new Map();
+const dilutionReportJobs=new Map();
+const dilutionReportCache=new Map();
+function warmDilutionHistory(ticker,asOfDate=''){
+  const key=`${String(ticker).toUpperCase()}|${asOfDate||''}`;
+  if(dilutionWarmJobs.has(key))return dilutionWarmJobs.get(key);
+  const payload={user:currentUser||'',token:sessionToken||'',ticker:String(ticker).toUpperCase(),as_of:asOfDate||'',request_id:crypto.randomUUID().replace(/-/g,'')};
+  const pending=fetch('/api/sec-dilution-history/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+    .then(async response=>{const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not start dilution analysis.');return {payload,job_id:data.job_id};})
+    .catch(error=>{dilutionWarmJobs.delete(key);console.debug('Dilution prefetch unavailable:',error.message);return null;});
+  dilutionWarmJobs.set(key,pending);return pending;
+}
+function getDilutionHistory(ticker,asOfDate=''){
+  const symbol=String(ticker).toUpperCase(),key=`${symbol}|${asOfDate||''}`;
+  if(dilutionReportCache.has(key))return Promise.resolve(dilutionReportCache.get(key));
+  if(dilutionReportJobs.has(key))return dilutionReportJobs.get(key);
+  const pending=(async()=>{
+    const started=await (dilutionWarmJobs.get(key)||warmDilutionHistory(symbol,asOfDate));
+    if(!started)throw new Error('Could not start dilution analysis.');
+    const began=Date.now();let errors=0;
+    while(Date.now()-began<15*60*1000){
+      await new Promise(resolve=>setTimeout(resolve,1400));
+      try{
+        const response=await fetch('/api/sec-dilution-history/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...started.payload,job_id:started.job_id})});
+        const job=await response.json();if(!response.ok)throw new Error(job.error||`Dilution status failed (HTTP ${response.status}).`);
+        errors=0;
+        if(job.status==='complete'){dilutionReportCache.set(key,job.result);return job.result;}
+        if(job.status==='error')throw new Error(job.error||'Could not analyze dilution history.');
+      }catch(error){
+        errors++;
+        if(errors>=25)throw error;
+        await new Promise(resolve=>setTimeout(resolve,Math.min(12000,800*2**Math.min(errors-1,4))));
+      }
+    }
+    throw new Error('Dilution analysis is still running in the background. Reopen this report shortly.');
+  })().catch(error=>{dilutionReportJobs.delete(key);throw error;});
+  dilutionReportJobs.set(key,pending);
+  pending.finally(()=>{if(dilutionReportJobs.get(key)===pending&&dilutionReportCache.has(key))dilutionReportJobs.delete(key);}).catch(()=>{});
+  return pending;
+}
+function warmNewsSummaries(ticker,items){
+  (items||[]).filter(item=>/^https?:\/\//i.test(item.url||'')).slice(0,4).forEach(item=>{
+    fetch('/api/news-summary',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:currentUser||'',token:sessionToken||'',url:item.url,title:item.title||'',ticker})}).catch(()=>{});
+  });
+}
 function normalizeFilingsDate(value){
   const raw=String(value||'').trim();
   if(/^\d{4}-\d{2}-\d{2}$/.test(raw))return raw;
@@ -892,30 +960,51 @@ document.addEventListener('click',async e=>{
 // ─── All-in-One Summary Modal ─────────────────────────────────────────────
 function closeAioModal(){const m=$('#aio_modal');if(m)m.style.display='none';}
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#aio_modal')?.style.display==='flex')closeAioModal();});
+const aioWarmCache=new Map();
+function dilutionTextForAio(report){
+  if(!report)return '';
+  const sections=[`SEC review as of ${report.as_of||'latest'}: ${report.summary||''}`,`Current status: ${report.current_status||''}`];
+  for(const [label,key] of [['Active ATMs','active_atms'],['Active warrants','active_warrants'],['Convertibles','convertibles'],['Other share overhang','other_overhang']]){
+    const rows=report[key]||[];if(rows.length)sections.push(`${label}: ${JSON.stringify(rows.slice(0,12))}`);
+  }
+  const math=report.today_math||{},snapshot=report.market_snapshot||{};
+  if(Object.keys(math).length)sections.push(`Dilution calculations: ${JSON.stringify(math)}`);
+  if(Object.keys(snapshot).length)sections.push(`SEC share and market snapshot: ${JSON.stringify(snapshot)}`);
+  if(report.caveats)sections.push(`Coverage notes: ${report.caveats}`);
+  return sections.join('\n').slice(0,10000);
+}
+function aioPayload(tab,ticker,dilutionReport){
+  const r=tab?.result||{},h=r.head||{},news=(r.news||[]).slice(0,8);
+  const events=(tab?.EV||[]).filter(x=>!x.sim).slice(0,20).map(x=>({date:x.date,gap_pct:x.gap||x.gapPct,grade:x.grade,verdict:x.verdict,close_pct:x.closePct??x.close_pct??0}));
+  const sec_filings=[...(tab?.container?.querySelectorAll('.recent-filing-row')||[])].slice(0,25).map(row=>({form:row.querySelector('.recent-filing-form')?.textContent?.trim()||'',title:row.querySelector('.recent-filing-title')?.textContent?.trim()||'',filed_at:row.querySelector('.recent-filing-age')?.getAttribute('datetime')||''})).filter(item=>item.title);
+  return {user:currentUser||'',token:sessionToken||'',ticker,news,events,sec_filings,dilution_text:dilutionTextForAio(dilutionReport),grade:{grade:h.grade,verdict:h.verdict,score:h.score,n:h.n},current_price:h.price||h.last_price||'',gap_pct:h.gap_pct||h.gap||''};
+}
+function getAioSummary(tab,ticker,dilutionReport){
+  const payload=aioPayload(tab,ticker,dilutionReport),key=JSON.stringify(payload);
+  if(aioWarmCache.has(key))return aioWarmCache.get(key);
+  const pending=fetch('/api/all-in-one-summary',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+    .then(async response=>{const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not generate summary.');return data;})
+    .catch(error=>{aioWarmCache.delete(key);throw error;});
+  aioWarmCache.set(key,pending);return pending;
+}
+function warmAioSummary(tab,ticker){
+  const asOf=tab?.container?.querySelector('#recent_filings_asof')?.value||'';
+  getDilutionHistory(ticker,asOf).then(report=>getAioSummary(tab,ticker,report)).catch(error=>console.debug('All-in-One prefetch unavailable:',error.message));
+}
 
 async function openAioModal(event,btn){
   if(event)event.stopPropagation();
   const ticker=(btn||event?.target?.closest('[data-ticker]'))?.dataset?.ticker||activeTab||'';
   const tab=openTabs[activeTab]||Object.values(openTabs)[0];
-  const r=tab?.result||{};
-  const h=r.head||{};
+  const h=tab?.result?.head||{};
   const modal=$('#aio_modal'),status=$('#aio_status'),content=$('#aio_content');
   $('#aio_title').textContent=`All-in-One Summary — ${ticker||'loading…'}`;
   modal.style.display='flex';content.hidden=true;content.innerHTML='';
-  status.textContent='Gathering data and generating comprehensive AI summary…';
-  // Collect context from the loaded report
-  const news=(r.news||[]).slice(0,8);
-  const events=(tab?.EV||[]).filter(x=>!x.sim).slice(0,20).map(x=>({
-    date:x.date,gap_pct:x.gap||x.gapPct,grade:x.grade,verdict:x.verdict,
-    close_pct:x.closePct??x.close_pct??0
-  }));
-  const grade={grade:h.grade,verdict:h.verdict,score:h.score,n:h.n};
+  const asOf=tab?.container?.querySelector('#recent_filings_asof')?.value||'';
+  status.textContent='Using the shared SEC dilution review and preparing the summary in the background. You can close this window and return later.';
   try{
-    const res=await fetch('/api/all-in-one-summary',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({user:currentUser||'',token:sessionToken||'',ticker,news,events,grade,
-        current_price:h.price||h.last_price||'',gap_pct:h.gap_pct||h.gap||''})});
-    const d=await res.json();
-    if(!res.ok)throw new Error(d.error||'Could not generate summary.');
+    const dilutionReport=await getDilutionHistory(ticker,asOf);
+    const d=await getAioSummary(tab,ticker,dilutionReport);
     const chip=level=>{const l=(level||'').toLowerCase();return`<span class="aioChip ${l}">${(level||'?').toUpperCase()}</span>`;};
     const esc2=s=>typeof s==='string'?s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'):'—';
     const li=arr=>(arr||[]).length?`<ul style="margin:4px 0 0 16px;padding:0">${(arr||[]).map(x=>`<li style="font-size:13px;color:#c8d5e0;line-height:1.6">${esc2(x)}</li>`).join('')}</ul>`:'';
@@ -957,6 +1046,12 @@ async function openAioModal(event,btn){
         </div>
       </div>
       <div style="color:#4a5a65;font-size:11px;margin-top:12px">AI: ${esc2(d.provider||'AI')} ${d.cached?'· cached':''} · Data may be incomplete; verify before trading.</div>`;
+    const stats=d.intraday_stats,pmRange=stats?.premarket_high_vs_vwap_range_pct;
+    if(stats){const history=[...content.querySelectorAll('.aioSection')].find(section=>section.textContent.includes('4 · Historical Behavior'));
+      if(history){const median=stats.median_premarket_high_vs_vwap_pct,range=pmRange?.p25!=null?`+${pmRange.p25}% to +${pmRange.p75}%`:'not enough data';
+        history.insertAdjacentHTML('beforeend',`<div style="margin-top:10px;padding:12px;background:#10150d;border:1px solid #51451a;border-radius:6px"><div style="font-size:13px;font-weight:700;color:#ffd23f;margin-bottom:6px">PREMARKET SPIKE · HIGH VS CUMULATIVE VWAP (04:00 ET)</div><div style="font-size:16px;line-height:1.7;color:#e8edf3">Median: <b>${median!=null?`+${median}%`:'not available'}</b> · Middle 50% range: <b>${range}</b></div><div style="font-size:13px;color:#9ba6b0;margin-top:4px">${stats.rows?.filter(row=>row.premarket_high_vs_vwap_pct!=null).length||0} sessions with premarket data. Each session: ${stats.rows?.filter(row=>row.premarket_high_vs_vwap_pct!=null).slice(0,8).map(row=>`${row.date} +${row.premarket_high_vs_vwap_pct}%${row.premarket_high_time_et?` at ${row.premarket_high_time_et} ET`:''}`).join(' · ')||'—'}</div></div>`);
+      }
+    }
     status.textContent='';content.hidden=false;
   }catch(err){status.textContent=err.message;content.hidden=true;}
 }
@@ -1023,45 +1118,11 @@ document.addEventListener('keydown',event=>{const row=event.target.closest?.('[d
 async function requestDilutionHistory(ticker,asOfDate=''){
   const modal=$('#filing_explanation_modal'),status=$('#filing_explanation_status'),content=$('#filing_explanation_content');
   modal.style.display='flex';content.hidden=true;content.innerHTML='';$('#filing_explanation_title').textContent=`${ticker} · Dilution history`;
-  status.textContent=`Reviewing filings and dilution status as of ${asOfDate||'today'}…`;
-  const apiRequest=async(url,payload,phase,retries=0)=>{
-    for(let attempt=0;;attempt++){
-      try{
-        const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-        const raw=await response.text();let data;
-        try{data=JSON.parse(raw);}catch{const error=new Error(`${phase} returned a non-JSON response (HTTP ${response.status}).`);error.status=response.status;error.retryable=response.status===429||response.status>=500;error.retryAfterMs=parseRetryAfter(response.headers.get('Retry-After'));throw error;}
-        if(!response.ok){const error=new Error(data.error||`${phase} failed (HTTP ${response.status}).`);error.status=response.status;error.retryable=response.status===429||response.status>=500;error.retryAfterMs=parseRetryAfter(response.headers.get('Retry-After'));throw error;}
-        return data;
-      }catch(error){
-        if(attempt>=retries||(!error.retryable&&error.name!=='TypeError'))throw error;
-        await new Promise(resolve=>setTimeout(resolve,error.retryAfterMs||700*(attempt+1)));
-      }
-    }
-  };
-  const parseRetryAfter=value=>{if(!value)return 0;const seconds=Number(value);if(Number.isFinite(seconds))return Math.max(1000,Math.min(30000,seconds*1000));const at=Date.parse(value);return Number.isFinite(at)?Math.max(1000,Math.min(30000,at-Date.now())):0;};
+  const warmKey=`${String(ticker).toUpperCase()}|${asOfDate||''}`;
+  status.textContent=dilutionReportCache.has(warmKey)?'Showing the dilution report already prepared for this ticker.':`This review is running in the background for ${asOfDate||'today'}. You can close this window and return later.`;
   try{
-    const payload={user:currentUser||'',token:sessionToken||'',ticker,as_of:asOfDate||'',request_id:crypto.randomUUID().replace(/-/g,'')};
-    const started=await apiRequest('/api/sec-dilution-history/start',payload,'Starting dilution analysis',2);
-    const beganAt=Date.now();
-    let consecutivePollErrors=0;
-    while(Date.now()-beganAt<10*60*1000){
-      await new Promise(resolve=>setTimeout(resolve,3000));
-      let job;
-      try{job=await apiRequest('/api/sec-dilution-history/status',{...payload,job_id:started.job_id},'Checking dilution analysis',0);consecutivePollErrors=0;}
-      catch(error){
-        if(!error.retryable&&error.name!=='TypeError')throw error;
-        consecutivePollErrors++;
-        if(consecutivePollErrors>=25)throw new Error(`The server is still rate-limiting status checks (last response: HTTP ${error.status||'network error'}). The analysis may still be running; close this window and retry shortly.`);
-        const retryDelay=error.retryAfterMs||Math.min(15000,1000*2**Math.min(consecutivePollErrors-1,4));
-        status.textContent=`Temporary server rate limit or connection issue (HTTP ${error.status||'network'}); retrying in ${Math.ceil(retryDelay/1000)}s (${consecutivePollErrors}/25)…`;
-        await new Promise(resolve=>setTimeout(resolve,retryDelay));
-        continue;
-      }
-      if(job.status==='complete'){renderDilutionHistory(job.result);return;}
-      if(job.status==='error')throw new Error(job.error||'Could not analyze dilution history.');
-      status.textContent=`Checking SEC filings and dilution status as of ${asOfDate||'today'}… ${Math.floor((Date.now()-beganAt)/1000)}s`;
-    }
-    throw new Error('The analysis is still running on the server. Please wait a little and try again.');
+    const result=await getDilutionHistory(ticker,asOfDate);
+    if(modal.style.display==='flex')renderDilutionHistory(result);
   }
   catch(error){status.textContent=error.message;content.hidden=true;}
 }
@@ -1248,7 +1309,35 @@ function premarketSpikeChartCard(index){
   return `<div class="evc" data-ev-slot="${index}" onclick="openChartModal(${index})"><div class="evhead"><div class="evt" id="evtitle${index}"></div><span class="eventDateTag" data-event-date></span><div class="evcontrols"><select class="evtf" title="Timeframe"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select><select class="evdays" title="Sessions shown"><option value="1">1 day</option><option value="3">3 days</option><option value="5" selected>5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="75">75 days</option><option value="80">80 days</option><option value="200">200 days</option></select><button class="evzoom" data-zoom="out" title="Zoom out">−</button><button class="evzoom" data-zoom="in" title="Zoom in">+</button><button class="evmeasure" type="button" title="Drag across bars to measure volume, dollar volume, and float rotation">Measure</button><button class="evtoday" type="button" title="Return to today's live chart">Today</button></div></div><canvas id="ev${index}"></canvas></div>`;
 }
 
-function renderPremarketSpikeDays(tab,report,days){
+function applyPremarketSpikeChart(tab,report,spikeChart,days){
+  const chart=report?.chart;
+  if(!chart||!spikeChart)return false;
+  const history={prev_close:spikeChart.price,dev:spikeChart.dev,vwap:spikeChart.vwap,
+    twap:spikeChart.twap,active_twap:spikeChart.active_twap,dt:spikeChart.dt,spread:spikeChart.spread,gap:spikeChart.gap};
+  if(!Object.values(history).some(item=>item?.paths?.length))return false;
+  chart.spike_history=history;chart.spikeComparison=true;
+  const liveByMode={prev_close:chart.today,dev:chart.dev_today,vwap:chart.vwap_today,
+    twap:chart.twap_today,active_twap:chart.active_twap_today,dt:chart.dt_today,spread:chart.spread_today,gap:chart.gap_today};
+  const nowByMode={prev_close:chart.now_k,dev:chart.now_k,vwap:chart.now_k,twap:chart.now_k,active_twap:chart.now_k,
+    dt:chart.now_k,spread:chart.now_k,gap:chart.gap_now_k};
+  chart.spike_projections={};
+  Object.entries(history).forEach(([mode,series])=>{
+    const live=liveByMode[mode],now=nowByMode[mode],proj=Array((series?.med||[]).length).fill(null);
+    if(!series?.paths?.length||!Array.isArray(live)||!Number.isInteger(now)||live[now]==null){chart.spike_projections[mode]=proj;return;}
+    proj[now]=live[now];
+    for(let k=now+1;k<proj.length;k++){
+      const changes=series.paths.map(path=>path?.[k]!=null&&path?.[now]!=null?path[k]-path[now]:null).filter(value=>value!=null&&Number.isFinite(value));
+      if(changes.length){changes.sort((a,b)=>a-b);const mid=(changes.length-1)/2,lo=Math.floor(mid),hi=Math.ceil(mid);proj[k]=Math.round((live[now]+(changes[lo]+changes[hi])/2)*10000)/10000;}
+    }
+    chart.spike_projections[mode]=proj;
+  });
+  const status=tab.container.querySelector('[data-path-status]');
+  if(status)status.textContent=`Comparing today with ${days.length} historical premarket spike session${days.length===1?'':'s'}.`;
+  const cv=tab.container.querySelector('#cv');if(cv)drawChart(chart,cv);
+  return true;
+}
+
+function renderPremarketSpikeDays(tab,report,days,spikeChart){
   const panel=tab.container.querySelector('[data-premarket-spikes]');
   if(!panel||tab.result!==report)return;
   const compact=n=>new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(Number(n)||0);
@@ -1271,7 +1360,12 @@ function renderPremarketSpikeDays(tab,report,days){
     (rows.length?table(cols,rows,null,true):`<div class="foot">No sessions met both thresholds in the last year.</div>`);
   panel.querySelectorAll('table.sort').forEach(makeSortable);
   report.premarket_surge_days=days;
+  if(!applyPremarketSpikeChart(tab,report,spikeChart,days)){
+    const status=tab.container.querySelector('[data-path-status]');
+    if(status)status.textContent=days.length?'Spike sessions found, but comparison chart data is unavailable.':'No historical premarket spike sessions found for comparison.';
+  }
 
+  days.forEach(spike=>{const existing=tab.EV.find(item=>item.date===spike.date);if(existing){existing.ticker=report.head.ticker;existing.premarketSpikeChart=true;existing.premarketSpikePct=spike.pm_high_pct;existing.premarketSpikeDollarVolume=spike.pm_dollar_volume;}});
   const existingDates=new Set(tab.EV.map(item=>item.date));
   const spikeCharts=days.filter(item=>item.date&&!existingDates.has(item.date));
   const grid=tab.container.querySelector('.evgrid');
@@ -1281,9 +1375,10 @@ function renderPremarketSpikeDays(tab,report,days){
     const spikeTitle=`PREMARKET SPIKE ${item.date} · PM high +${Number(item.pm_high_pct).toFixed(1)}%`;
     const cached=tab.sessionChartCache[item.date];
     return cached
-      ? {...cached,title:`${spikeTitle} · ${cached.title}`,sim:false}
-      : {date:item.date,title:`${spikeTitle} · loading chart`,sim:false,chart:{bars:{t:[]}},
-         premarketSpikeChart:true,premarketSpikePct:item.pm_high_pct};
+      ? {...cached,title:`${spikeTitle} · ${cached.title}`,sim:false,ticker:report.head.ticker,
+         premarketSpikeChart:true,premarketSpikePct:item.pm_high_pct,premarketSpikeDollarVolume:item.pm_dollar_volume}
+      : {date:item.date,title:`${spikeTitle} · loading chart`,sim:false,ticker:report.head.ticker,chart:{bars:{t:[]}},
+         premarketSpikeChart:true,premarketSpikePct:item.pm_high_pct,premarketSpikeDollarVolume:item.pm_dollar_volume};
   });
   tab.EV.push(...added);
   grid.insertAdjacentHTML('beforeend',added.map((_,offset)=>premarketSpikeChartCard(firstIndex+offset)).join(''));
@@ -1298,7 +1393,7 @@ async function loadPremarketSpikeChart(tab,card,item){
     const response=await fetch('/api/session-chart?'+query.toString()),data=await response.json();
     if(!response.ok)throw new Error(data.error||'Could not load premarket spike chart.');
     if(tab.result!==report||!card.isConnected)return;
-    const loaded={date:data.date,title:`PREMARKET SPIKE ${item.date} · PM high +${Number(item.premarketSpikePct).toFixed(1)}% · ${data.title}`,sim:false,chart:data.chart};
+    const loaded={date:data.date,title:`PREMARKET SPIKE ${item.date} · PM high +${Number(item.premarketSpikePct).toFixed(1)}% · ${data.title}`,sim:false,ticker:report?.head?.ticker,chart:data.chart,premarketSpikeChart:true,premarketSpikePct:item.premarketSpikePct,premarketSpikeDollarVolume:item.premarketSpikeDollarVolume};
     tab.sessionChartCache[item.date]=loaded;
     tab.EV[Number(card.dataset.evSlot)]=loaded;
     card._chartItem=loaded;
@@ -1318,7 +1413,7 @@ async function loadPremarketSpikeDays(tab,report){
   const query=new URLSearchParams({ticker,user:currentUser||'',token:sessionToken||''});
   tab._premarketSpikeLoad=fetch('/api/premarket-spikes?'+query.toString()).then(async response=>{
     const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load premarket history.');
-    if(tab.result===report)renderPremarketSpikeDays(tab,report,data.days||[]);
+    if(tab.result===report)renderPremarketSpikeDays(tab,report,data.days||[],data.spike_chart);
   }).catch(error=>{if(tab.result===report){const panel=tab.container.querySelector('[data-premarket-spikes]'),status=panel?.querySelector('[data-surge-status]');if(status)status.textContent='Premarket history unavailable: '+error.message;}}).finally(()=>{const stale=tab.result!==report;tab._premarketSpikeLoad=null;if(stale&&tab.result?.head?.ticker===ticker)loadPremarketSpikeDays(tab,tab.result);});
   return tab._premarketSpikeLoad;
 }
@@ -1373,14 +1468,14 @@ function renderTab(tab, r, isRefresh){
   o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">`+
      `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:7px">${esc(T.p6)}<label style="font-size:11px;color:#aaa">All charts <select id="ev_all_tf" class="evtf"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label><select id="ev_all_days" class="evtf" title="Days for all charts"><option value="1">1 day</option><option value="3">3 days</option><option value="5" selected>5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="75">75 days</option><option value="80">80 days</option><option value="200">200 days</option></select><select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
      (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" checked style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/21 EMA cloud + BB)</label></div>`+
-     `<span style="font-size:12px;color:#29a8ff;font-weight:normal">🔍 Click any chart to enlarge</span></div>`+
+     `<span style="font-size:12px;color:#29a8ff;font-weight:normal">🔍 Click a premarket spike chart for full Deepdive controls</span></div>`+
   `<div class="evgrid">`+tab.EV.map((_,i)=>premarketSpikeChartCard(i)).join('')+
      `<\/div><div class="foot"><span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance.">━ VWAP<\/span> &nbsp; <span style="color:#c084fc">━ TWAP</span> &nbsp; <span style="color:#e879f9">┅ active-minute TWAP</span> &nbsp; <span style="color:#ffd23f">┅ HOD-anchored AVWAP</span> &nbsp; <span style="color:#ffd23f">N News</span> &nbsp; <span style="color:#62c8ff">S SEC filing</span>  <span class="y" data-tip="Pre-market High — highest price before the US market open. Common fade target.">┅ PM high<\/span>  <span class="d" data-tip="Previous Close — yesterday’s close. Gap % is measured from here.">┅ prev close<\/span> &nbsp; <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period EMA on 2-min closes. Fast trend line.">━ EMA9<\/span> <span style="color:#ffa500" data-tip="EMA 21 — 20-period EMA on 2-min closes. Slower trend line. Bearish when EMA9 drops below it.">━ EMA21<\/span> <span class="g" data-tip="Bone Zone cloud — shaded between EMA9 &amp; EMA21. Green = bullish. Red = bearish.">▒<\/span><span class="r">▒<\/span> cloud <span class="d" data-tip="Bollinger Bands (20-period, 2 std dev). Shows expected volatility range on the 2-min chart.">━ BB(20,2)<\/span> &nbsp; <span data-tip="SELL signal — short entry triggered by an entry model.">▼ SELL<\/span> &nbsp; <span data-tip="BUY / Cover signal — close the short here. P&amp;L % shown next to it.">▲ BUY<\/span>. <span data-tip="Lighter shaded background = pre-market session (before 9:30 ET / 19:00 IST).">Shaded = premarket<\/span>. X axis = IST. Measure: activate Measure, then drag across bars for volume, estimated dollar volume, and float rotation.<\/div><\/div>`;
 
   const pmGapText = Number.isFinite(r.chart.premarket_gap_pct)
     ? `${(r.chart.premarket_gap_pct*100).toFixed(1)}% (PM high vs prev close)` : 'Not available';
-  o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap"><span>${esc(T.p7)}</span><span style="display:flex;align-items:center;gap:12px;font-size:12px;font-weight:normal;color:#aaa"><span>Premarket gap: <b style="color:#e8e8e8">${esc(pmGapText)}</b></span><label for="path_norm">View <select id="path_norm" style="margin-left:5px"><option value="dev">Price vs VWAP (Dᵥ)</option><option value="dt">Price vs TWAP (Dₜ)</option><option value="spread">ln(VWAP / TWAP)</option><option value="vwap">Cumulative VWAP height</option><option value="twap">Clock-time TWAP height</option><option value="prev_close">Recomposed price from previous close</option><option value="gap">% of premarket gap retained</option></select></label></span></div><canvas id="cv"></canvas>`+
-     `<div class="foot" id="path_norm_foot"><span class="b" data-tip="Historical median across VWAP-state-matched gap-up setups.">━ history median<\/span> &nbsp; <span style="color:#6c8" data-tip="Middle 50% range of similar setups.">▒ p25–p75<\/span> &nbsp; <span class="y">━ today<\/span> &nbsp; <span class="y">┅ expected path<\/span> &nbsp; <span class="d">━ each similar setup<\/span> &nbsp; Default Y = price / cumulative VWAP − 1; expected price = projected VWAP × (1 + deviation).<\/div><\/div>`;
+  o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap"><span>${esc(T.p7)}</span><span style="display:flex;align-items:center;gap:12px;font-size:12px;font-weight:normal;color:#aaa"><span data-path-status role="status" style="color:#ffd23f"></span><span>Premarket gap: <b style="color:#e8e8e8">${esc(pmGapText)}</b></span><label for="path_norm">View <select id="path_norm" style="margin-left:5px"><option value="dev">Price vs VWAP (Dᵥ)</option><option value="dt">Price vs TWAP (Dₜ)</option><option value="spread">ln(VWAP / TWAP)</option><option value="vwap">Cumulative VWAP height</option><option value="twap">Clock-time TWAP height</option><option value="prev_close">Recomposed price from previous close</option><option value="gap">% of premarket gap retained</option></select></label></span></div><canvas id="cv"></canvas>`+
+     `<div class="foot" id="path_norm_foot"><span class="b" data-tip="Median path across this ticker’s historical premarket spike sessions.">━ spike-history median<\/span> &nbsp; <span style="color:#6c8" data-tip="Middle 50% range of the ticker’s historical premarket spike sessions.">▒ p25–p75<\/span> &nbsp; <span class="y">━ today<\/span> &nbsp; <span class="y">┅ expected continuation from the historical spike paths<\/span> &nbsp; <span class="d">━ each historical premarket spike<\/span> &nbsp; Default Y = price / cumulative VWAP − 1; expected price = projected VWAP × (1 + deviation).<\/div><\/div>`;
 
   if(r.pd.rows.length) o += `<div class="panel"><div class="ttl">${esc(T.pd)}</div>${table(r.pd.cols,r.pd.rows,null,false)}<div class="foot">${esc(r.pd.foot||'')}</div></div>`;
   o += `<div class="panel recent-filings-panel"><div class="recent-filings-heading"><span><span style="color:#25cf91">●</span> LIVE FILINGS · ${esc(h.ticker)}</span><span style="display:flex;align-items:center;flex-wrap:wrap;gap:12px"><button class="recent-filings-dilution-btn" type="button" id="recent_filings_dilution" data-ticker="${esc(h.ticker)}" title="Show filings and active dilution status as of the selected date">Dilution history</button><label class="recent-filings-date" title="This date controls both the filing list and the Dilution history report">As of date <input type="date" id="recent_filings_asof" aria-label="As-of date for filings and dilution status"></label><a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent" target="_blank" rel="noopener noreferrer">Full feed ↗</a></span></div><div class="recent-filings-list" id="recent_filings_feed"></div></div>`;
@@ -1392,7 +1487,11 @@ function renderTab(tab, r, isRefresh){
   const filingsJump=window.gapDeepDiveFilingsJump;
   if(filingsDate){const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()),part=k=>parts.find(x=>x.type===k)?.value||'00',today=`${part('year')}-${part('month')}-${part('day')}`,jumpDate=filingsJump?.ticker===String(h.ticker).toUpperCase()?normalizeFilingsDate(filingsJump.date):'',savedDate=normalizeFilingsDate(recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]);filingsDate.max=today;filingsDate.value=jumpDate||savedDate||today;recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]=filingsDate.value;filingsDate.onchange=()=>{recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]=filingsDate.value;loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker,filingsDate.value);};}
   if(filingsJump&&filingsJump.ticker===String(h.ticker).toUpperCase()&&filingsDate){const jumpDate=normalizeFilingsDate(filingsJump.date);if(jumpDate){filingsDate.value=jumpDate;recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]=jumpDate;window.gapDeepDiveFilingsJump=null;setTimeout(()=>{tab.container.querySelector('.recent-filings-panel')?.scrollIntoView({behavior:'smooth',block:'center'});requestDilutionHistory(h.ticker,jumpDate);},350);}}
-  loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker,filingsDate?.value||'');
+  loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker,filingsDate?.value||'').then(()=>{
+    if(openTabs[h.ticker]===tab&&tab.result===r)warmAioSummary(tab,h.ticker);
+  });
+  warmNewsSummaries(h.ticker,newsItems);
+  getDilutionHistory(h.ticker,filingsDate?.value||'').catch(error=>console.debug('Dilution prefetch unavailable:',error.message));
   tab.container.querySelectorAll('table.sort').forEach(makeSortable);
 
   const sigSelect = tab.container.querySelector('#sig');
@@ -1584,8 +1683,10 @@ window.openChartModal = function(i){
   if(!activeTab || !openTabs[activeTab]) return;
   const list = openTabs[activeTab].EV || [];
   if(!list.length || i < 0 || i >= list.length) return;
+  const reportCard=openTabs[activeTab].container.querySelector(`[data-ev-slot="${i}"]`);
+  if((reportCard?._chartItem||list[i])?.premarketSpikeChart){openReportSpikeChart(i);return;}
   currentModalSlot = i;
-  const card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${i}"]`);
+  const card=reportCard;
   currentModalIndex = card && Number.isInteger(card._sessionPos) ? card._sessionPos : i;
   const featureCanvas=$('#cm_canvas');featureCanvas._rangeMeasureMode=false;featureCanvas._zoomSelectMode=true;featureCanvas._panToolMode=false;featureCanvas._avwapSelectMode=false;featureCanvas._panActive=false;featureCanvas._measureActive=false;featureCanvas._zoomDrag=null;featureCanvas._rangeDrag=null;$('#cm_status').textContent='Hold and drag on the chart to zoom. Choose Pan to drag the chart.';
   $('#cm_hover_time').textContent='Hover a candle to see its time · IST';
@@ -1749,7 +1850,7 @@ function drawChart(ch, cvElement, hoverState){
 
   const gapMode = ch.normalization === 'gap';
   const frameMode = ['vwap','dev','twap','active_twap','dt','spread'].includes(ch.normalization);
-  const plot = gapMode ? {...ch, labels:ch.gap_labels||ch.labels, open_k:ch.gap_open_k,
+  const plotBase = gapMode ? {...ch, labels:ch.gap_labels||ch.labels, open_k:ch.gap_open_k,
     now_k:ch.gap_now_k, paths:ch.gap_paths||[], med:ch.gap_med||[], p25:ch.gap_p25||[],
     p75:ch.gap_p75||[], today:ch.gap_today||[], proj:ch.gap_proj||[]} : frameMode ? {...ch,
     paths:ch.normalization==='dev'?(ch.dev_paths||[]):ch.normalization==='twap'?(ch.twap_paths||[]):ch.normalization==='dt'?(ch.dt_paths||[]):ch.normalization==='spread'?(ch.spread_paths||[]):[],
@@ -1758,6 +1859,16 @@ function drawChart(ch, cvElement, hoverState){
     p75:ch.normalization==='dev'?ch.dev_p75:ch.normalization==='twap'?ch.twap_p75:ch.normalization==='dt'?ch.dt_p75:ch.normalization==='spread'?ch.spread_p75:ch.vwap_p75,
     today:ch.normalization==='dev'?ch.dev_today:ch.normalization==='twap'?ch.twap_today:ch.normalization==='active_twap'?ch.active_twap_today:ch.normalization==='dt'?ch.dt_today:ch.normalization==='spread'?ch.spread_today:ch.vwap_today,
     proj:ch.normalization==='dev'?ch.dev_proj:ch.normalization==='twap'?ch.twap_proj:ch.normalization==='dt'?ch.dt_proj:ch.normalization==='spread'?ch.spread_proj:ch.vwap_proj} : ch;
+  const spikeMode=ch.spikeComparison?ch.spike_history?.[ch.normalization]:null;
+  const plot=spikeMode?{...plotBase,paths:spikeMode.paths||[],med:spikeMode.med||[],p25:spikeMode.p25||[],p75:spikeMode.p75||[],
+    proj:ch.spike_projections?.[ch.normalization]||[],now_k:gapMode?ch.gap_now_k:ch.now_k}:plotBase;
+  const pathStatus=cv.parentElement?.querySelector('[data-path-status]');
+  if(pathStatus){
+    const hasHistory=(plot.med||[]).some(v=>v!=null)||(plot.p25||[]).some(v=>v!=null);
+    const futureStart=Number.isInteger(plot.now_k)?plot.now_k+1:0;
+    const hasFutureProjection=(plot.proj||[]).slice(futureStart).some(v=>v!=null);
+    pathStatus.textContent=ch.spikeComparison?`Comparing today with ${spikeMode?.paths?.length||0} premarket spike sessions.`:!hasHistory?'Loading ticker premarket spike comparisons…':!hasFutureProjection?'Historical range shown; no future analog projection is available yet.':'';
+  }
   const L=52,R=14,T=12,B=26, pw=W-L-R, ph=H-T-B, n=plot.labels.length;
   const vs=[0]; [plot.med,plot.p25,plot.p75,plot.today,plot.proj,...plot.paths].forEach(a=>a.forEach(v=>{if(v!=null)vs.push(v)}));
   let lo=Math.max(Math.min(...vs),-0.95), hi=Math.min(Math.max(...vs),10);
@@ -2184,7 +2295,7 @@ function renderGapDeepDiveModal(){
   cv._showHODAVWAP=false;cv._showCrosshair=true;cv._showOhlcTip=true;cv._showVWAP=$('#gap_chart_vwap').checked;cv._showTWAP=$('#gap_chart_twap').checked;cv._avwapOnChange=message=>{$('#gap_chart_avwap_status').textContent=message;if(message.startsWith('AVWAP drawn'))setGapDeepDiveMouseMode('zoom');};
   const {item,jobId,chart}=gapDeepDiveCurrent,state=cv._gapDeepDiveState,dates=[...new Set([chart.date,...(state?.dates||[]),...(state?.bars?.d||[])].filter(Boolean))];
   cv._marketEvents=dates.flatMap(day=>gapDeepDiveEventDays.get(`${String(item.ticker).toUpperCase()}|${day}`)||[]);
-  if(dates.length){const key=gapDeepDiveKey(item);loadGapDeepDiveEvents(item,jobId,dates,true).then(events=>{if(!gapDeepDiveCurrent||gapDeepDiveKey(gapDeepDiveCurrent.item)!==key)return;cv._marketEvents=events;drawGapDeepDiveCanvas(cv,gapDeepDiveCurrent.chart,$('#gap_chart_tf').value,Math.max(300,body.clientHeight));});}
+  if(dates.length){const key=gapDeepDiveKey(item),eventLoad=jobId?loadGapDeepDiveEvents(item,jobId,dates,true):loadChartMarketEvents(item.ticker,dates);eventLoad.then(events=>{if(!gapDeepDiveCurrent||gapDeepDiveKey(gapDeepDiveCurrent.item)!==key)return;cv._marketEvents=events;drawGapDeepDiveCanvas(cv,gapDeepDiveCurrent.chart,$('#gap_chart_tf').value,Math.max(300,body.clientHeight));});}
   drawGapDeepDiveCanvas(cv,gapDeepDiveCurrent.chart,$('#gap_chart_tf').value,Math.max(300,body.clientHeight));
 }
 async function loadGapDeepDiveContext(){
@@ -2307,19 +2418,73 @@ function setGapDeepDiveTimeframe(timeframe){
 }
 async function openGapDeepDiveChart(item,jobId){
   try{
+    $('#report_spike_navigation').hidden=true;
     const chart=await loadGapDeepDiveChart(item,jobId);gapDeepDiveCurrent={item,jobId,chart,float_shares:null};
     $('#gap_chart_title').textContent=item.ticker;$('#gap_chart_date').textContent=formatDateMDY(item.date);$('#gap_chart_stats').textContent=`PM high +${(item.move*100).toFixed(1)}% · $${(item.pm_dollar_volume/1e6).toFixed(1)}M premarket`;
     $('#gap_chart_player_tag').hidden=true;$('#gap_chart_player_tag').removeAttribute('href');loadGapDeepDivePlayer(item,jobId);
     $('#gap_chart_tf').value=$('#gap_deepdive_tf').value||'2m';$('#gap_chart_bz').checked=true;$('#gap_chart_vwap').checked=true;$('#gap_chart_twap').checked=false;
-    const cv=$('#gap_chart_modal_canvas'),gridCv=[...$('#gap_deepdive_grid').querySelectorAll('canvas[data-key]')].find(node=>node.dataset.key===gapDeepDiveKey(item)),timeframe=$('#gap_deepdive_tf').value||'2m';cv.dataset.key=gapDeepDiveKey(item);cv._gapDeepDiveState=gridCv?._gapDeepDiveState||{days:timeframe==='1d'?200:1,dates:[],bars:null,panOffset:0,loading:false,timeframe,daysSelected:false,loadedDays:0,contextCache:{}};configureGapDeepDiveTimeframe(timeframe);$('#gap_chart_tf').value=timeframe;cv._avwapAnchors=null;cv._avwapSelectMode=false;cv._rangeMeasures=[];cv._selectedRangeId=null;cv._rangeZoom=1;cv._panOffset=cv._gapDeepDiveState.panOffset||0;cv._modalPanInitialized=true;cv._yZoom=1;cv._rangeMeasureMode=false;cv._zoomSelectMode=true;cv._panToolMode=false;cv._zoomDrag=null;cv.style.cursor='crosshair';$('#gap_chart_measure_box').hidden=true;$('#gap_chart_measure').dataset.active='';$('#gap_chart_measure').style.borderColor='';$('#gap_chart_measure').textContent='Measure range';$('#gap_chart_pan').dataset.active='';$('#gap_chart_pan').style.borderColor='';$('#gap_chart_avwap_status').textContent='Hold and drag on the chart to zoom. Choose Pan to drag the chart.';
+    const cv=$('#gap_chart_modal_canvas'),gridCv=[...$('#gap_deepdive_grid').querySelectorAll('canvas[data-key]')].find(node=>node.dataset.key===gapDeepDiveKey(item)),timeframe=$('#gap_deepdive_tf').value||'2m';cv.dataset.key=gapDeepDiveKey(item);cv._gapDeepDiveState=gridCv?._gapDeepDiveState||{days:timeframe==='1d'?200:1,dates:[],bars:null,panOffset:0,loading:false,timeframe,daysSelected:false,loadedDays:0,contextCache:{}};configureGapDeepDiveTimeframe(timeframe);$('#gap_chart_tf').value=timeframe;
+    const state=cv._gapDeepDiveState;
+    if(timeframe!=='1d'){state.days=5;state.daysSelected=true;state.panOffset=0;}
+    cv._avwapAnchors=null;cv._avwapSelectMode=false;cv._rangeMeasures=[];cv._selectedRangeId=null;cv._rangeZoom=timeframe==='1d'?1:0.2;cv._panOffset=state.panOffset||0;cv._modalPanInitialized=true;cv._yZoom=1;cv._rangeMeasureMode=false;cv._zoomSelectMode=true;cv._panToolMode=false;cv._zoomDrag=null;cv.style.cursor='crosshair';$('#gap_chart_measure_box').hidden=true;$('#gap_chart_measure').dataset.active='';$('#gap_chart_measure').style.borderColor='';$('#gap_chart_measure').textContent='Measure range';$('#gap_chart_pan').dataset.active='';$('#gap_chart_pan').style.borderColor='';$('#gap_chart_avwap_status').textContent='Hold and drag on the chart to zoom. Choose Pan to drag the chart.';
     $('#gap_chart_quote_line').textContent='Float loading · move the cursor over a candle for change and volume';$('#gap_chart_hover_time').textContent='Hover a candle to see its time · IST';$('#gap_deepdive_chart_modal').style.display='flex';setTimeout(renderGapDeepDiveModal,30);
-    const requiredSessions=timeframe==='1d'?Number(cv._gapDeepDiveState.days)||200:Math.max(5,Number(cv._gapDeepDiveState.days)||1);
-    const contextLoad=(!cv._gapDeepDiveState.contextLoaded||Number(cv._gapDeepDiveState.loadedDays||0)<requiredSessions||cv._gapDeepDiveState.timeframe!==timeframe)?loadGapDeepDiveContext():Promise.resolve();
-    Promise.resolve(contextLoad).then(()=>prefetchGapDeepDiveContexts(item,cv._gapDeepDiveState));
+    const requiredSessions=timeframe==='1d'?Number(state.days)||200:5;
+    const contextReady=state.contextLoaded&&state.timeframe===timeframe&&Number(state.loadedDays||0)>=requiredSessions&&state.dates?.includes(item.date);
+    const contextLoad=contextReady?Promise.resolve():loadGapDeepDiveContext();
+    Promise.resolve(contextLoad).then(()=>prefetchGapDeepDiveContexts(item,state));
     loadGapDeepDiveFloat(item,jobId).then(data=>{if(!gapDeepDiveCurrent||gapDeepDiveKey(gapDeepDiveCurrent.item)!==gapDeepDiveKey(item))return;gapDeepDiveCurrent.float_shares=data.float_shares;$('#gap_chart_modal_canvas')._floatShares=data.float_shares;const value=Number(data.float_shares);$('#gap_chart_quote_line').textContent=`Float ${Number.isFinite(value)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(value)+' shares':'unavailable'} · move the cursor over a candle for change and volume`;});
   }catch(error){$('#gap_deepdive_status').textContent=`Could not load ${item.ticker} ${formatDateMDY(item.date)}: ${error.message}`;}
 }
-function closeGapDeepDiveChart(){ $('#gap_deepdive_chart_modal').style.display='none';const cv=$('#gap_chart_modal_canvas');cv._avwapSelectMode=false;gapDeepDiveCurrent=null; }
+function closeGapDeepDiveChart(){ $('#gap_deepdive_chart_modal').style.display='none';$('#report_spike_navigation').hidden=true;const cv=$('#gap_chart_modal_canvas');cv._avwapSelectMode=false;gapDeepDiveCurrent=null;reportSpikeNavigation=null; }
+let reportSpikeNavigation=null;
+function reportSpikeItems(tab){
+  return (tab?.EV||[]).map((item,index)=>({item,index})).filter(({item})=>item.premarketSpikeChart||String(item.title||'').startsWith('TODAY '));
+}
+async function openReportSpikeChart(evIndex){
+  const tab=openTabs[activeTab];if(!tab)return;
+  const candidates=reportSpikeItems(tab),position=candidates.findIndex(entry=>entry.index===evIndex);if(position<0)return;
+  reportSpikeNavigation={tab,candidates,position};
+  await showReportSpikeChart(position);
+}
+async function showReportSpikeChart(position){
+  const nav=reportSpikeNavigation;if(!nav)return;
+  const entry=nav.candidates[position];if(!entry)return;
+  nav.position=position;
+  const tab=nav.tab,card=tab.container.querySelector(`[data-ev-slot="${entry.index}"]`);
+  let item=card?._chartItem||tab.EV[entry.index];
+  if(item?.premarketSpikeChart&&(!item.chart?.bars?.t?.length)){await loadPremarketSpikeChart(tab,card,item);item=card?._chartItem||tab.EV[entry.index];}
+  if(!item?.chart)return;
+  const ticker=String(tab.result?.head?.ticker||item.ticker||'').toUpperCase(),timeframe=$('#gap_deepdive_tf').value||'2m';
+  const pct=Number(item.premarketSpikePct),move=Number.isFinite(pct)?pct/100:(Number(item.chart.premarket_gap_pct)||0);
+  const deepItem={ticker,date:item.date,move,pm_dollar_volume:Number(item.premarketSpikeDollarVolume)||0};
+  const chart={...item.chart,ticker,date:item.date,pm_high_pct:move,after_hours:true};
+  gapDeepDiveCurrent={item:deepItem,jobId:null,chart,float_shares:Number(item.float_shares??chart.float_shares)||null};
+  $('#gap_chart_title').textContent=ticker;$('#gap_chart_date').textContent=formatDateMDY(item.date);
+  $('#gap_chart_stats').textContent=item.premarketSpikeChart?`Historical premarket spike +${(move*100).toFixed(1)}% · $${(deepItem.pm_dollar_volume/1e6).toFixed(1)}M PM volume`:'Today · live chart';
+  $('#gap_chart_player_tag').hidden=true;$('#gap_chart_player_tag').removeAttribute('href');$('#report_spike_navigation').hidden=false;
+  $('#gap_chart_tf').value=timeframe;$('#gap_chart_bz').checked=true;$('#gap_chart_vwap').checked=true;$('#gap_chart_twap').checked=false;
+  const cv=$('#gap_chart_modal_canvas'),key=gapDeepDiveKey(deepItem),oldState=cv._gapDeepDiveState;
+  cv.dataset.key=key;cv._gapDeepDiveState=oldState?.key===key?oldState:{key,days:timeframe==='1d'?200:5,dates:[],bars:null,panOffset:0,loading:false,timeframe,daysSelected:false,loadedDays:0,contextCache:{}};
+  configureGapDeepDiveTimeframe(timeframe);$('#gap_chart_tf').value=timeframe;
+  const state=cv._gapDeepDiveState;
+  // Report spike charts should open with the event session and two sessions
+  // on either side already loaded and visible, like the Deepdive context.
+  if(timeframe!=='1d'){state.days=5;state.daysSelected=true;}
+  cv._avwapAnchors=null;cv._avwapSelectMode=false;cv._rangeMeasures=[];cv._selectedRangeId=null;cv._rangeZoom=timeframe==='1d'?1:0.2;cv._panOffset=0;cv._modalPanInitialized=true;cv._yZoom=1;cv._rangeMeasureMode=false;cv._zoomSelectMode=true;cv._panToolMode=false;cv._zoomDrag=null;cv.style.cursor='crosshair';
+  $('#gap_chart_measure_box').hidden=true;$('#gap_chart_measure').dataset.active='';$('#gap_chart_measure').style.borderColor='';$('#gap_chart_measure').textContent='Measure range';$('#gap_chart_pan').dataset.active='';
+  $('#gap_chart_avwap_status').textContent='Hold and drag on the chart to zoom. Choose Pan to drag the chart.';
+  $('#gap_chart_quote_line').textContent='Hover a candle · change, volume, dollar volume, float';$('#gap_chart_hover_time').textContent='Hover a candle to see its time · IST';
+  $('#gap_deepdive_chart_modal').style.display='flex';
+  const requiredSessions=timeframe==='1d'?Number(state.days)||200:5;
+  const contextReady=state.contextLoaded&&state.timeframe===timeframe&&Number(state.loadedDays||0)>=requiredSessions&&state.dates?.includes(deepItem.date);
+  if(!contextReady){state.timeframe=timeframe;state.loading=false;loadGapDeepDiveContext().then(()=>prefetchGapDeepDiveContexts(deepItem,state));}
+  else renderGapDeepDiveModal();
+}
+function navigateReportSpike(direction){
+  const nav=reportSpikeNavigation;if(!nav)return;
+  if(direction===0){const today=nav.candidates.findIndex(({item})=>String(item.title||'').startsWith('TODAY '));if(today>=0)showReportSpikeChart(today);return;}
+  showReportSpikeChart(Math.max(0,Math.min(nav.candidates.length-1,nav.position+direction)));
+}
 function openGapDeepDiveFilings(){
   const item=gapDeepDiveCurrent?.item;
   if(!item?.ticker||!item?.date)return;

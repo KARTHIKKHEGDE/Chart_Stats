@@ -1983,21 +1983,20 @@ def _fetch_article_text(url, max_chars=8000):
 
 
 def _compute_intraday_stats(ticker, dates, max_dates=15):
-    """Compute real intraday VWAP/high/close stats for historical gap dates from minute_df data."""
+    """Compute RTH behavior and premarket spike-to-VWAP stats for historical gap dates."""
     import statistics as _stats
-    rows = []
-    for date in (dates or [])[:max_dates]:
+    def compute_day(date):
         try:
             bars = minute_df(ticker, date)
             if bars is None or bars.empty:
-                continue
+                return None
             mins = bars.index.hour * 60 + bars.index.minute
             rth = bars[(mins >= 570) & (mins < 960)]   # 9:30–16:00 ET
             if rth.empty:
-                continue
+                return None
             open_price = float(rth.iloc[0]['o'])
             if open_price <= 0:
-                continue
+                return None
             # VWAP computed from first available bar (includes premarket if present)
             typical = (bars['h'] + bars['l'] + bars['c']) / 3
             cum_vol  = bars['v'].cumsum().replace(0, float('nan'))
@@ -2009,24 +2008,46 @@ def _compute_intraday_stats(ticker, dates, max_dates=15):
             vwap_at_high  = float(vwap_s.reindex([high_idx]).iloc[0]) if high_idx in vwap_s.index else float(vwap_s.iloc[-1])
             vwap_at_close = float(vwap_s.iloc[-1])
             high_time_et  = high_idx.strftime('%H:%M') if hasattr(high_idx, 'strftime') else str(high_idx)
-            rows.append({
+            pm = bars[(mins >= 240) & (mins < 570)]  # 4:00–9:30 ET
+            pm_high_vs_vwap = None
+            pm_high_time = None
+            if not pm.empty:
+                pm_high_idx = pm['h'].idxmax()
+                pm_high_price = float(pm['h'].max())
+                pm_vwap = float(vwap_s.reindex([pm_high_idx]).iloc[0]) if pm_high_idx in vwap_s.index else 0
+                if pm_vwap > 0:
+                    pm_high_vs_vwap = round((pm_high_price / pm_vwap - 1) * 100, 1)
+                pm_high_time = pm_high_idx.strftime('%H:%M') if hasattr(pm_high_idx, 'strftime') else str(pm_high_idx)
+            return {
                 'date':             date,
                 'high_vs_open_pct': round((high_price / open_price - 1) * 100, 1),
                 'high_vs_vwap_pct': round((high_price / vwap_at_high - 1) * 100, 1) if vwap_at_high > 0 else None,
+                'premarket_high_vs_vwap_pct': pm_high_vs_vwap,
+                'premarket_high_time_et': pm_high_time,
                 'close_vs_open_pct':round((close_price / open_price - 1) * 100, 1),
                 'close_vs_vwap_pct':round((close_price / vwap_at_close - 1) * 100, 1) if vwap_at_close > 0 else None,
                 'time_of_high_et':  high_time_et,
                 'faded':            close_price < open_price,
-            })
+            }
         except Exception:
-            continue
+            return None
+    sessions=(dates or [])[:max_dates]
+    with ThreadPoolExecutor(max_workers=min(8,max(1,len(sessions))),thread_name_prefix='aio-intraday') as pool:
+        rows=[row for row in pool.map(compute_day,sessions) if row]
     if not rows:
         return None
     def _med(lst):
         lst = [x for x in lst if x is not None]
         return round(_stats.median(lst), 1) if lst else None
+    def _range(lst):
+        vals=sorted(x for x in lst if x is not None)
+        if not vals:return {'p25':None,'p75':None}
+        def q(p):
+            pos=(len(vals)-1)*p;lo=int(pos);hi=min(lo+1,len(vals)-1);return round(vals[lo]+(vals[hi]-vals[lo])*(pos-lo),1)
+        return {'p25':q(.25),'p75':q(.75)}
     high_vs_open  = [r['high_vs_open_pct']  for r in rows]
     high_vs_vwap  = [r['high_vs_vwap_pct']  for r in rows]
+    pm_high_vs_vwap = [r['premarket_high_vs_vwap_pct'] for r in rows]
     close_vs_open = [r['close_vs_open_pct'] for r in rows]
     close_vs_vwap = [r['close_vs_vwap_pct'] for r in rows]
     fade_count    = sum(1 for r in rows if r['faded'])
@@ -2039,6 +2060,8 @@ def _compute_intraday_stats(ticker, dates, max_dates=15):
         'sample_size':              len(rows),
         'median_high_vs_open_pct':  _med(high_vs_open),
         'median_high_vs_vwap_pct':  _med(high_vs_vwap),
+        'median_premarket_high_vs_vwap_pct': _med(pm_high_vs_vwap),
+        'premarket_high_vs_vwap_range_pct': _range(pm_high_vs_vwap),
         'median_close_vs_open_pct': _med(close_vs_open),
         'median_close_vs_vwap_pct': _med(close_vs_vwap),
         'fade_rate_pct':            round(100 * fade_count / len(rows)),
@@ -2114,12 +2137,15 @@ Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
         news_items   = data.get("news", [])          # from frontend report
         grade_info   = data.get("grade", {})          # grade/verdict
         events       = data.get("events", [])         # historical gap events
+        sec_filings  = data.get("sec_filings", [])    # filing rows already loaded in ticker report
         dilution_ctx = data.get("dilution_text", "")  # last dilution summary text
         current_price= data.get("current_price", "")
         gap_pct      = data.get("gap_pct", "")
 
-        cache_key = "aio_" + __import__('hashlib').sha1(
-            f"{ticker}|{len(news_items)}|{len(events)}".encode()).hexdigest()[:16]
+        context_fingerprint=json.dumps({'ticker':ticker,'news':news_items,'events':events,'sec_filings':sec_filings,
+                                        'dilution_text':dilution_ctx,'grade':grade_info,'current_price':current_price,'gap_pct':gap_pct},
+                                       sort_keys=True,default=str,separators=(',',':'))
+        cache_key = "aio_" + __import__('hashlib').sha1(context_fingerprint.encode()).hexdigest()[:16]
         cached = cget(cache_key, 3600)   # 1 h cache (news may change)
         if cached:
             return jsonify({**cached, "cached": True})
@@ -2157,6 +2183,13 @@ Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
                 + f", close {r['close_vs_open_pct']:+}% from open, high at {r['time_of_high_et']} ET"
                 for r in is_['rows'][:8]
             )
+            pm_range=is_.get('premarket_high_vs_vwap_range_pct') or {}
+            pm_value=is_.get('median_premarket_high_vs_vwap_pct')
+            pm_detail_lines="\n".join(
+                f"    {r['date']}: premarket high {('+'+str(r['premarket_high_vs_vwap_pct'])+'% above VWAP') if r.get('premarket_high_vs_vwap_pct') is not None else 'unavailable'}"
+                + (f" at {r['premarket_high_time_et']} ET" if r.get('premarket_high_time_et') else '')
+                for r in is_['rows'][:8]
+            )
             intraday_block = (
                 f"\nQUANTITATIVE INTRADAY STATS (computed from {is_['sample_size']} real sessions):\n"
                 f"  Median intraday high vs open:       +{is_['median_high_vs_open_pct']}%\n"
@@ -2165,6 +2198,8 @@ Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
                 f"  Median close vs open:               {is_['median_close_vs_open_pct']:+}%\n"
                 f"  Median close vs VWAP:               {is_['median_close_vs_vwap_pct']:+}%\n"
                 f"  Actual fade rate (close < open):    {is_['fade_rate_pct']}%\n"
+                f"  Premarket high vs cumulative VWAP (04:00 ET onward): median {('+'+str(pm_value)+'%') if pm_value is not None else 'unavailable'}; middle 50% range {('+'+str(pm_range.get('p25'))+'% to +'+str(pm_range.get('p75'))+'%') if pm_range.get('p25') is not None else 'unavailable'}\n"
+                f"  Per-session premarket highs:\n{pm_detail_lines}\n"
                 f"  Per-session detail:\n{vwap_detail_lines}\n"
             )
         else:
@@ -2174,6 +2209,7 @@ Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
                       f" Score: {grade_info.get('score','?')}. Based on {grade_info.get('n','?')} setups."
                       if grade_info else "No grade data.")
 
+        filing_text="\n".join(f"- {item.get('filed_at','')[:10]} {item.get('form','SEC')}: {item.get('title','')}" for item in (sec_filings or [])[:25]) or "No filing rows were passed from the report. Do not claim filings are absent; describe dilution as unverified from the supplied context."
         prompt = f"""You are a sharp, no-nonsense stock trader and analyst. Analyze {ticker} and return a SINGLE JSON object.
 
 CONTEXT:
@@ -2185,12 +2221,17 @@ Today's gap: {gap_pct or 'unknown'}
 RECENT NEWS:
 {news_text}
 
+SEC FILINGS ALREADY SHOWN IN THE TICKER REPORT (use these; don't say filings must be checked separately):
+{filing_text}
+
 HISTORICAL GAP BEHAVIOR:
 {events_text}
 {sample_events}
 {intraday_block}
+Treat regular-session high stats and premarket high stats as separate measures. Use the premarket high vs cumulative premarket VWAP range when describing the premarket spike setup.
 DILUTION / SEC FILING CONTEXT (if available):
-{str(dilution_ctx)[:2000] or 'Not available — check SEC filings separately.'}
+{str(dilution_ctx)[:2000] or filing_text}
+Treat filing titles as leads, not proof that an offering is currently active. State when status is unconfirmed from the supplied filing text.
 
 Return this exact JSON structure (fill every field, use null if unknown):
 {{
@@ -2209,10 +2250,12 @@ Return this exact JSON structure (fill every field, use null if unknown):
     "reason": "1 sentence why"
   }},
   "historical_behavior": {{
-    "summary": "1-2 sentences on how {ticker} has behaved on previous gap-ups. Include the VWAP high % and typical high time if available.",
+    "summary": "1-2 sentences on how {ticker} behaves. Distinguish the RTH high vs VWAP from the premarket high vs VWAP; give the premarket median and middle 50% range when available.",
     "fade_rate_pct": {fade_count * 100 // max(len(events),1) if events else 'null'},
     "sample_size": {len(events)},
     "median_high_vs_vwap_pct": {intraday_stats['median_high_vs_vwap_pct'] if intraday_stats else 'null'},
+    "median_premarket_high_vs_vwap_pct": {intraday_stats['median_premarket_high_vs_vwap_pct'] if intraday_stats else 'null'},
+    "premarket_high_vs_vwap_range_pct": {json.dumps(intraday_stats['premarket_high_vs_vwap_range_pct']) if intraday_stats else 'null'},
     "median_high_vs_open_pct": {intraday_stats['median_high_vs_open_pct'] if intraday_stats else 'null'},
     "typical_high_time_et": "{intraday_stats['typical_high_time_et'] if intraday_stats else ''}",
     "median_close_vs_open_pct": {intraday_stats['median_close_vs_open_pct'] if intraday_stats else 'null'},
@@ -2249,6 +2292,8 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
                     'median_close_vs_vwap_pct': intraday_stats['median_close_vs_vwap_pct'],
                     'intraday_sample_size':     intraday_stats['sample_size'],
                     'fade_rate_pct':            intraday_stats['fade_rate_pct'],
+                    'median_premarket_high_vs_vwap_pct': intraday_stats['median_premarket_high_vs_vwap_pct'],
+                    'premarket_high_vs_vwap_range_pct': intraday_stats['premarket_high_vs_vwap_range_pct'],
                 })
                 result['intraday_stats'] = intraday_stats
             out = {**result, "ticker": ticker, "provider": provider}
