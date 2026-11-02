@@ -443,7 +443,6 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
         <label>Interval<select id="cm_tf" title="Chart timeframe">
           <option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option>
         </select>
-        <label>Sessions<select id="cm_days" title="Sessions shown"><option value="1" selected>1</option><option value="3">3</option><option value="5">5</option><option value="10">10</option><option value="20">20</option><option value="75">75</option><option value="80">80</option><option value="200">200</option></select></label>
         <select id="cm_sig" hidden><option value="none" selected>No signals</option><option value="all">All entry models</option></select>
         <label style="color:#d7ff6e"><input type="checkbox" id="cm_bz" checked> Bone Zone (9/21 EMA)</label>
         <label><input type="checkbox" id="cm_vwap" checked> VWAP</label><label style="color:#c084fc"><input type="checkbox" id="cm_twap"> TWAP</label>
@@ -455,7 +454,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
 
     <!-- Canvas Body -->
     <div id="cm_body" style="flex:1;padding:8px 10px;position:relative;display:flex;flex-direction:column;overflow:hidden;background:#050505">
-      <div id="cm_plot_wrap" style="position:relative;flex:1;min-height:0"><canvas id="cm_canvas" style="display:block;width:100%;height:100%"></canvas><canvas id="cm_overlay" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas><div id="cm_crosshair_v" hidden style="position:absolute;z-index:4;top:0;width:0;border-left:1px dashed rgba(220,232,244,.75);pointer-events:none"></div><div id="cm_crosshair_h" hidden style="position:absolute;z-index:4;left:0;height:0;border-top:1px dashed rgba(220,232,244,.75);pointer-events:none"></div><div id="cm_measure_box" hidden style="position:absolute;z-index:5;max-width:300px;padding:8px 10px;background:rgba(6,13,21,.96);border:1px solid #62c8ff;border-radius:4px;color:#edf6ff;font:13px/1.55 Consolas,monospace;white-space:pre-wrap;pointer-events:none"></div></div><div id="cm_navigator_wrap" style="height:76px;flex:0 0 76px;margin-top:5px;border:1px solid #242b33;background:#090c10;display:flex;flex-direction:column"><div id="cm_hover_time" style="height:18px;flex:0 0 18px;padding:1px 8px;color:#9ba6b0;font:11px/16px Consolas,monospace">Hover a candle to see its time · IST</div><canvas id="cm_navigator" style="display:block;width:100%;height:calc(100% - 18px);flex:1;min-height:0;touch-action:none;cursor:grab"></canvas></div>
+        <div id="cm_plot_wrap" style="position:relative;flex:1;min-height:0"><canvas id="cm_canvas" style="display:block;width:100%;height:100%"></canvas><canvas id="cm_overlay" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas><div id="cm_crosshair_v" hidden style="position:absolute;z-index:4;top:0;width:0;border-left:1px dashed rgba(220,232,244,.75);pointer-events:none"></div><div id="cm_crosshair_h" hidden style="position:absolute;z-index:4;left:0;height:0;border-top:1px dashed rgba(220,232,244,.75);pointer-events:none"></div><div id="cm_measure_box" hidden style="position:absolute;z-index:5;max-width:300px;padding:8px 10px;background:rgba(6,13,21,.96);border:1px solid #62c8ff;border-radius:4px;color:#edf6ff;font:13px/1.55 Consolas,monospace;white-space:pre-wrap;pointer-events:none"></div></div><div id="cm_navigator_wrap" style="height:88px;flex:0 0 88px;margin-top:5px;border:1px solid #242b33;background:#090c10;display:flex;flex-direction:column"><div id="cm_hover_time" style="min-height:24px;flex:0 0 auto;padding:4px 8px;color:#9ba6b0;font:11px/16px Consolas,monospace;white-space:normal;overflow-wrap:anywhere">Hover a candle to see its time · IST</div><canvas id="cm_navigator" style="display:block;width:100%;height:calc(100% - 32px);flex:1;min-height:0;touch-action:none;cursor:grab"></canvas></div>
     </div>
 
     <div class="cmFooter"><div id="cm_status">Hold and drag on the chart to zoom. Choose Pan to drag the chart.</div></div>
@@ -1326,7 +1325,7 @@ async function run(refresh){
 }
 
 function premarketSpikeChartCard(index){
-  return `<div class="evc" data-ev-slot="${index}" onclick="openChartModal(${index})"><div class="evhead"><div class="evt" id="evtitle${index}"></div><span class="eventDateTag" data-event-date></span><div class="evcontrols"><select class="evtf" title="Timeframe"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select><select class="evdays" title="Sessions shown"><option value="1">1 day</option><option value="3">3 days</option><option value="5" selected>5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="75">75 days</option><option value="80">80 days</option><option value="200">200 days</option></select><button class="evzoom" data-zoom="out" title="Zoom out">−</button><button class="evzoom" data-zoom="in" title="Zoom in">+</button><button class="evmeasure" type="button" title="Drag across bars to measure volume, dollar volume, and float rotation">Measure</button><button class="evtoday" type="button" title="Return to today's live chart">Today</button></div></div><canvas id="ev${index}"></canvas></div>`;
+  return `<div class="evc" data-ev-slot="${index}" onclick="openChartModal(${index})"><div class="evhead"><div class="evt" id="evtitle${index}"></div><span class="eventDateTag" data-event-date></span><div class="evcontrols"><select class="evtf" title="Timeframe"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select><button class="evzoom" data-zoom="out" title="Zoom out">−</button><button class="evzoom" data-zoom="in" title="Zoom in">+</button><button class="evmeasure" type="button" title="Drag across bars to measure volume, dollar volume, and float rotation">Measure</button><button class="evtoday" type="button" title="Return to today's live chart">Today</button></div></div><canvas id="ev${index}"></canvas></div>`;
 }
 
 function applyPremarketSpikeChart(tab,report,spikeChart,days){
@@ -1486,7 +1485,7 @@ function renderTab(tab, r, isRefresh){
   o += `<div class="panel" data-premarket-spikes><div class="ttl">Premarket Spike Days · PM high &gt; +40% · PM $ volume &gt; $10M · last year</div>`+
     (surgeDays?`<div class="foot">Loading premarket spike days…</div>`:`<div class="foot" data-surge-status>Checking this history in the background…</div>`)+`</div>`;
   o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">`+
-     `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:7px">${esc(T.p6)}<label style="font-size:11px;color:#aaa">All charts <select id="ev_all_tf" class="evtf"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label><select id="ev_all_days" class="evtf" title="Days for all charts"><option value="1">1 day</option><option value="3">3 days</option><option value="5" selected>5 days</option><option value="10">10 days</option><option value="20">20 days</option><option value="75">75 days</option><option value="80">80 days</option><option value="200">200 days</option></select><select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
+     `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:7px">${esc(T.p6)}<label style="font-size:11px;color:#aaa">All charts <select id="ev_all_tf" class="evtf"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label><select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
      (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" checked style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/21 EMA cloud + BB)</label></div>`+
      `<span style="font-size:12px;color:#29a8ff;font-weight:normal">🔍 Click a premarket spike chart for full Deepdive controls</span></div>`+
   `<div class="evgrid">`+tab.EV.map((_,i)=>premarketSpikeChartCard(i)).join('')+
@@ -1516,10 +1515,9 @@ function renderTab(tab, r, isRefresh){
 
   const sigSelect = tab.container.querySelector('#sig');
   const bzCheck = tab.container.querySelector('#bz');
-  const allTf=tab.container.querySelector('#ev_all_tf'),allDays=tab.container.querySelector('#ev_all_days');
-  const applyAllChartSettings=()=>{tab.EV.forEach((_,i)=>{const card=tab.container.querySelector(`[data-ev-slot="${i}"]`);if(!card)return;card._chartTf=allTf.value;card._chartDays=Number(allDays.value)||5;card._panOffset=0;card._yZoom=1;card._zoom=1;card._contextEdgeDone={};const tf=card.querySelector('.evtf'),days=card.querySelector('.evdays');if(tf)tf.value=card._chartTf;if(days)days.value=String(card._chartDays);});drawEvAll(tab.EV,tab.container);};
-  if(allTf)allTf.onchange=()=>{allDays.value=allTf.value==='1d'?'200':'5';applyAllChartSettings();};
-  if(allDays)allDays.onchange=applyAllChartSettings;
+  const allTf=tab.container.querySelector('#ev_all_tf');
+  const applyAllChartSettings=()=>{tab.EV.forEach((_,i)=>{const card=tab.container.querySelector(`[data-ev-slot="${i}"]`);if(!card)return;card._chartTf=allTf.value;card._chartDays=allTf.value==='1d'?200:5;card._panOffset=0;card._yZoom=1;card._zoom=1/card._chartDays;card._contextEdgeDone={};const tf=card.querySelector('.evtf');if(tf)tf.value=card._chartTf;});drawEvAll(tab.EV,tab.container);};
+  if(allTf)allTf.onchange=applyAllChartSettings;
   if(sigSelect) sigSelect.onchange = () => drawEvAll(tab.EV, tab.container);
   if(bzCheck) bzCheck.onchange = () => drawEvAll(tab.EV, tab.container);
   const pathNormSelect = tab.container.querySelector('#path_norm');
@@ -1548,6 +1546,21 @@ function renderTab(tab, r, isRefresh){
   if(cv) drawChart(r.chart, cv);
 }
 
+function zoomGapUpChartCard(card,tab,direction){
+  if(!card||!tab)return;
+  const redraw=()=>{drawEvAll(tab.EV,tab.container);if($('#chart_modal').style.display==='flex'&&currentModalSlot===Number(card.dataset.evSlot))renderModalChart();};
+  if(direction>0){card._zoom=Math.min(8,(card._zoom||1)*1.25);redraw();return;}
+  const loadedDates=[...new Set(card._contextChart?.d||card._contextDates||[])],loadedSessions=Math.max(1,loadedDates.length||card._chartDays||5);
+  const nextZoom=(card._zoom||1)*.8,minZoom=1/loadedSessions;
+  if(nextZoom<minZoom-1e-6){
+    if(card._contextLoading)return;
+    const maxDays=card._chartTf==='1d'?550:400;
+    card._chartDays=Math.min(maxDays,Math.max((card._chartDays||5)+20,Math.ceil(1/nextZoom)));
+    loadChartContext(card,tab).then(()=>{card._zoom=nextZoom;redraw();});
+    return;
+  }
+  card._zoom=Math.max(minZoom,nextZoom);redraw();
+}
 function drawEvAll(evList, containerEl){
   const cEl = containerEl || (activeTab && openTabs[activeTab] ? openTabs[activeTab].container : document);
   const list = evList || (activeTab && openTabs[activeTab] ? openTabs[activeTab].EV : []);
@@ -1563,7 +1576,8 @@ function drawEvAll(evList, containerEl){
     if(!card._chartItem) card._chartItem=c;
     if(!card._sessionDate) card._sessionDate=card._chartItem.date||c.date;
     if(!card._chartTf) card._chartTf='2m';
-    if(!card._chartDays) card._chartDays=5; // default ±2 days
+    if(!card._chartDays) card._chartDays=card._chartTf==='1d'?200:5; // Load event session ±2 by default
+    if(!card._zoom)card._zoom=1/card._chartDays;
     const item=card._chartItem || c;
     if(!card._eventDate)card._eventDate=item.date||c.date;
     const dateList=tabForCharts?tabForCharts.sessionDates:[];
@@ -1571,9 +1585,8 @@ function drawEvAll(evList, containerEl){
     const title=card.querySelector(`#evtitle${i}`), tf=card.querySelector('.evtf');
     if(title) title.innerHTML=esc(formatChartTitleDates(item.title))+(item.sim?'':'<span class="d"> (not in similar set)</span>');
     const eventDateTag=card.querySelector('[data-event-date]');if(eventDateTag){eventDateTag.textContent=`Event ${formatDateMDY(card._eventDate)||'date'}`;}
-    if(tf){tf.value=card._chartTf;tf.onclick=e=>e.stopPropagation();tf.onchange=e=>{e.stopPropagation();const previousTf=card._chartTf;card._chartTf=tf.value;card._panOffset=0;card._yZoom=1;card._zoom=1;card._contextEdgeDone={};if(tf.value==='1d')card._chartDays=200;else if(previousTf==='1d')card._chartDays=5;const daysSelect=card.querySelector('.evdays');if(daysSelect)daysSelect.value=String(card._chartDays);card._contextChart=null;loadChartContext(card,tabForCharts);};}
-    const days=card.querySelector('.evdays');if(days){days.value=String(card._chartDays);days.onclick=e=>e.stopPropagation();days.onchange=e=>{e.stopPropagation();card._chartDays=Number(days.value);card._panOffset=0;loadChartContext(card,tabForCharts);};}
-    card.querySelectorAll('.evzoom').forEach(btn=>btn.onclick=e=>{e.stopPropagation();card._zoom=Math.max(.5,Math.min(8,(card._zoom||1)*(btn.dataset.zoom==='in'?1.25:.8)));drawEvAll(list,cEl);});
+    if(tf){tf.value=card._chartTf;tf.onclick=e=>e.stopPropagation();tf.onchange=e=>{e.stopPropagation();const previousTf=card._chartTf;card._chartTf=tf.value;card._panOffset=0;card._yZoom=1;card._contextEdgeDone={};if(tf.value==='1d')card._chartDays=200;else if(previousTf==='1d')card._chartDays=5;card._zoom=1/card._chartDays;card._contextChart=null;loadChartContext(card,tabForCharts);};}
+    card.querySelectorAll('.evzoom').forEach(btn=>btn.onclick=e=>{e.stopPropagation();zoomGapUpChartCard(card,tabForCharts,btn.dataset.zoom==='in'?1:-1);});
     const measureBtn=card.querySelector('.evmeasure');if(measureBtn){measureBtn.onclick=e=>{e.stopPropagation();openChartModal(i);setTimeout(()=>{const modalCv=$('#cm_canvas');if(modalCv._featureUi){setGapDeepDiveMouseMode('measure',modalCv,modalCv._featureUi);modalCv._featureUi.status.textContent='Drag between any two points to measure.';}},45);};}
     const todayBtn=card.querySelector('.evtoday');if(todayBtn){todayBtn.onclick=e=>{e.stopPropagation();const liveItem=(tabForCharts?.EV||[]).find(x=>String(x.title||'').startsWith('TODAY '));if(!liveItem)return;card._chartItem=liveItem;card._eventDate=liveItem.date;card._sessionDate=liveItem.date;card._contextChart=null;card._contextDates=[];card._panOffset=0;card._zoom=1;card._yZoom=1;cv._measureStartKey=cv._measureEndKey=null;drawEvAll(tabForCharts.EV,tabForCharts.container);if($('#chart_modal').style.display==='flex'&&currentModalSlot===i)renderModalChart();};}
     card._onPanEdge=side=>{
@@ -1584,8 +1597,7 @@ function drawEvAll(evList, containerEl){
       const edge=contextDates?dates[side>0?dates.length-1:0]:dates[eventPos+side];
       if(!edge)return;
       if(card._chartTf==='1d'&&contextDates){if(card._contextEdgeDone?.[side])return;loadChartContext(card,tabForCharts,edge,true,side);return;}
-      card._chartDays=[1,3,5,10,20,75,80].find(value=>value>card._chartDays)||80;
-      const daysSelect=card.querySelector('.evdays');if(daysSelect)daysSelect.value=String(card._chartDays);
+      card._chartDays=Math.min(400,(card._chartDays||5)+20);
       card._panOffset=0;loadChartContext(card,tabForCharts,edge);
     };
     const renderItem=card._contextChart?{...item,chart:{...item.chart,bars:card._contextChart}}:item;
@@ -1613,7 +1625,7 @@ async function prefetchEvCardContexts(card, tab) {
       card._contextCache=card._contextCache||{};
       for(const tf of ['1m','2m','5m']){
         const ctx=data.contexts[tf];
-        if(ctx?.bars&&ctx.dates?.length){
+        if(ctx?.bars?.t?.length&&ctx.dates?.length>=5&&ctx.dates.includes(card._sessionDate)){
           const cacheKey=`${tf}|5|${card._sessionDate}`;
           card._contextCache[cacheKey]={bars:ctx.bars,dates:ctx.dates};
         }
@@ -1624,7 +1636,7 @@ async function prefetchEvCardContexts(card, tab) {
       if(activeTf!=='1d'&&!card._contextChart){
         const cacheKey=`${activeTf}|5|${card._sessionDate}`;
         const cached=card._contextCache[cacheKey];
-        if(cached){card._contextChart=cached.bars;card._contextDates=cached.dates;card._contextDaily=false;card._contextError='';card._contextLoading=false;card._chartDays=5;card._contextEdgeDone={};drawEvAll(tab.EV,tab.container);}
+        if(cached?.dates?.length>=5&&cached.dates.includes(card._sessionDate)){card._contextChart=cached.bars;card._contextDates=cached.dates;card._contextDaily=false;card._contextError='';card._contextLoading=false;card._chartDays=5;card._contextEdgeDone={};drawEvAll(tab.EV,tab.container);}
       }
     }catch(e){/* silent — main fetch in loadChartContext will still run */}
     finally{card._contextPrefetchPromise=null;}
@@ -1644,8 +1656,9 @@ async function loadChartContext(card,tab,anchorDate,extendDaily=false,extendSide
   if(!anchorDate&&!extendDaily){
     const cacheKey=`${tf}|${days}|${card._sessionDate}`;
     const cached=card._contextCache[cacheKey];
-    if(cached){
+    if(cached?.dates?.length>=Math.min(days,5)&&cached.dates.includes(card._sessionDate)){
       card._contextChart=cached.bars;card._contextDates=cached.dates;card._contextDaily=false;card._contextError='';card._contextLoading=false;card._contextEdgeDone={};
+      if($('#chart_modal').style.display==='flex'&&currentModalSlot===Number(card.dataset.evSlot))$('#cm_status').textContent=`Loaded ${cached.dates.length} sessions around ${card._sessionDate}.`;
       drawEvAll(tab.EV,tab.container);
       if($('#chart_modal').style.display==='flex'&&currentModalSlot===Number(card.dataset.evSlot))renderModalChart();
       return;
@@ -1654,12 +1667,16 @@ async function loadChartContext(card,tab,anchorDate,extendDaily=false,extendSide
   card._contextLoading=true;card._contextError='';
   const requestId=(card._contextRequestId||0)+1;card._contextRequestId=requestId;
   const query=new URLSearchParams({ticker:tab.result?.head?.ticker||'',date:anchorDate||card._sessionDate,days:String(days),tf,user:currentUser||'',token:sessionToken||'',postmarket:'1'});
+  if($('#chart_modal').style.display==='flex'&&currentModalSlot===Number(card.dataset.evSlot))$('#cm_status').textContent=`Loading up to two sessions before and after ${tab.result?.head?.ticker||''} ${formatDateMDY(card._sessionDate)}…`;
   try{const response=await fetch('/api/chart-context?'+query.toString()),data=await response.json();if(requestId!==card._contextRequestId)return;if(!response.ok)throw new Error(data.error||'Could not load chart range');if(extendDaily&&tf==='1d'&&card._contextDaily&&card._contextChart){const previousDates=card._contextDates||[],merged=mergeDailyChartBars(card._contextChart,data.bars),addedBefore=previousDates.length?merged.d.indexOf(previousDates[0]):0,addedAfter=previousDates.length?merged.d.length-merged.d.indexOf(previousDates[previousDates.length-1])-1:0;card._contextChart=merged;card._contextDates=merged.d;card._panOffset=(card._panOffset||0)-addedBefore;if(extendSide&&((extendSide<0&&!addedBefore)||(extendSide>0&&!addedAfter))){card._contextEdgeDone=card._contextEdgeDone||{};card._contextEdgeDone[extendSide]=true;}else card._contextEdgeDone={};}else{card._contextChart=data.bars;card._contextDates=data.dates;card._contextDaily=!!data.daily;card._contextEdgeDone={};
     // Save to per-TF cache (all TFs incl. 1d, not during anchor-change extends)
     if(!anchorDate&&!extendDaily){const cacheKey=`${tf}|${days}|${card._sessionDate}`;card._contextCache[cacheKey]={bars:data.bars,dates:data.dates};}
   }if(anchorDate)card._sessionDate=extendDaily?card._sessionDate:anchorDate;}
   catch(error){if(!extendDaily)card._contextChart=null;card._contextError=error.message;}
   card._contextLoading=false;
+  if($('#chart_modal').style.display==='flex'&&currentModalSlot===Number(card.dataset.evSlot))$('#cm_status').textContent=card._contextError
+    ?`Could not load neighboring sessions: ${card._contextError}`
+    :`Loaded ${card._contextDates?.length||0} session${card._contextDates?.length===1?'':'s'} around ${card._sessionDate}.`;
   drawEvAll(tab.EV,tab.container);
   if($('#chart_modal').style.display==='flex'&&currentModalSlot===Number(card.dataset.evSlot))renderModalChart();
 }
@@ -1707,6 +1724,7 @@ window.openChartModal = function(i){
   if((reportCard?._chartItem||list[i])?.premarketSpikeChart){openReportSpikeChart(i);return;}
   currentModalSlot = i;
   const card=reportCard;
+  if(card){card._chartDays=card._chartDays||5;card._zoom=1/card._chartDays;}
   currentModalIndex = card && Number.isInteger(card._sessionPos) ? card._sessionPos : i;
   const featureCanvas=$('#cm_canvas');featureCanvas._rangeMeasureMode=false;featureCanvas._zoomSelectMode=true;featureCanvas._panToolMode=false;featureCanvas._avwapSelectMode=false;featureCanvas._panActive=false;featureCanvas._measureActive=false;featureCanvas._zoomDrag=null;featureCanvas._rangeDrag=null;$('#cm_status').textContent='Hold and drag on the chart to zoom. Choose Pan to drag the chart.';
   $('#cm_hover_time').textContent='Hover a candle to see its time · IST';
@@ -1717,11 +1735,17 @@ window.openChartModal = function(i){
   $('#cm_sig').value = 'none';
   if(mainBz) $('#cm_bz').checked = mainBz.checked;
   $('#cm_tf').value = card && card._chartTf ? card._chartTf : '2m';
-  $('#cm_days').value=String(card?card._chartDays||5:5);
   $('#cm_vwap').checked=card?._showVWAP!==false;$('#cm_twap').checked=card?._showTWAP===true;
 
   $('#chart_modal').style.display = 'flex';
   setTimeout(renderModalChart, 30);
+  if(card&&card._chartTf!=='1d'){
+    const loadedDates=[...new Set(card._contextChart?.d||card._contextDates||[])];
+    if(loadedDates.length<Math.min(card._chartDays||5,5)||!loadedDates.includes(card._sessionDate)){
+      card._contextChart=null;card._contextDates=[];card._contextError='';
+      loadChartContext(card,openTabs[activeTab]);
+    }
+  }
 };
 
 function syncGapDeepDiveMouseMode(cv,ui){
@@ -1792,28 +1816,26 @@ $('#cm_sig').onchange = () => {
 $('#cm_tf').onchange = () => {
   if(!activeTab || !openTabs[activeTab]) return;
   const newTf=$('#cm_tf').value, tab=openTabs[activeTab];
-  // Sync the global TF dropdown display only — do NOT dispatch 'change' which triggers
-  // applyAllChartSettings and resets ALL cards (zoom/days/pan), causing TF mismatch on modal close
+  // Sync the global interval display only; keep each chart's loaded-range state intact.
   const allTf=tab.container.querySelector('#ev_all_tf');
   if(allTf && allTf.value!==newTf) allTf.value=newTf;
   // Update only the card shown in the modal
   const card=tab.container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);
   if(card){
     const prevTf=card._chartTf;
-    card._chartTf=newTf;card._panOffset=0;card._yZoom=1;card._zoom=1;card._contextEdgeDone={};
+    card._chartTf=newTf;card._panOffset=0;card._yZoom=1;card._contextEdgeDone={};
     if(newTf==='1d') card._chartDays=200;
     else if(prevTf==='1d') card._chartDays=5;
-    const daysEl=card.querySelector('.evdays');if(daysEl)daysEl.value=String(card._chartDays);
+    card._zoom=1/card._chartDays;
     const tfEl=card.querySelector('.evtf');if(tfEl)tfEl.value=newTf;
-    $('#cm_days').value=String(card._chartDays);
     card._contextChart=null;
     loadChartContext(card,tab);
   }
   renderModalChart();
 };
 
-$('#cm_days').onchange=()=>{if(!activeTab||!openTabs[activeTab])return;const card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);if(card){card._chartDays=Number($('#cm_days').value);loadChartContext(card,openTabs[activeTab]);}};
-['cm_zoom_in','cm_zoom_out'].forEach(id=>$('#'+id).onclick=()=>{if(!activeTab||!openTabs[activeTab])return;const card=openTabs[activeTab].container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);if(card){card._zoom=Math.max(.5,Math.min(8,(card._zoom||1)*(id==='cm_zoom_in'?1.25:.8)));renderModalChart();drawEvAll(openTabs[activeTab].EV,openTabs[activeTab].container);}});
+['cm_zoom_in','cm_zoom_out'].forEach(id=>$('#'+id).onclick=()=>{if(!activeTab||!openTabs[activeTab])return;const tab=openTabs[activeTab],card=tab.container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);if(card)zoomGapUpChartCard(card,tab,id==='cm_zoom_in'?1:-1);});
+$('#cm_zoom_reset').onclick=()=>{if(!activeTab||!openTabs[activeTab])return;const tab=openTabs[activeTab],card=tab.container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);if(card){card._zoom=1/(card._chartDays||5);card._panOffset=0;card._yZoom=1;renderModalChart();drawEvAll(tab.EV,tab.container);}};
 
 $('#cm_bz').onchange = () => {
   renderModalChart();
