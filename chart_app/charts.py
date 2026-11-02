@@ -1281,12 +1281,25 @@ def sec_dilution_history():
     if asof_date>current_day:
         return jsonify({'error':'As-of date cannot be in the future.'}),400
     today=asof_date.isoformat()
-    cache_key=f'sec_dilution_history_v9_{ticker}_{today}_asof'
+    cache_key=f'sec_dilution_history_v11_{ticker}_{today}_asof'
     cached=cget(cache_key,30*60)
     if cached is not None:
         return jsonify(cached)
     request_started=time.monotonic()
+    progress_job_id=str(body.get('_progress_job_id') or '').strip()
+    def update_progress(stage,message,completed=None,total=None):
+        if not re.fullmatch(r'[0-9a-f]{32}',progress_job_id):
+            return
+        job_key=f'sec_dilution_job_{progress_job_id}'
+        current=cget(job_key,15*60)
+        if not isinstance(current,dict):
+            return
+        progress={'stage':stage,'message':message,'updated_at':dt.datetime.now(dt.timezone.utc).isoformat()}
+        if completed is not None:progress['completed']=completed
+        if total is not None:progress['total']=total
+        cput(job_key,{**current,'progress':progress})
     try:
+        update_progress('sec_filings','Finding this ticker’s filings in SEC EDGAR…')
         all_filings=sorted((item for item in _gap_deepdive_sec_filings(ticker)
                             if item.get('filing_date') and item.get('filing_date')<=today),
                            key=lambda item:item.get('filing_date',''),reverse=True)
@@ -1317,6 +1330,11 @@ def sec_dilution_history():
         candidate_keys={str(item.get('accession') or '') for item in candidates}
         candidates.extend(item for item in recent_ownership if str(item.get('accession') or '') not in candidate_keys)
         candidates=sorted(candidates,key=lambda item:item.get('filing_date',''),reverse=True)[:55]
+        app.logger.info('SEC dilution review %s: selected %d filings from %d candidates',
+                        ticker,len(candidates),len(all_filings))
+        update_progress('selecting_filings',
+                        f'Found {len(candidates)} relevant filings. Preparing full filing reads…',
+                        0,len(candidates))
         # Start market/share lookups while the SEC filing downloads are running.
         market_inputs_future=_SEC_DILUTION_DATA_EXECUTOR.submit(
             _load_sec_dilution_market_inputs,ticker,asof_date,current_day)
@@ -1345,13 +1363,9 @@ def sec_dilution_history():
                 if chunk:chunks.append(chunk);used+=len(chunk);last_end=end
                 if used>=limit:break
             return '\n[... relevant filing passage ...]\n'.join(chunks)
-        # SEC retrieval paces request starts centrally but allows downloads to
-        # overlap. Fetching 55 filings serially could take several minutes when
-        # EDGAR responds slowly; bounded workers preserve SEC pacing and avoid
-        # exhausting the web server's request threads.
-        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         def read_sec_document(url,limit=8500):
-            doc_key='sec_dilution_doc_v2_'+hashlib.sha256(url.encode('utf-8')).hexdigest()[:32]
+            doc_key='sec_dilution_doc_v4_'+hashlib.sha256(url.encode('utf-8')).hexdigest()[:32]
             cached_document=cget(doc_key,30*86400)
             if isinstance(cached_document,dict) and len(cached_document.get('text') or '')>=100:
                 return cached_document['text'],cached_document.get('anchors') or []
@@ -1365,8 +1379,24 @@ def sec_dilution_history():
                 app.logger.debug('SEC document fetch failed for %s (%s)',url,type(exc).__name__)
                 return None, None
         filing_urls=[item.get('document_url') or item.get('url') or '' for item in candidates]
+        update_progress('reading_filings',f'Reading {len(filing_urls)} SEC filings and extracting financing details…',
+                        0,len(filing_urls))
+        primary_results=[(None,None)]*len(filing_urls)
+        readable_filings=0
         with ThreadPoolExecutor(max_workers=min(8,max(1,len(candidates)))) as pool:
-            primary_results=list(pool.map(read_sec_document,filing_urls))
+            futures={pool.submit(read_sec_document,url):index for index,url in enumerate(filing_urls)}
+            for completed,future in enumerate(as_completed(futures),1):
+                index=futures[future]
+                primary_results[index]=future.result()
+                item=candidates[index]
+                if primary_results[index][0] and len(primary_results[index][0])>=100:
+                    readable_filings+=1
+                update_progress('reading_filings',
+                                f'Processed {completed} of {len(filing_urls)} SEC filings ({readable_filings} readable) · latest: {item.get("form","SEC filing")} filed {item.get("filing_date","date unavailable")}',
+                                completed,len(filing_urls))
+        app.logger.info('SEC dilution review %s: fetched %d/%d primary filings in %.1fs',
+                        ticker,sum(bool(text and len(text)>=100) for text,_anchors in primary_results),
+                        len(filing_urls),time.monotonic()-request_started)
         source_records=[]
         exhibit_jobs=[]
         seen_exhibits=set()
@@ -1400,8 +1430,26 @@ def sec_dilution_history():
                 seen_exhibits.add(exhibit_url);source_budget-=1
                 exhibit_job={'url':exhibit_url,'label':label,'number':exhibit_number,'item':item}
                 record['exhibits'].append(exhibit_job);exhibit_jobs.append(exhibit_job)
+        update_progress('reading_exhibits',
+                        f'Found {len(exhibit_jobs)} financing exhibits in the selected filings. Reading their complete documents…',
+                        0,len(exhibit_jobs))
+        exhibit_results=[(None,None)]*len(exhibit_jobs)
+        readable_exhibits=0
         with ThreadPoolExecutor(max_workers=min(8,max(1,len(exhibit_jobs)))) as pool:
-            exhibit_results=list(pool.map(read_sec_document,[job['url'] for job in exhibit_jobs]))
+            futures={pool.submit(read_sec_document,job['url']):index
+                     for index,job in enumerate(exhibit_jobs)}
+            for completed,future in enumerate(as_completed(futures),1):
+                index=futures[future]
+                exhibit_results[index]=future.result()
+                job=exhibit_jobs[index]
+                if exhibit_results[index][0] and len(exhibit_results[index][0])>=100:
+                    readable_exhibits+=1
+                update_progress('reading_exhibits',
+                                f'Processed {completed} of {len(exhibit_jobs)} financing exhibits ({readable_exhibits} readable) · Exhibit {job["number"]}',
+                                completed,len(exhibit_jobs))
+        app.logger.info('SEC dilution review %s: fetched %d/%d agreement exhibits in %.1fs',
+                        ticker,sum(bool(text and len(text)>=100) for text,_anchors in exhibit_results),
+                        len(exhibit_jobs),time.monotonic()-request_started)
         for job,(text,_anchors) in zip(exhibit_jobs,exhibit_results):
             job['text']=text if text and len(text)>=100 else None
         sources=[]
@@ -1423,12 +1471,13 @@ def sec_dilution_history():
                 add_source({'ticker':ticker,'accession':'','title':title,'form':f"EX-{job['number']}",
                             'filing_date':item.get('filing_date',''),'url':job['url'],'document_url':job['url']},
                            job['text'],5000)
-        app.logger.info('SEC dilution review %s: %d filings, %d exhibits fetched/prepared in %.1fs',
-                        ticker,len(candidates),len(exhibit_jobs),time.monotonic()-request_started)
+        app.logger.info('SEC dilution review %s: prepared %d source documents (%d filings, %d exhibits) in %.1fs',
+                        ticker,len(sources),len(candidates),len(exhibit_jobs),time.monotonic()-request_started)
         if not sources:
             if candidates:
                 return jsonify({'error':f'SEC returned {len(candidates)} relevant filing records for {ticker}, but their documents could not be read. Try again shortly or open the filing links from Live Filings.'}),502
             return jsonify({'error':f'No relevant filings were found in the SEC submissions available for {ticker} as of {today}. This does not confirm that no dilution exists.'}),404
+        update_progress('market_data','SEC filings are read. Finishing the as-of price, shares, and float snapshot…')
         market_inputs=market_inputs_future.result()
         market_snapshot={'market_date':None,'last_price':None,'shares_outstanding':None,
                          'shares_filed':None,'shares_as_of':None,'float_shares':None,
@@ -1594,6 +1643,7 @@ def sec_dilution_history():
             "caveats (array of short strings). "
             "Use [] for empty lists. Keep the JSON compact but do not omit an active instrument merely to save space.\n\n"
             f"Ticker: {ticker}\n{snapshot_context}\n\nSEC filings read ({len(sources)}; source IDs link to filings):\n"+'\n\n'.join(excerpts))
+        update_progress('ai_analysis',f'Analyzing {len(sources)} SEC filing documents for active dilution and history…')
         answer,provider=_call_filing_ai(prompt,max_tokens=6000)
         app.logger.info('SEC dilution review %s: AI response received from %s after %.1fs total',
                         ticker,provider,time.monotonic()-request_started)
@@ -1678,7 +1728,7 @@ def sec_dilution_history():
         caveat_value=analysis.get('caveats')
         caveat=(' '.join(text_list(caveat_value,10)) if isinstance(caveat_value,list)
                 else str(caveat_value or '').strip())
-        coverage=f"Review used {len(sources)} readable financing-related SEC documents, from up to 55 recent filings plus relevant agreement exhibits and periodic, material-event, and ownership reports."
+        coverage=f"Review used {len(sources)} readable financing-related SEC documents, from up to 24 recent filings plus selected agreement exhibits and periodic, material-event, and ownership reports."
         result={'ticker':ticker,'as_of':today,'provider':provider,
                 'summary':str(analysis.get('summary')).strip(),
                 'current_status':str(analysis.get('current_status')).strip(),
@@ -1700,6 +1750,7 @@ def sec_dilution_history():
                 'market_snapshot':market_snapshot,'issuer_type':issuer_type,'shelf_instruction':shelf_instruction,
                 'history':history,'filings':sources,
                 'caveats':(caveat+' '+coverage).strip()}
+        update_progress('finalizing','Analysis is complete. Preparing the dilution report…')
         cput(cache_key,result)
         return jsonify(result)
     except RuntimeError as exc:
@@ -1713,6 +1764,11 @@ def sec_dilution_history():
 def _run_sec_dilution_job(job_id, body):
     job_key=f'sec_dilution_job_{job_id}'
     try:
+        body={**body,'_progress_job_id':job_id}
+        current=cget(job_key,15*60) or {}
+        cput(job_key,{**current,'progress':{
+            'stage':'starting','message':'Starting the SEC filing review…',
+            'updated_at':dt.datetime.now(dt.timezone.utc).isoformat()}})
         # Reuse the validated report handler in an isolated request context;
         # the browser-facing start request can return before SEC/AI work ends.
         with app.test_request_context('/api/sec-dilution-history',method='POST',json=body):
@@ -1726,7 +1782,11 @@ def _run_sec_dilution_job(job_id, body):
                 response,status=result,int(getattr(result,'status_code',200))
             payload=response.get_json(silent=True) if hasattr(response,'get_json') else None
         if 200<=status<300 and isinstance(payload,dict):
-            cput(job_key,{**(cget(job_key,15*60) or {}),'status':'complete','result':payload})
+            cput(job_key,{**(cget(job_key,15*60) or {}),'status':'complete',
+                          'progress':{'stage':'complete','message':'Dilution report ready.',
+                                      'completed':1,'total':1,
+                                      'updated_at':dt.datetime.now(dt.timezone.utc).isoformat()},
+                          'result':payload})
         else:
             cput(job_key,{**(cget(job_key,15*60) or {}),'status':'error',
                           'error':(payload or {}).get('error') or f'Analysis failed (HTTP {status}).'})

@@ -495,7 +495,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
       <h2 id="aio_title">All-in-One Summary</h2>
       <button class="aioClose" type="button" onclick="closeAioModal()">Close</button>
     </div>
-    <div id="aio_status" class="aioStatus"></div>
+    <div id="aio_status" class="aioStatus" role="status" aria-live="polite"></div>
     <div id="aio_content" hidden></div>
   </article>
 </div>
@@ -509,7 +509,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
 <div id="filing_explanation_modal" class="filingExplainOverlay" role="dialog" aria-modal="true" aria-labelledby="filing_explanation_title" onclick="if(event.target===this)closeFilingExplanation()">
   <article class="filingExplainDialog">
     <header class="filingExplainHeader"><h2 id="filing_explanation_title">SEC filing</h2><button class="filingExplainClose" type="button" onclick="closeFilingExplanation()">Close</button></header>
-    <div id="filing_explanation_status" class="filingExplainStatus" style="margin-top:12px"></div>
+    <div id="filing_explanation_status" class="filingExplainStatus" role="status" aria-live="polite" style="margin-top:12px"></div>
     <div id="filing_explanation_content" hidden></div>
   </article>
 </div>
@@ -903,6 +903,22 @@ let recentFilingsCache={items:null,savedAt:0,pending:null};
 const dilutionWarmJobs=new Map();
 const dilutionReportJobs=new Map();
 const dilutionReportCache=new Map();
+const dilutionProgressListeners=new Map();
+function listenForDilutionProgress(key,listener){
+  if(typeof listener!=='function')return ()=>{};
+  if(!dilutionProgressListeners.has(key))dilutionProgressListeners.set(key,new Set());
+  const listeners=dilutionProgressListeners.get(key);listeners.add(listener);
+  return ()=>{listeners.delete(listener);if(!listeners.size)dilutionProgressListeners.delete(key);};
+}
+function publishDilutionProgress(key,progress){
+  if(!progress)return;
+  for(const listener of dilutionProgressListeners.get(key)||[]){
+    try{listener(progress);}catch(error){console.debug('Dilution progress display unavailable:',error);}
+  }
+}
+function dilutionProgressMessage(progress){
+  return String(progress?.message||'Reviewing SEC filings…');
+}
 function warmDilutionHistory(ticker,asOfDate=''){
   const key=`${String(ticker).toUpperCase()}|${asOfDate||''}`;
   if(dilutionWarmJobs.has(key))return dilutionWarmJobs.get(key);
@@ -912,34 +928,38 @@ function warmDilutionHistory(ticker,asOfDate=''){
     .catch(error=>{dilutionWarmJobs.delete(key);console.debug('Dilution prefetch unavailable:',error.message);return null;});
   dilutionWarmJobs.set(key,pending);return pending;
 }
-function getDilutionHistory(ticker,asOfDate=''){
+function getDilutionHistory(ticker,asOfDate='',onProgress=null){
   const symbol=String(ticker).toUpperCase(),key=`${symbol}|${asOfDate||''}`;
-  if(dilutionReportCache.has(key))return Promise.resolve(dilutionReportCache.get(key));
-  if(dilutionReportJobs.has(key))return dilutionReportJobs.get(key);
+  const unsubscribe=listenForDilutionProgress(key,onProgress);
+  if(dilutionReportCache.has(key)){unsubscribe();return Promise.resolve(dilutionReportCache.get(key));}
+  if(dilutionReportJobs.has(key))return dilutionReportJobs.get(key).finally(unsubscribe);
   const pending=(async()=>{
     const started=await (dilutionWarmJobs.get(key)||warmDilutionHistory(symbol,asOfDate));
     if(!started)throw new Error('Could not start dilution analysis.');
     const began=Date.now();let errors=0,pollDelay=0;
     while(Date.now()-began<15*60*1000){
       if(pollDelay)await new Promise(resolve=>setTimeout(resolve,pollDelay));
+      let job;
       try{
         const response=await fetch('/api/sec-dilution-history/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...started.payload,job_id:started.job_id})});
-        const job=await responseJson(response,'Dilution status');
+        job=await responseJson(response,'Dilution status');
         errors=0;
-        if(job.status==='complete'){dilutionReportCache.set(key,job.result);return job.result;}
-        if(job.status==='error')throw new Error(job.error||'Could not analyze dilution history.');
-        pollDelay=pollDelay?Math.min(1600,Math.round(pollDelay*1.5)):350;
       }catch(error){
         errors++;
         if(errors>=25)throw error;
         await new Promise(resolve=>setTimeout(resolve,Math.min(12000,800*2**Math.min(errors-1,4))));
+        continue;
       }
+      publishDilutionProgress(key,job.progress);
+      if(job.status==='complete'){dilutionReportCache.set(key,job.result);return job.result;}
+      if(job.status==='error')throw new Error(job.error||'Could not analyze dilution history.');
+      pollDelay=pollDelay?Math.min(1600,Math.round(pollDelay*1.5)):350;
     }
     throw new Error('Dilution analysis is still running in the background. Reopen this report shortly.');
   })().catch(error=>{dilutionReportJobs.delete(key);throw error;});
-  dilutionReportJobs.set(key,pending);
-  pending.finally(()=>{if(dilutionReportJobs.get(key)===pending&&dilutionReportCache.has(key))dilutionReportJobs.delete(key);}).catch(()=>{});
-  return pending;
+  const tracked=pending.finally(()=>{unsubscribe();if(dilutionReportJobs.get(key)===tracked)dilutionReportJobs.delete(key);});
+  dilutionReportJobs.set(key,tracked);
+  return tracked;
 }
 function warmNewsSummaries(ticker,items){
   (items||[]).filter(item=>/^https?:\/\//i.test(item.url||'')).slice(0,4).forEach(item=>{
@@ -1173,7 +1193,9 @@ document.addEventListener('submit',async event=>{
   let finalStatus='';
   try{
     const asOf=tab.container.querySelector('#recent_filings_asof')?.value||'';
-    const report=await getDilutionHistory(ticker,asOf);
+    const report=await getDilutionHistory(ticker,asOf,progress=>{
+      if(String(activeTab||'').toUpperCase()===ticker)syncTickerChatWidget(dilutionProgressMessage(progress));
+    });
     const context=aioPayload(tab,ticker,report);
     delete context.user;delete context.token;
     context.ticker=ticker;
@@ -1245,9 +1267,12 @@ async function openAioModal(event,btn){
   modal.style.display='flex';content.hidden=true;content.innerHTML='';
   if(!tab||String(h.ticker||'').toUpperCase()!==ticker){status.textContent=`Load the ${ticker} report before opening its AI summary.`;return;}
   const asOf=tab?.container?.querySelector('#recent_filings_asof')?.value||'';
-  status.textContent='Using the shared SEC dilution review and preparing the summary in the background. You can close this window and return later.';
+  status.textContent='Starting SEC filing review…';
   try{
-    const dilutionReport=await getDilutionHistory(ticker,asOf);
+    const dilutionReport=await getDilutionHistory(ticker,asOf,progress=>{
+      if(modal.style.display==='flex')status.textContent=dilutionProgressMessage(progress);
+    });
+    status.textContent='SEC review complete. Preparing the All-in-One summary…';
     const d=await getAioSummary(tab,ticker,dilutionReport);
     const chip=level=>{const l=(level||'').toLowerCase();return`<span class="aioChip ${l}">${(level||'?').toUpperCase()}</span>`;};
     const esc2=s=>typeof s==='string'?s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'):'—';
@@ -1388,9 +1413,11 @@ async function requestDilutionHistory(ticker,asOfDate=''){
   const modal=$('#filing_explanation_modal'),status=$('#filing_explanation_status'),content=$('#filing_explanation_content');
   modal.style.display='flex';content.hidden=true;content.innerHTML='';$('#filing_explanation_title').textContent=`${ticker} · Dilution history`;
   const warmKey=`${String(ticker).toUpperCase()}|${asOfDate||''}`;
-  status.textContent=dilutionReportCache.has(warmKey)?'Showing the dilution report already prepared for this ticker.':`This review is running in the background for ${asOfDate||'today'}. You can close this window and return later.`;
+  status.textContent=dilutionReportCache.has(warmKey)?'Showing the dilution report already prepared for this ticker.':'Starting SEC filing review…';
   try{
-    const result=await getDilutionHistory(ticker,asOfDate);
+    const result=await getDilutionHistory(ticker,asOfDate,progress=>{
+      if(modal.style.display==='flex')status.textContent=dilutionProgressMessage(progress);
+    });
     if(modal.style.display==='flex')renderDilutionHistory(result);
   }
   catch(error){status.textContent=error.message;content.hidden=true;}
