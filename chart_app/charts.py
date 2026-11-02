@@ -1281,7 +1281,7 @@ def sec_dilution_history():
     if asof_date>current_day:
         return jsonify({'error':'As-of date cannot be in the future.'}),400
     today=asof_date.isoformat()
-    cache_key=f'sec_dilution_history_v8_{ticker}_{today}_asof'
+    cache_key=f'sec_dilution_history_v9_{ticker}_{today}_asof'
     cached=cget(cache_key,30*60)
     if cached is not None:
         return jsonify(cached)
@@ -1546,6 +1546,19 @@ def sec_dilution_history():
             "and other material overhang separately. Never present registered/reserved "
             "capacity as shares sold. Treat any withdrawn registration terms as proposed only and use that withdrawal "
             "filing to determine whether any securities were sold. "
+            "Return active shelf registrations separately from ATMs: identify registered capacity, primary amount sold, "
+            "remaining capacity, effective/expiration dates, and whether the shelf is currently usable. Do not add overlapping "
+            "shelf registrations together. Extract the latest cash and short-term investments, latest quarterly net cash used "
+            "in operating activities, their evidence dates, and estimated months of runway (cash divided by quarterly burn "
+            "times three); label runway approximate and do not infer burn from net loss when operating cash use is available. "
+            "Also return four evidence-based qualitative risk signals: offering, cash_need, overhang, and dilution_history. "
+            "Use levels low/moderate/high/severe/not_confirmed, with a short explanation and source IDs. For cash_need, use "
+            "runway of <=6 months as severe, <=12 high, <=24 moderate, and >24 low. For overhang, compare confirmed active "
+            "issuable shares with shares outstanding: >=50% severe, >=25% high, >=10% moderate, otherwise low; do not treat "
+            "shelf capacity as active issuable shares. For dilution_history, use the number and scale of confirmed primary "
+            "dilution events in the trailing 24 months; do not rate from registration filings alone. For offering, explain "
+            "whether a live ATM/equity line or effective usable shelf is supported by evidence. These are this report's "
+            "qualitative signals, not a Finviz score; use not_confirmed when evidence is insufficient. "
             "Use the selected as-of date on every market number. Estimate a practical one-day ATM amount using "
             "10-25% of ADTV only as an explicitly labeled assumption, subject to actual contractual/Reg M limits. "
             "Compute active shares as exercisable/convertible on the selected date plus ATM shares possible as of then; show contingent "
@@ -1565,6 +1578,10 @@ def sec_dilution_history():
             "source_ids}), active_warrants (array of {tranche, quantity_outstanding, quantity_as_of, strike, expiry, exercisable_today, "
             "cashless, pre_funded, in_the_money, shares_today, cash_if_exercised, source_ids}), convertibles (array of "
             "{instrument, principal_and_interest, amount_as_of, conversion_terms, blockers, shares_today, status, source_ids}), "
+            "active_shelves (array of {name, status, registered_amount, sold, remaining, remaining_as_of, effective_date, "
+            "expiration_date, currently_usable, source_ids}), cash_position ({cash_and_short_term_investments, cash_as_of, "
+            "quarterly_operating_cash_burn, burn_as_of, runway_months, calculation, source_ids}), "
+            "risk_signals ({offering, cash_need, overhang, dilution_history}, each {level, basis, source_ids}), "
             "ceo_ownership ({name, shares_owned, shares_as_of, source_ids}; shares_owned must be an exact number or null), "
             "active_participants (array of {name, role, related_instrument, involvement_as_of, source_ids}), "
             "major_warrant_holders (array of {name, related_tranche, warrants_held, percent_of_outstanding, ownership_as_of, source_ids}), "
@@ -1577,10 +1594,24 @@ def sec_dilution_history():
             "caveats (array of short strings). "
             "Use [] for empty lists. Keep the JSON compact but do not omit an active instrument merely to save space.\n\n"
             f"Ticker: {ticker}\n{snapshot_context}\n\nSEC filings read ({len(sources)}; source IDs link to filings):\n"+'\n\n'.join(excerpts))
-        answer,provider=_call_filing_ai(prompt,max_tokens=2800)
+        answer,provider=_call_filing_ai(prompt,max_tokens=6000)
         app.logger.info('SEC dilution review %s: AI response received from %s after %.1fs total',
                         ticker,provider,time.monotonic()-request_started)
         analysis=_parse_ai_json_object(answer)
+        required_fields=('summary','current_status','active_atms','active_warrants','active_shelves',
+                         'convertibles','ceo_ownership','active_participants','major_warrant_holders',
+                         'other_overhang','today_math','cash_position','risk_signals','history')
+        missing_fields=[field for field in required_fields if field not in analysis]
+        expected_types={'active_atms':list,'active_warrants':list,'active_shelves':list,'convertibles':list,
+                        'ceo_ownership':dict,'active_participants':list,'major_warrant_holders':list,
+                        'other_overhang':list,'today_math':dict,'cash_position':dict,'risk_signals':dict,'history':list}
+        missing_fields.extend(field for field,expected in expected_types.items()
+                              if field in analysis and not isinstance(analysis[field],expected))
+        if missing_fields or not str(analysis.get('summary') or '').strip() or not str(analysis.get('current_status') or '').strip():
+            app.logger.warning('SEC dilution review %s returned incomplete structured output; missing fields: %s',
+                               ticker,', '.join(missing_fields) or 'summary/current_status')
+            return jsonify({'error':'The SEC filings were read, but the AI could not produce a complete dilution report. '
+                                    'No empty instrument lists were saved as a result. Please retry the analysis.'}),502
         source_ids={item['id'] for item in sources}
         history=[]
         raw_history=analysis.get('history') if isinstance(analysis.get('history'),list) else []
@@ -1609,6 +1640,7 @@ def sec_dilution_history():
             return int(text)
         active_atms=analysis.get('active_atms') if isinstance(analysis.get('active_atms'),list) else []
         active_warrants=analysis.get('active_warrants') if isinstance(analysis.get('active_warrants'),list) else []
+        active_shelves=analysis.get('active_shelves') if isinstance(analysis.get('active_shelves'),list) else []
         convertibles=analysis.get('convertibles') if isinstance(analysis.get('convertibles'),list) else []
         active_participants=analysis.get('active_participants') if isinstance(analysis.get('active_participants'),list) else []
         major_warrant_holders=analysis.get('major_warrant_holders') if isinstance(analysis.get('major_warrant_holders'),list) else []
@@ -1631,16 +1663,30 @@ def sec_dilution_history():
                 clean_row['source_ids']=source_list(row.get('source_ids'))
                 cleaned_rows.append(clean_row)
             return cleaned_rows
+        raw_cash_position=analysis.get('cash_position') if isinstance(analysis.get('cash_position'),dict) else {}
+        cash_position={key:('' if raw_cash_position.get(key) is None else str(raw_cash_position.get(key)).strip())
+                       for key in ('cash_and_short_term_investments','cash_as_of','quarterly_operating_cash_burn',
+                                   'burn_as_of','runway_months','calculation')}
+        cash_position['source_ids']=source_list(raw_cash_position.get('source_ids'))
+        raw_risk_signals=analysis.get('risk_signals') if isinstance(analysis.get('risk_signals'),dict) else {}
+        risk_signals={}
+        for category in ('offering','cash_need','overhang','dilution_history'):
+            item=raw_risk_signals.get(category) if isinstance(raw_risk_signals.get(category),dict) else {}
+            risk_signals[category]={'level':str(item.get('level') or 'not_confirmed').strip().lower(),
+                                    'basis':str(item.get('basis') or 'Evidence not confirmed.').strip(),
+                                    'source_ids':source_list(item.get('source_ids'))}
         caveat_value=analysis.get('caveats')
         caveat=(' '.join(text_list(caveat_value,10)) if isinstance(caveat_value,list)
                 else str(caveat_value or '').strip())
         coverage=f"Review used {len(sources)} readable financing-related SEC documents, from up to 55 recent filings plus relevant agreement exhibits and periodic, material-event, and ownership reports."
         result={'ticker':ticker,'as_of':today,'provider':provider,
-                'summary':str(analysis.get('summary') or 'The AI did not return a usable summary. Review the filing links below.'),
-                'current_status':str(analysis.get('current_status') or 'Unable to verify which instruments were active on the selected as-of date from the available filing details.'),
+                'summary':str(analysis.get('summary')).strip(),
+                'current_status':str(analysis.get('current_status')).strip(),
                 'active_atms':clean_instruments(active_atms,('name','agent','status','size','sold','remaining','remaining_as_of','shares_today','constraint','source_ids')),
                 'active_warrants':clean_instruments(active_warrants,('tranche','quantity_outstanding','quantity_as_of','strike','expiry','exercisable_today','cashless','pre_funded','in_the_money','shares_today','cash_if_exercised','source_ids')),
+                'active_shelves':clean_instruments(active_shelves,('name','status','registered_amount','sold','remaining','remaining_as_of','effective_date','expiration_date','currently_usable','source_ids')),
                 'convertibles':clean_instruments(convertibles,('instrument','principal_and_interest','amount_as_of','conversion_terms','blockers','shares_today','status','source_ids')),
+                'cash_position':cash_position,'risk_signals':risk_signals,
                 'ceo_ownership':{'name':str(raw_ceo_ownership.get('name') or 'CEO').strip(),
                                  'shares_owned':ceo_shares,
                                  'shares_as_of':str(raw_ceo_ownership.get('shares_as_of') or '').strip(),
@@ -2173,7 +2219,7 @@ def register_news_ai_routes(app, db_validate_session):
             return jsonify({"error": "Invalid URL."}), 400
 
         # Cache key
-        cache_key = "news_ai_" + __import__('hashlib').sha1(url.encode()).hexdigest()[:16]
+        cache_key = "news_ai_v2_" + __import__('hashlib').sha1(url.encode()).hexdigest()[:16]
         cached = cget(cache_key, 86400)  # 24 h cache
         if cached:
             return jsonify({**cached, "cached": True})
@@ -2182,21 +2228,29 @@ def register_news_ai_routes(app, db_validate_session):
         prompt = f"""You are a concise stock-market analyst. Read the following news article about {ticker or 'a company'} and return a JSON object with exactly these keys:
 
 "summary": 2-3 short punchy sentences in plain English — what happened, why it matters for the stock. No jargon.
-"management_comment": if the article contains any quotes from management/executives/CEO/CFO, extract the most relevant one verbatim. If none, return null.
+"management_comment": if the article contains a management/executive/CEO/CFO quote, include up to two complete sentences verbatim. Never cut a quote mid-sentence or mid-word; if the full sentence is not available, return null.
 "catalyst_type": one of: "product/partnership", "financing/offering", "regulatory", "earnings/revenue", "lawsuit/legal", "macro/sector", "unrelated fluff", "unknown"
 "sentiment": one of: "bullish", "bearish", "neutral"
 
 Article title: {title}
-Article text: {text[:6000]}
+Article text: {text[:8000]}
 
 Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
 
         try:
-            answer, provider = _call_filing_ai(prompt, max_tokens=400)
+            answer, provider = _call_filing_ai(prompt, max_tokens=900)
             result = _parse_ai_json_object(answer)
+            management_comment=result.get("management_comment")
+            if not isinstance(management_comment,str):
+                management_comment=None
+            else:
+                management_comment=management_comment.strip()
+                if management_comment and not re.search(r'[.!?…][”’"\')\]]*$',management_comment):
+                    app.logger.info('Omitting incomplete management quote from news summary for %s',ticker or 'unknown ticker')
+                    management_comment=None
             out = {
                 "summary": str(result.get("summary") or "No summary available."),
-                "management_comment": result.get("management_comment") or None,
+                "management_comment": management_comment or None,
                 "catalyst_type": str(result.get("catalyst_type") or "unknown"),
                 "sentiment": str(result.get("sentiment") or "neutral"),
                 "url": url,
