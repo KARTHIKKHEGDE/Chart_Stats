@@ -562,17 +562,23 @@ def run_job(job, t, refresh):
         if n_events:
             job["msg"]=f"Loading and analyzing {n_events} historical sessions in parallel…"
             fetch_args=[(t,i,daily) for i in idxs]
-            fetch_workers=min(n_keys,max(n_events,12))
+            # Keep provider concurrency bounded: spawning one worker per
+            # event/key can saturate connection pools and trigger rate limits.
+            fetch_workers=min(n_keys,n_events,12)
             analyze_workers=min(8,n_events)
             with ThreadPoolExecutor(max_workers=fetch_workers,thread_name_prefix="gap-minute-fetch") as fetch_pool:
                 with ThreadPoolExecutor(max_workers=analyze_workers,thread_name_prefix="gap-event-analysis") as analyze_pool:
                     fetch_futures={fetch_pool.submit(_prefetch_minute,arg):arg for arg in fetch_args}
                     analyze_futures={}
-                    for completed,future in enumerate(as_completed(fetch_futures),1):
-                        idx_i,day,ok=future.result()
+                    completed=0
+                    for future in as_completed(fetch_futures):
+                        idx_i,day,ok=future.result();completed+=1
                         analyze_futures[analyze_pool.submit(_analyze,idx_i)]=idx_i
                         job["msg"]=(f"Loaded {completed}/{n_events} historical sessions; analyzing in parallel… "
                                     f"({day}{' · cached' if ok else ' · no minute bars'})")
+                    # Analyze as soon as each session's bars are fetched. The
+                    # old code waited for every analysis at the end, hiding
+                    # progress and delaying report readiness behind stragglers.
                     for future in as_completed(analyze_futures):
                         idx_i,event=future.result()
                         results[idx_i]=event

@@ -1439,7 +1439,7 @@ def sec_dilution_history():
     if asof_date>current_day:
         return jsonify({'error':'As-of date cannot be in the future.'}),400
     today=asof_date.isoformat()
-    cache_key=f'sec_dilution_history_v14_{ticker}_{today}_asof'
+        cache_key=f'sec_dilution_history_v15_{ticker}_{today}_asof'
     cached=cget(cache_key,30*60)
     if cached is not None:
         return jsonify(cached)
@@ -1648,13 +1648,12 @@ def sec_dilution_history():
             return jsonify({'error':f'No relevant filings were found in the SEC submissions available for {ticker} as of {today}. This does not confirm that no dilution exists.'}),404
         update_progress('market_data','SEC filings are read. Finishing the as-of price, shares, and float snapshot…')
         market_inputs=market_inputs_future.result()
-        xbrl_cash=_xbrl_cash_summary(market_inputs.get('companyfacts') or {},asof_date)
         market_snapshot={'market_date':None,'last_price':None,'shares_outstanding':None,
                          'shares_filed':None,'shares_as_of':None,'float_shares':None,
                          'float_as_of':None,'adtv_20d':None,'public_float_pricing_date':None,
                          'public_float_price':None,'requested_pricing_date':'highest completed close in the preceding 60 calendar days',
                          'pricing_method':'Highest completed daily close in the preceding 60 calendar days',
-                         'xbrl_cash':xbrl_cash,'notes':[]}
+                         'notes':[]}
         daily_rows=market_inputs['daily']
         if market_inputs['errors']['daily']:
             exc=market_inputs['errors']['daily']
@@ -1741,9 +1740,6 @@ def sec_dilution_history():
             f"(effective date {market_snapshot['float_as_of'] or 'unavailable'}; vendor estimate, not a holder-by-holder calculation).\n"
             f"20-session average daily volume: {fmt(market_snapshot['adtv_20d'])} shares "
             f"(through market data date {market_snapshot['market_date'] or 'unavailable'}).\n"
-            f"Precomputed XBRL cash input: cash plus short-term investments {fmt(xbrl_cash.get('cash_and_short_term_investments'))} "
-            f"as of {xbrl_cash.get('cash_as_of') or 'unavailable'}; quarterly operating-cash burn {fmt(xbrl_cash.get('quarterly_operating_cash_burn'))} "
-            f"as of {xbrl_cash.get('burn_as_of') or 'unavailable'} ({xbrl_cash.get('burn_method') or 'not available'}).\n"
             f"Snapshot notes: {'; '.join(market_snapshot['notes']) or 'None'}")
         forms_seen={str(item.get('form') or '').upper() for item in all_filings}
         is_fpi=bool(forms_seen.intersection({'F-1','F-3','20-F','40-F','6-K'}))
@@ -1795,12 +1791,8 @@ def sec_dilution_history():
             "Return active shelf registrations separately from ATMs: identify registered capacity, primary amount sold, "
             "remaining capacity, effective/expiration dates, and whether the shelf is currently usable. For every active ATM, calculate dollar capacity as the minimum of verified program remaining, applicable shelf remaining, and applicable baby-shelf remaining limit, then divide that capacity by the selected-date closing price for shares possible. Use only confirmed limits and say when any limit is unknown. If a shelf has an effective date "
             "but no stated expiration, calculate the Rule 415(a)(5) three-year date and label it calculated. Do not add overlapping "
-            "shelf registrations together. Use the precomputed XBRL cash and quarterly operating-cash-burn input when available. Foreign private issuers' 6-K reports have no XBRL: read their supplied 6-K earnings releases for cash, operating burn, and runway rather than treating missing XBRL as missing data. Otherwise extract the latest cash and short-term investments, latest quarterly net cash used "
-            "in operating activities, their evidence dates, and estimated months of runway (cash divided by quarterly burn "
-            "times three); label runway approximate and do not infer burn from net loss when operating cash use is available. "
-            "Also return four evidence-based qualitative risk signals: offering, cash_need, overhang, and dilution_history. "
-            "Use levels low/moderate/high/severe/not_confirmed, with a short explanation and source IDs. For cash_need, use "
-            "runway of <=6 months as severe, <=12 high, <=24 moderate, and >24 low. For overhang, compare confirmed active "
+            "shelf registrations together. Also return three evidence-based qualitative risk signals: offering, overhang, and dilution_history. "
+            "Use levels low/moderate/high/severe/not_confirmed, with a short explanation and source IDs. For overhang, compare confirmed active "
             "issuable shares with shares outstanding: >=50% severe, >=25% high, >=10% moderate, otherwise low; do not treat "
             "shelf capacity as active issuable shares. For dilution_history, use the number and scale of confirmed primary "
             "dilution events in the trailing 24 months; do not rate from registration filings alone. For offering, explain "
@@ -1826,9 +1818,8 @@ def sec_dilution_history():
             "cashless, pre_funded, in_the_money, shares_today, cash_if_exercised, source_ids}), convertibles (array of "
             "{instrument, principal_and_interest, amount_as_of, conversion_terms, blockers, shares_today, status, source_ids}), "
             "active_shelves (array of {name, status, registered_amount, sold, remaining, remaining_as_of, effective_date, "
-            "expiration_date, currently_usable, source_ids}), cash_position ({cash_and_short_term_investments, cash_as_of, "
-            "quarterly_operating_cash_burn, burn_as_of, runway_months, calculation, source_ids}), "
-            "risk_signals ({offering, cash_need, overhang, dilution_history}, each {level, basis, source_ids}), "
+            "expiration_date, currently_usable, source_ids}), "
+            "risk_signals ({offering, overhang, dilution_history}, each {level, basis, source_ids}), "
             "ceo_ownership ({name, shares_owned, shares_as_of, source_ids}; shares_owned must be an exact number or null), "
             "active_participants (array of {name, role, related_instrument, involvement_as_of, source_ids}), "
             "major_warrant_holders (array of {name, related_tranche, warrants_held, percent_of_outstanding, ownership_as_of, source_ids}), "
@@ -1850,11 +1841,11 @@ def sec_dilution_history():
         analysis=_parse_ai_json_object(answer)
         required_fields=('summary','current_status','active_atms','active_warrants','active_shelves',
                          'convertibles','ceo_ownership','active_participants','major_warrant_holders',
-                         'other_overhang','today_math','cash_position','risk_signals','history')
+                         'other_overhang','today_math','risk_signals','history')
         missing_fields=[field for field in required_fields if field not in analysis]
         expected_types={'active_atms':list,'active_warrants':list,'active_shelves':list,'convertibles':list,
                         'ceo_ownership':dict,'active_participants':list,'major_warrant_holders':list,
-                        'other_overhang':list,'today_math':dict,'cash_position':dict,'risk_signals':dict,'history':list}
+                        'other_overhang':list,'today_math':dict,'risk_signals':dict,'history':list}
         missing_fields.extend(field for field,expected in expected_types.items()
                               if field in analysis and not isinstance(analysis[field],expected))
         if missing_fields or not str(analysis.get('summary') or '').strip() or not str(analysis.get('current_status') or '').strip():
@@ -1925,6 +1916,37 @@ def sec_dilution_history():
             else:
                 unexpired_warrants.append(row)
         active_warrants=unexpired_warrants
+        # A financing history event that names a warrant issuance must not
+        # vanish simply because the model omitted it from active_warrants.
+        # Add it as an unresolved instrument unless filings establish current
+        # quantity/status; known expired warrants remain excluded above.
+        warrant_history=analysis.get('history') if isinstance(analysis.get('history'),list) else []
+        normalized_active_names=[re.sub(r'[^a-z0-9]+',' ',str(row.get('tranche') or '').lower()).strip()
+                                 for row in active_warrants if isinstance(row,dict)]
+        for event in warrant_history:
+            if not isinstance(event,dict):continue
+            description=' '.join(str(event.get(key) or '') for key in ('event','impact','status')).strip()
+            if not re.search(r'\bwarrants?\b',description,re.I):continue
+            event_date=str(event.get('date') or '')
+            explicit_expiry=_parse_report_date(description)
+            if explicit_expiry and explicit_expiry<asof_date:continue
+            normalized=re.sub(r'[^a-z0-9]+',' ',str(event.get('event') or '').lower()).strip()
+            if normalized and any(normalized in name or name in normalized for name in normalized_active_names if name):continue
+            amount_match=re.search(r'\b([\d,]+(?:\.\d+)?\s*(?:million|m|billion|b)?)\s+(?:common\s+)?shares?\b',description,re.I)
+            quantity=_parse_report_number(amount_match.group(1)) if amount_match else None
+            if quantity is None:
+                amount_match=re.search(r'\bwarrants?\s+(?:to\s+purchase|for|covering)\s+([\d,]+(?:\.\d+)?\s*(?:million|m|billion|b)?)\s+(?:common\s+)?shares?\b',description,re.I)
+                quantity=_parse_report_number(amount_match.group(1)) if amount_match else None
+            active_warrants.append({
+                'tranche':str(event.get('event') or 'Warrant issuance disclosed in history'),
+                'quantity_outstanding':f'{quantity:,.0f}' if quantity is not None else 'not confirmed',
+                'quantity_as_of':event_date or 'not confirmed','strike':'not confirmed',
+                'expiry':'not confirmed','exercisable_today':'not confirmed',
+                'cashless':'not confirmed','pre_funded':'not confirmed','in_the_money':'not confirmed',
+                'shares_today':f'{quantity:,.0f}' if quantity is not None else 'not confirmed',
+                'cash_if_exercised':'not confirmed','source_ids':event.get('source_ids') or [],
+                'status':'Disclosed issuance; current outstanding status not confirmed'})
+            if normalized:normalized_active_names.append(normalized)
         for row in expired_warrants:
             if not isinstance(row,dict):
                 continue
@@ -1932,29 +1954,9 @@ def sec_dilution_history():
                                    'status':f'Expired {row.get("expiry")}',
                                    'amount':str(row.get('quantity_outstanding') or row.get('shares_today') or 'quantity not confirmed'),
                                    'source_ids':row.get('source_ids') or []})
-        raw_cash_position=analysis.get('cash_position') if isinstance(analysis.get('cash_position'),dict) else {}
-        cash_position={key:('' if raw_cash_position.get(key) is None else str(raw_cash_position.get(key)).strip())
-                       for key in ('cash_and_short_term_investments','cash_as_of','quarterly_operating_cash_burn',
-                                   'burn_as_of','runway_months','calculation')}
-        cash_position['source_ids']=source_list(raw_cash_position.get('source_ids'))
-        xbrl_cash=market_snapshot.get('xbrl_cash') or {}
-        xbrl_cash_sources=[source['id'] for source in sources
-                            if source.get('filing_date') in {xbrl_cash.get('cash_filed'),xbrl_cash.get('burn_filed')}]
-        if xbrl_cash.get('cash_and_short_term_investments') is not None:
-            cash_position['cash_and_short_term_investments']=f'${float(xbrl_cash["cash_and_short_term_investments"]):,.0f}'
-            cash_position['cash_as_of']=str(xbrl_cash.get('cash_as_of') or '')
-        if xbrl_cash.get('quarterly_operating_cash_burn') is not None:
-            cash_position['quarterly_operating_cash_burn']=f'${float(xbrl_cash["quarterly_operating_cash_burn"]):,.0f}'
-            cash_position['burn_as_of']=str(xbrl_cash.get('burn_as_of') or '')
-            if xbrl_cash.get('runway_months') is not None:
-                cash_position['runway_months']=f'{float(xbrl_cash["runway_months"]):.1f}'
-                cash_position['calculation']=(f'XBRL cash and short-term investments / quarterly operating cash burn × 3; '
-                                              f'{xbrl_cash.get("burn_method") or "quarterly method"}.')
-        if xbrl_cash_sources:
-            cash_position['source_ids']=xbrl_cash_sources
         raw_risk_signals=analysis.get('risk_signals') if isinstance(analysis.get('risk_signals'),dict) else {}
         risk_signals={}
-        for category in ('offering','cash_need','overhang','dilution_history'):
+        for category in ('offering','overhang','dilution_history'):
             item=raw_risk_signals.get(category) if isinstance(raw_risk_signals.get(category),dict) else {}
             risk_signals[category]={'level':str(item.get('level') or 'not_confirmed').strip().lower(),
                                     'basis':str(item.get('basis') or 'Evidence not confirmed.').strip(),
@@ -1977,7 +1979,7 @@ def sec_dilution_history():
             if not expiration or expiration>=asof_date:
                 usable_shelves.append(shelf)
         clean_atms=clean_instruments(active_atms,('name','agent','status','size','sold','remaining','remaining_as_of','shares_today','constraint','source_ids'))
-        clean_warrants=clean_instruments(active_warrants,('tranche','quantity_outstanding','quantity_as_of','strike','expiry','exercisable_today','cashless','pre_funded','in_the_money','shares_today','cash_if_exercised','source_ids'))
+        clean_warrants=clean_instruments(active_warrants,('tranche','quantity_outstanding','quantity_as_of','strike','expiry','exercisable_today','cashless','pre_funded','in_the_money','shares_today','cash_if_exercised','status','source_ids'))
         clean_convertibles=clean_instruments(convertibles,('instrument','principal_and_interest','amount_as_of','conversion_terms','blockers','shares_today','status','source_ids'))
         today_math=analysis.get('today_math') if isinstance(analysis.get('today_math'),dict) else {}
         # Price and volume are source-of-truth market inputs, not model output.
@@ -1989,10 +1991,24 @@ def sec_dilution_history():
         atm_shares=[]
         if atm_price and atm_price>0:
             for atm in clean_atms:
-                remaining=_parse_report_number(atm.get('remaining'))
-                if remaining is None or remaining<0:
+                program_remaining=_parse_report_number(atm.get('remaining'))
+                if program_remaining is None or program_remaining<0:
+                    atm['shares_today']='not confirmed (program remaining capacity missing)'
                     continue
-                shares=remaining/atm_price
+                limits=[program_remaining]
+                for limit_key in ('shelf_remaining','baby_shelf_remaining'):
+                    limit=_parse_report_number(atm.get(limit_key))
+                    if limit is not None:
+                        limits.append(limit)
+                    else:
+                        limits=None
+                        break
+                if limits is None:
+                    atm['shares_today']='not confirmed (applicable shelf or baby-shelf remaining limit missing)'
+                    continue
+                capacity=max(0,min(limits))
+                atm['remaining_capacity_after_limits']=f'${capacity:,.0f}'
+                shares=capacity/atm_price
                 atm['shares_today']=f'{shares:,.0f}'
                 atm_shares.append(shares)
         if atm_shares:
@@ -2008,7 +2024,18 @@ def sec_dilution_history():
             adtv=_parse_report_number(market_snapshot.get('adtv_20d'))
             if adtv and adtv>0:
                 today_math['adtv_multiple']=active_total/adtv
+        # Reconcile the SEC cover-page count with the model's ownership-based
+        # affiliate estimate. Non-affiliate shares cannot exceed shares
+        # outstanding; otherwise preserve the mismatch as unconfirmed.
+        outstanding=_parse_report_number(market_snapshot.get('shares_outstanding'))
         nonaffiliate_shares=_parse_report_number(today_math.get('nonaffiliate_shares'))
+        if outstanding is not None and nonaffiliate_shares is not None:
+            if nonaffiliate_shares>outstanding:
+                today_math['nonaffiliate_shares']='not confirmed (exceeds shares outstanding; reconcile split basis/filing dates)'
+                today_math['nonaffiliate_public_float']='not confirmed (share counts do not reconcile)'
+                nonaffiliate_shares=None
+            else:
+                today_math['nonaffiliate_shares']=min(nonaffiliate_shares,outstanding)
         public_float_price=_parse_report_number(market_snapshot.get('public_float_price'))
         if nonaffiliate_shares is not None and public_float_price and public_float_price>0:
             # This prevents the common (and severe) unit error of placing a
@@ -2022,6 +2049,11 @@ def sec_dilution_history():
                 today_math['baby_shelf_limit']='not confirmed (trailing 12-month primary sales not confirmed)'
             else:
                 today_math['baby_shelf_limit']=max(0,public_float/3-trailing_sales)
+        # The snapshot already enforces a completed close within 60 days of
+        # the selected as-of date. Never use a model-supplied stale price.
+        if not market_snapshot.get('public_float_pricing_date') or not market_snapshot.get('public_float_price'):
+            today_math['baby_shelf_limit']='not confirmed (no completed close within 60 days of as-of date)'
+            today_math['nonaffiliate_public_float']='not confirmed (as-of price unavailable)'
         result={'ticker':ticker,'as_of':today,'provider':provider,
                 'summary':str(analysis.get('summary')).strip(),
                 'current_status':str(analysis.get('current_status')).strip(),
@@ -2029,7 +2061,7 @@ def sec_dilution_history():
                 'active_warrants':clean_warrants,
                 'active_shelves':usable_shelves,
                 'convertibles':clean_convertibles,
-                'cash_position':cash_position,'risk_signals':risk_signals,
+                'risk_signals':risk_signals,
                 'ceo_ownership':{'name':str(raw_ceo_ownership.get('name') or 'CEO').strip(),
                                  'shares_owned':ceo_shares,
                                  'shares_as_of':str(raw_ceo_ownership.get('shares_as_of') or '').strip(),
