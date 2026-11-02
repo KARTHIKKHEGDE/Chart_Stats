@@ -933,6 +933,159 @@ from chart_app import charts as _charts
 from chart_app import keyword_compare as _keyword_compare
 from chart_app.scanner import _get_scanner_news, _scanner_details
 
+_premarket_spike_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="premarket-spikes")
+
+
+def _compute_premarket_spikes(ticker):
+    cache_key = f"{ticker}_premarket_spikes_v6"
+    daily = load_daily(ticker)
+    if not daily:
+        raise RuntimeError("No daily history available from Polygon.")
+    today = dt.datetime.now(ET).date()
+    today_text = today.isoformat()
+    cutoff = today - dt.timedelta(days=365)
+    daily = [row for row in daily if str(row.get("date") or "") < today_text]
+    splits = load_splits(ticker) or []
+    split_dates = {str(item.get("date")) for item in splits if item.get("date")}
+    candidates = []
+    for index in range(1, len(daily)):
+        row = daily[index]
+        try:
+            day = dt.date.fromisoformat(str(row["date"]))
+            prior_close = float(daily[index - 1].get("c") or 0)
+            high = float(row.get("h") or 0)
+        except (TypeError, ValueError, KeyError):
+            continue
+        if day >= cutoff and row["date"] not in split_dates and prior_close > 0 and high / prior_close - 1 > 0.40:
+            candidates.append(index)
+    if candidates:
+        workers = min(len(_key_pool), max(4, len(candidates)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(_prefetch_minute, [(ticker, index, daily) for index in candidates]))
+    found = []
+    spike_paths = {"price": [], "vwap": [], "dev": [], "twap": [], "dt": [], "spread": [], "active_twap": [], "gap": []}
+    for index in candidates:
+        day = daily[index]["date"]
+        prior_close = float(daily[index - 1].get("c") or 0)
+        try:
+            bars = minute_df(ticker, day)
+            if bars is None or bars.empty or prior_close <= 0:
+                continue
+            minutes = bars.index.hour * 60 + bars.index.minute
+            premarket = bars[(minutes >= 240) & (minutes < 570)]
+            if premarket.empty:
+                continue
+            high = float(premarket["h"].max())
+            high_index = premarket["h"].idxmax()
+            typical_price = (premarket["h"] + premarket["l"] + premarket["c"]) / 3
+            dollar_volume = float((typical_price * premarket["v"]).sum())
+            rth = bars[(minutes >= 570) & (minutes < 960)]
+            rth_dollar_volume = 0.0
+            rth_open_gap = None
+            rth_open_high = None
+            rth_open_close = None
+            rth_high_low = None
+            rth_faded = None
+            if not rth.empty:
+                rth_typical = (rth["h"] + rth["l"] + rth["c"]) / 3
+                rth_dollar_volume = float((rth_typical * rth["v"]).sum())
+                rth_open = float(rth.iloc[0]["o"])
+                rth_close = float(rth.iloc[-1]["c"])
+                rth_high = float(rth["h"].max())
+                rth_low = float(rth["l"].min())
+                if rth_open > 0:
+                    rth_open_gap = (rth_open / prior_close - 1) * 100
+                    rth_open_high = (rth_high / rth_open - 1) * 100
+                    rth_open_close = (rth_close / rth_open - 1) * 100
+                    rth_faded = rth_close < rth_open
+                if rth_high > 0:
+                    rth_high_low = (rth_low / rth_high - 1) * 100
+            if high / prior_close - 1 > 0.40 and dollar_volume > 10_000_000:
+                pm_through_high = premarket.loc[:high_index]
+                pm_high_dollar_volume = float(
+                    (((pm_through_high["h"] + pm_through_high["l"] + pm_through_high["c"]) / 3)
+                     * pm_through_high["v"]).sum()
+                )
+                price_path = path_full(bars, prior_close, True)
+                _, vwap_path, dev_path = vwap_frame_paths(bars, prior_close, True)
+                twap_height, dt_path, spread_path, active_twap = twap_frame_paths(bars, prior_close, True)
+                pm_high_minute = int(high_index.hour * 60 + high_index.minute)
+                spike_gap_path = [None] * 217
+                gap_size = high / prior_close - 1
+                for offset in range(-360, 721, 5):
+                    k = (pm_high_minute + offset - PM_START) / 5
+                    if not gap_size or k < 0 or k > len(price_path)-1: continue
+                    left, right = int(math.floor(k)), int(math.ceil(k))
+                    if price_path[left] is None or price_path[right] is None: continue
+                    frac = k-left
+                    spike_gap_path[(offset+360)//5] = round((price_path[left] + (price_path[right]-price_path[left])*frac) / gap_size, 4)
+                spike_paths["price"].append(price_path)
+                spike_paths["vwap"].append(vwap_path)
+                spike_paths["dev"].append(dev_path)
+                spike_paths["twap"].append(twap_height)
+                spike_paths["dt"].append(dt_path)
+                spike_paths["spread"].append(spread_path)
+                spike_paths["active_twap"].append(active_twap)
+                spike_paths["gap"].append(spike_gap_path)
+                found.append({
+                    "date": day,
+                    "pm_high_pct": round((high / prior_close - 1) * 100, 2),
+                    "pm_high_time": high_index.tz_convert(IST).strftime("%H:%M"),
+                    "pm_high_minute_et": pm_high_minute,
+                    "rth_open_gap_pct": round(rth_open_gap, 2) if rth_open_gap is not None else None,
+                    "rth_open_high_pct": round(rth_open_high, 2) if rth_open_high is not None else None,
+                    "rth_open_close_pct": round(rth_open_close, 2) if rth_open_close is not None else None,
+                    "rth_high_low_pct": round(rth_high_low, 2) if rth_high_low is not None else None,
+                    "rth_faded": rth_faded,
+                    "pm_dollar_volume_till_high": round(pm_high_dollar_volume, 2),
+                    "pm_dollar_volume": round(dollar_volume, 2),
+                    "pm_volume": round(float(premarket["v"].sum())),
+                    "rth_to_pm_dollar_volume": round(rth_dollar_volume / dollar_volume, 2) if dollar_volume else None,
+                })
+        except Exception:
+            continue
+    found.sort(key=lambda item: item["date"], reverse=True)
+
+    def summarize_paths(paths):
+        if not paths:return {"paths": [], "med": [], "p25": [], "p75": []}
+        medians=[];p25=[];p75=[]
+        for k in range(max(map(len,paths))):
+            values=[path[k] for path in paths if len(path)>k and path[k] is not None and np.isfinite(path[k])]
+            medians.append(round(float(np.percentile(values,50)),4) if values else None)
+            p25.append(round(float(np.percentile(values,25)),4) if values else None)
+            p75.append(round(float(np.percentile(values,75)),4) if values else None)
+        return {"paths":paths,"med":medians,"p25":p25,"p75":p75}
+
+    spike_chart={name:summarize_paths(paths) for name,paths in spike_paths.items()}
+    result={"days":found,"spike_chart":spike_chart}
+    cput(cache_key, result)
+    return result
+
+
+def _premarket_spike_job_key(ticker):
+    return f"{ticker}_premarket_spikes_job_v1"
+
+
+def _premarket_spike_lock_path(ticker):
+    return CACHE / f"{ticker}_premarket_spikes_job_v1.lock"
+
+
+def _run_premarket_spike_job(ticker):
+    try:
+        _compute_premarket_spikes(ticker)
+        cput(_premarket_spike_job_key(ticker), {"status": "complete", "finished_at": time.time()})
+    except Exception as exc:
+        app.logger.exception("Premarket spike history failed for %s", ticker)
+        cput(_premarket_spike_job_key(ticker), {"status": "error",
+                                                "error": f"Premarket history scan failed: {exc}",
+                                                "finished_at": time.time()})
+    finally:
+        try:
+            _premarket_spike_lock_path(ticker).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 @app.route("/api/premarket-spikes")
 def premarket_spikes_api():
     username = (request.args.get("user") or "").strip().lower()
@@ -940,136 +1093,60 @@ def premarket_spikes_api():
     ticker = (request.args.get("ticker") or "").strip().upper()
     if not username or not _db_validate_session(username, token):
         return jsonify({"error": "Session expired. Please sign in again."}), 401
-    if not re.fullmatch(r"[A-Z.-]{1,10}", ticker):
+    if not re.fullmatch(r"[A-Z0-9.-]{1,12}", ticker):
         return jsonify({"error": "Invalid ticker."}), 400
     cache_key = f"{ticker}_premarket_spikes_v6"
+    job_key = _premarket_spike_job_key(ticker)
+    job_state_path = CACHE / f"{job_key}.json"
+    retry = request.args.get("retry") == "1"
+    if retry:
+        try:
+            job_state = cget(job_key, 1800)
+            if isinstance(job_state, dict) and job_state.get("status") == "error":
+                job_state_path.unlink(missing_ok=True)
+        except Exception:
+            pass
     cached = cget(cache_key, 6 * 3600)
-    if cached is not None:
-        if isinstance(cached, dict) and "days" in cached:
-            return jsonify({**cached, "cached": True})
+    if isinstance(cached, dict) and "days" in cached:
+        return jsonify({**cached, "cached": True})
+
+    job_state = cget(job_key, 1800)
+    if isinstance(job_state, dict) and job_state.get("status") == "error":
+        return jsonify({"error": job_state.get("error") or "Premarket history scan failed."}), 502
+    if isinstance(job_state, dict) and job_state.get("status") == "complete":
+        # The result cache may have been evicted independently; queue a rebuild.
+        try:
+            job_state_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+    lock_path = _premarket_spike_lock_path(ticker)
     try:
-        daily = load_daily(ticker)
-        if not daily:
-            return jsonify({"error": "No daily history available."}), 502
-        today = dt.datetime.now(ET).date()
-        today_text = today.isoformat()
-        cutoff = today - dt.timedelta(days=365)
-        daily = [row for row in daily if str(row.get("date") or "") < today_text]
-        splits = load_splits(ticker) or []
-        split_dates = {str(item.get("date")) for item in splits if item.get("date")}
-        candidates = []
-        for index in range(1, len(daily)):
-            row = daily[index]
-            try:
-                day = dt.date.fromisoformat(str(row["date"]))
-                prior_close = float(daily[index - 1].get("c") or 0)
-                high = float(row.get("h") or 0)
-            except (TypeError, ValueError, KeyError):
-                continue
-            if day >= cutoff and row["date"] not in split_dates and prior_close > 0 and high / prior_close - 1 > 0.40:
-                candidates.append(index)
-        if candidates:
-            workers = min(len(_key_pool), max(4, len(candidates)))
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                list(pool.map(_prefetch_minute, [(ticker, index, daily) for index in candidates]))
-        found = []
-        spike_paths = {"price": [], "vwap": [], "dev": [], "twap": [], "dt": [], "spread": [], "active_twap": [], "gap": []}
-        for index in candidates:
-            day = daily[index]["date"]
-            prior_close = float(daily[index - 1].get("c") or 0)
-            try:
-                bars = minute_df(ticker, day)
-                if bars is None or bars.empty or prior_close <= 0:
-                    continue
-                minutes = bars.index.hour * 60 + bars.index.minute
-                premarket = bars[(minutes >= 240) & (minutes < 570)]
-                if premarket.empty:
-                    continue
-                high = float(premarket["h"].max())
-                high_index = premarket["h"].idxmax()
-                typical_price = (premarket["h"] + premarket["l"] + premarket["c"]) / 3
-                dollar_volume = float((typical_price * premarket["v"]).sum())
-                rth = bars[(minutes >= 570) & (minutes < 960)]
-                rth_dollar_volume = 0.0
-                rth_open_gap = None
-                rth_open_high = None
-                rth_open_close = None
-                rth_high_low = None
-                rth_faded = None
-                if not rth.empty:
-                    rth_typical = (rth["h"] + rth["l"] + rth["c"]) / 3
-                    rth_dollar_volume = float((rth_typical * rth["v"]).sum())
-                    rth_open = float(rth.iloc[0]["o"])
-                    rth_close = float(rth.iloc[-1]["c"])
-                    rth_high = float(rth["h"].max())
-                    rth_low = float(rth["l"].min())
-                    if rth_open > 0:
-                        rth_open_gap = (rth_open / prior_close - 1) * 100
-                        rth_open_high = (rth_high / rth_open - 1) * 100
-                        rth_open_close = (rth_close / rth_open - 1) * 100
-                        rth_faded = rth_close < rth_open
-                    if rth_high > 0:
-                        rth_high_low = (rth_low / rth_high - 1) * 100
-                if high / prior_close - 1 > 0.40 and dollar_volume > 10_000_000:
-                    pm_through_high = premarket.loc[:high_index]
-                    pm_high_dollar_volume = float(
-                        (((pm_through_high["h"] + pm_through_high["l"] + pm_through_high["c"]) / 3)
-                         * pm_through_high["v"]).sum()
-                    )
-                    price_path = path_full(bars, prior_close, True)
-                    _, vwap_path, dev_path = vwap_frame_paths(bars, prior_close, True)
-                    twap_height, dt_path, spread_path, active_twap = twap_frame_paths(bars, prior_close, True)
-                    pm_high_minute = int(high_index.hour * 60 + high_index.minute)
-                    spike_gap_path = [None] * 217
-                    gap_size = high / prior_close - 1
-                    for offset in range(-360, 721, 5):
-                        k = (pm_high_minute + offset - PM_START) / 5
-                        if not gap_size or k < 0 or k > len(price_path)-1: continue
-                        left, right = int(math.floor(k)), int(math.ceil(k))
-                        if price_path[left] is None or price_path[right] is None: continue
-                        frac = k-left
-                        spike_gap_path[(offset+360)//5] = round((price_path[left] + (price_path[right]-price_path[left])*frac) / gap_size, 4)
-                    spike_paths["price"].append(price_path)
-                    spike_paths["vwap"].append(vwap_path)
-                    spike_paths["dev"].append(dev_path)
-                    spike_paths["twap"].append(twap_height)
-                    spike_paths["dt"].append(dt_path)
-                    spike_paths["spread"].append(spread_path)
-                    spike_paths["active_twap"].append(active_twap)
-                    spike_paths["gap"].append(spike_gap_path)
-                    found.append({
-                        "date": day,
-                        "pm_high_pct": round((high / prior_close - 1) * 100, 2),
-                        "pm_high_time": high_index.tz_convert(IST).strftime("%H:%M"),
-                        "pm_high_minute_et": pm_high_minute,
-                        "rth_open_gap_pct": round(rth_open_gap, 2) if rth_open_gap is not None else None,
-                        "rth_open_high_pct": round(rth_open_high, 2) if rth_open_high is not None else None,
-                        "rth_open_close_pct": round(rth_open_close, 2) if rth_open_close is not None else None,
-                        "rth_high_low_pct": round(rth_high_low, 2) if rth_high_low is not None else None,
-                        "rth_faded": rth_faded,
-                        "pm_dollar_volume_till_high": round(pm_high_dollar_volume, 2),
-                        "pm_dollar_volume": round(dollar_volume, 2),
-                        "pm_volume": round(float(premarket["v"].sum())),
-                        "rth_to_pm_dollar_volume": round(rth_dollar_volume / dollar_volume, 2) if dollar_volume else None,
-                    })
-            except Exception:
-                continue
-        found.sort(key=lambda item: item["date"], reverse=True)
-        def summarize_paths(paths):
-            if not paths:return {"paths": [], "med": [], "p25": [], "p75": []}
-            medians=[];p25=[];p75=[]
-            for k in range(max(map(len,paths))):
-                values=[path[k] for path in paths if len(path)>k and path[k] is not None and np.isfinite(path[k])]
-                medians.append(round(float(np.percentile(values,50)),4) if values else None)
-                p25.append(round(float(np.percentile(values,25)),4) if values else None)
-                p75.append(round(float(np.percentile(values,75)),4) if values else None)
-            return {"paths":paths,"med":medians,"p25":p25,"p75":p75}
-        spike_chart={name:summarize_paths(paths) for name,paths in spike_paths.items()}
-        result={"days":found,"spike_chart":spike_chart}
-        cput(cache_key, result)
-        return jsonify({**result, "cached": False})
+        lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        try:
+            if time.time() - lock_path.stat().st_mtime > 1800:
+                lock_path.unlink(missing_ok=True)
+                lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            else:
+                return jsonify({"status": "loading", "message": "Loading premarket history from Polygon."}), 202
+        except (FileExistsError, FileNotFoundError):
+            return jsonify({"status": "loading", "message": "Loading premarket history from Polygon."}), 202
+        except OSError as exc:
+            return jsonify({"error": f"Could not coordinate premarket history loading: {exc}"}), 503
+    except OSError as exc:
+        return jsonify({"error": f"Could not start premarket history loading: {exc}"}), 503
+    try:
+        with os.fdopen(lock_fd, "w", encoding="utf-8") as lock_file:
+            lock_file.write(str(time.time()))
+        cput(job_key, {"status": "running", "started_at": time.time()})
+        _premarket_spike_pool.submit(_run_premarket_spike_job, ticker)
     except Exception as exc:
-        return jsonify({"error": f"Premarket history scan failed: {exc}"}), 502
+        try:
+            lock_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return jsonify({"error": f"Could not queue premarket history scan: {exc}"}), 503
+    return jsonify({"status": "loading", "message": "Loading premarket history from Polygon."}), 202
 
 # Load account records only after auth and settings handlers are defined.
 _db_sync_users()

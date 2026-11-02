@@ -1480,15 +1480,40 @@ async function loadPremarketSpikeChart(tab,card,item){
   }
 }
 
-async function loadPremarketSpikeDays(tab,report){
+async function loadPremarketSpikeDays(tab,report,forceRetry=false){
   const ticker=report?.head?.ticker;
   if(!tab.container.querySelector('[data-premarket-spikes]')||!ticker)return;
   if(tab._premarketSpikeLoad)return tab._premarketSpikeLoad;
   const query=new URLSearchParams({ticker,user:currentUser||'',token:sessionToken||''});
-  tab._premarketSpikeLoad=fetch('/api/premarket-spikes?'+query.toString()).then(async response=>{
-    const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load premarket history.');
-    if(tab.result===report)renderPremarketSpikeDays(tab,report,data.days||[],data.spike_chart);
-  }).catch(error=>{if(tab.result===report){const panel=tab.container.querySelector('[data-premarket-spikes]'),status=panel?.querySelector('[data-surge-status]');if(status)status.textContent='Premarket history unavailable: '+error.message;}}).finally(()=>{const stale=tab.result!==report;tab._premarketSpikeLoad=null;if(stale&&tab.result?.head?.ticker===ticker)loadPremarketSpikeDays(tab,tab.result);});
+  if(forceRetry)query.set('retry','1');
+  tab._premarketSpikeLoad=(async()=>{
+    const started=Date.now();let delay=500;
+    try{
+      while(Date.now()-started<15*60*1000){
+        const response=await fetch('/api/premarket-spikes?'+query.toString()),body=await response.text();
+        if(!body.trim())throw new Error(`Premarket history service returned an empty response (HTTP ${response.status}).`);
+        let data;try{data=JSON.parse(body);}catch{throw new Error(`Premarket history service returned invalid data (HTTP ${response.status}).`);}
+        if(response.status===202||data.status==='loading'){
+          const status=tab.container.querySelector('[data-premarket-spikes] [data-surge-status]');
+          if(status&&tab.result===report)status.textContent=data.message||'Loading premarket spike history…';
+          await new Promise(resolve=>setTimeout(resolve,delay));delay=Math.min(3000,Math.round(delay*1.4));
+          continue;
+        }
+        if(!response.ok)throw new Error(data.error||`Could not load premarket history (HTTP ${response.status}).`);
+        if(tab.result===report)renderPremarketSpikeDays(tab,report,data.days||[],data.spike_chart);
+        return;
+      }
+      throw new Error('Premarket history is still loading. Try again shortly.');
+    }catch(error){
+      if(tab.result===report){
+        const status=tab.container.querySelector('[data-premarket-spikes] [data-surge-status]');
+        if(status){status.innerHTML=`Premarket history unavailable: ${esc(error.message)} <button type="button" style="margin-left:8px;border:1px solid #38556b;border-radius:3px;background:#101b23;color:#8ed5ff;padding:3px 8px;cursor:pointer" data-retry-premarket-spikes>Retry</button>`;status.querySelector('[data-retry-premarket-spikes]')?.addEventListener('click',()=>loadPremarketSpikeDays(tab,report,true),{once:true});}
+      }
+    }finally{
+      const stale=tab.result!==report;tab._premarketSpikeLoad=null;
+      if(stale&&tab.result?.head?.ticker===ticker)loadPremarketSpikeDays(tab,tab.result);
+    }
+  })();
   return tab._premarketSpikeLoad;
 }
 
