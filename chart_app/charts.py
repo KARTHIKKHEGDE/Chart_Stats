@@ -1449,7 +1449,7 @@ def sec_dilution_history():
     if asof_date>current_day:
         return jsonify({'error':'As-of date cannot be in the future.'}),400
     today=asof_date.isoformat()
-    cache_key=f'sec_dilution_history_v16_{ticker}_{today}_asof'
+    cache_key=f'sec_dilution_history_v17_{ticker}_{today}_asof'
     cached=cget(cache_key,30*60)
     if cached is not None:
         return jsonify(cached)
@@ -1787,7 +1787,12 @@ def sec_dilution_history():
             "shares count for that test. Do not substitute the vendor trading-float number or display a share count as a dollar float. Calculate non-affiliate public float as non-affiliate shares × the supplied price, using outstanding shares rolled forward for documented later issuances. List each warrant tranche with outstanding quantity (not originally issued), "
             "strike after splits/resets, expiry, exercisable-now status, cashless/pre-funded status, ITM status, required "
             "stockholder approvals, and "
-            "shares/cash possible on the selected date. List each active convertible note/preferred instrument with principal plus "
+            "shares/cash possible on the selected date. For every warrant, audit every recorded reverse split after the warrant's "
+            "issuance or last stated adjustment: use the filing's explicitly post-split terms when available; otherwise adjust the "
+            "pre-split exercise price upward and the underlying share count downward by the exact split ratio. Never double-adjust a "
+            "term already stated after the split. If an anti-dilution clause, reset, or warrant amendment makes the adjustment uncertain, "
+            "report the value as not confirmed and explain why. In the warrant status, state the split basis used, including the original "
+            "disclosed term, applicable split date/ratio, and resulting adjusted term. List each active convertible note/preferred instrument with principal plus "
             "accrued interest, conversion formula, floor/blockers/approval status and shares possible then. Include "
             "the CEO's disclosed common shares beneficially owned and the filing date; exclude unexercised options, unvested awards, "
             "and shares merely issuable. If the filing combines these with owned shares and they cannot be separated, report shares_owned "
