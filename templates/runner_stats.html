@@ -266,12 +266,12 @@ function render(j){
       +'<label style="flex-direction:row;align-items:center;gap:5px;color:#ddd">Sessions <select id="runner_chart_days" style="height:30px"><option value="1">1</option><option value="3">3</option><option value="5" selected>5</option><option value="10">10</option><option value="20">20</option><option value="60">60</option></select></label>'
       +'<label style="flex-direction:row;align-items:center;gap:5px;color:#d7ff6e"><input type="checkbox" id="runner_chart_bz" checked style="width:14px;height:14px"> Bone Zone (9/21 EMA)</label>'
       +'<label style="flex-direction:row;align-items:center;gap:5px;color:#fff"><input type="checkbox" id="runner_chart_vwap" checked style="width:14px;height:14px"> VWAP</label>'
-      +'<label style="flex-direction:row;align-items:center;gap:5px;color:#ff5a5a"><input type="checkbox" id="runner_chart_ema5ext" checked style="width:14px;height:14px"> EMA5 Ext ≥30%</label>'
+      +'<label style="display:inline-flex;flex-direction:row;align-items:center;gap:4px;color:#ff5a5a;font-size:12px;cursor:pointer"><input type="checkbox" id="runner_chart_ema5ext" checked style="width:14px;height:14px"><span>EMA5 Ext ≥</span><input id="runner_chart_ema5ext_val" type="number" min="5" max="300" step="5" value="30" style="width:46px;height:22px;padding:0 3px;background:#0d1117;border:1px solid #ff5a5a;color:#ff8888;font:bold 12px Consolas,monospace;border-radius:3px;text-align:center" title="Extension % threshold above 5m 9-EMA"><span>%</span></label>'
       +'<button id="runner_chart_avwap" class="btn-tool">AVWAP · Select A → B</button><button id="runner_chart_clear_avwap" class="btn-tool">Clear AVWAP</button>'
       +'<button id="runner_chart_measure" class="btn-tool">Measure range</button><button id="runner_chart_pan" class="btn-tool">Pan</button>'
       +'<button id="runner_chart_delete_measure" class="btn-tool">Delete range</button><button id="runner_chart_clear_measures" class="btn-tool">Clear ranges</button>'
       +'<button id="runner_chart_zoom_out" class="btn-tool" title="Zoom out">−</button><button id="runner_chart_zoom_in" class="btn-tool" title="Zoom in">+</button><button id="runner_chart_zoom_reset" class="btn-tool">Reset</button><button id="runner_chart_fullscreen" class="btn-tool">Full screen</button><button id="runner_chart_copy" class="btn-tool">Copy PNG</button></header>'
-      +'<div style="display:flex;gap:14px;flex-wrap:wrap;color:#aab4bf;font-size:11px;padding:4px 2px 8px"><span style="color:#fff">━ VWAP</span><span style="color:#ff5a5a">▼ EMA5 Ext ≥30%</span><span style="color:#ffe45c">AVWAP · set A/B</span><span style="color:#ffd23f">N News</span><span style="color:#62c8ff">S SEC filing</span></div>'
+      +'<div style="display:flex;gap:14px;flex-wrap:wrap;color:#aab4bf;font-size:11px;padding:4px 2px 8px"><span style="color:#fff">━ VWAP</span><span style="color:#ff5a5a">▼ EMA5 Extension</span><span style="color:#ffe45c">AVWAP · set A/B</span><span style="color:#ffd23f">N News</span><span style="color:#62c8ff">S SEC filing</span></div>'
       +'<div id="runner_chart_wrap" style="position:relative;height:540px;min-height:300px;background:#050607;border:1px solid #242b33;overflow:hidden">'
       +'<canvas id="runner_chart_canvas" style="display:block;width:100%;height:100%"></canvas><canvas id="runner_chart_overlay" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas>'
       +'<div id="runner_chart_crosshair_v" hidden style="position:absolute;z-index:4;top:0;width:0;border-left:1px dashed rgba(220,232,244,.75);pointer-events:none"></div><div id="runner_chart_crosshair_h" hidden style="position:absolute;z-index:4;left:0;height:0;border-top:1px dashed rgba(220,232,244,.75);pointer-events:none"></div>'
@@ -530,7 +530,7 @@ function renderRunnerStockChart(){
   cv._marketEvents=state.events||[];cv._floatShares=state.floatShares;
   cv._panOffset=state.panOffset||0;cv._rangeZoom=state.zoom||1;cv._zoom=cv._rangeZoom;cv._yZoom=state.yZoom||1;
   cv._rangeMeasures=state.rangeMeasures||(state.rangeMeasures=[]);cv._selectedRangeId=state.selectedRangeId||null;
-  cv._avwapAnchors=state.avwapAnchors||null;cv._showVWAP=$('runner_chart_vwap').checked;cv._showEMA5Ext=$('runner_chart_ema5ext').checked;
+  cv._avwapAnchors=state.avwapAnchors||null;cv._showVWAP=$('runner_chart_vwap').checked;cv._showEMA5Ext=$('runner_chart_ema5ext').checked;cv._ema5ExtThreshold=Number($('runner_chart_ema5ext_val')?.value)||Number(localStorage.getItem('gap_ema5ext_threshold'))||30;
   cv._showHODAVWAP=false;cv._showCrosshair=true;cv._showOhlcTip=true;cv._renderDpr=2;
   if(!cv._featureControlsBound){
     cv._rangeMeasureMode=false;cv._zoomSelectMode=true;cv._panToolMode=false;cv._avwapSelectMode=false;
@@ -580,6 +580,11 @@ function initChart15(data){
   };
   _chartState=state;$('runner_chart_tf').value=state.timeframe;$('runner_chart_days').value='5';
   $('runner_chart_vwap').checked=true;$('runner_chart_ema5ext').checked=true;$('runner_chart_bz').checked=true;
+  if($('runner_chart_ema5ext_val')){
+    $('runner_chart_ema5ext_val').value=localStorage.getItem('gap_ema5ext_threshold')||'30';
+    const onVal=e=>{e.stopPropagation();const val=Math.max(1,Math.min(500,Number($('runner_chart_ema5ext_val').value)||30));try{localStorage.setItem('gap_ema5ext_threshold',String(val));}catch{}renderRunnerStockChart();};
+    $('runner_chart_ema5ext_val').onchange=onVal;$('runner_chart_ema5ext_val').oninput=onVal;$('runner_chart_ema5ext_val').onclick=e=>e.stopPropagation();
+  }
   loadRunnerStockChartContext(state);
   $('runner_chart_tf').onchange=()=>{
     const previous=state.timeframe;state.timeframe=$('runner_chart_tf').value;

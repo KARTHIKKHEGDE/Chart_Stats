@@ -230,6 +230,22 @@ function bindUnifiedChartFeatures(cv,ui,persist,redraw){
   ui.reset.onclick=()=>{cv._rangeZoom=1;cv._zoom=1;cv._panOffset=0;cv._yZoom=1;cv._featurePersist?.();cv._featureRedraw?.();};
   ui.copy.onclick=async()=>{try{await copyChartWithOverlays(cv,ui.overlay,ui.measureBox);ui.copy.textContent='Copied ✓';setTimeout(()=>ui.copy.textContent='Copy PNG',1200);}catch(error){ui.status.textContent='PNG copy unavailable: '+error.message;}};
   [ui.vwap,ui.twap,ui.ema5ext].forEach((toggle,index)=>toggle?.addEventListener('change',()=>{if(index===0)cv._showVWAP=toggle.checked;else if(index===1)cv._showTWAP=toggle.checked;else cv._showEMA5Ext=toggle.checked;cv._featurePersist?.();cv._featureRedraw?.();}));
+  if(ui.ema5extVal){
+    const saved = localStorage.getItem('gap_ema5ext_threshold') || '30';
+    ui.ema5extVal.value = String(cv._ema5ExtThreshold || saved);
+    cv._ema5ExtThreshold = Number(ui.ema5extVal.value) || 30;
+    const onVal = e => {
+      e.stopPropagation();
+      const val = Math.max(1, Math.min(500, Number(ui.ema5extVal.value) || 30));
+      cv._ema5ExtThreshold = val;
+      try { localStorage.setItem('gap_ema5ext_threshold', String(val)); } catch{}
+      cv._featurePersist?.();
+      cv._featureRedraw?.();
+    };
+    ui.ema5extVal.onchange = onVal;
+    ui.ema5extVal.oninput = onVal;
+    ui.ema5extVal.onclick = e => e.stopPropagation();
+  }
 }
 async function copyChartWithOverlays(cv,overlay,measureBox){
   const width=Math.max(1,cv.clientWidth),height=Math.max(1,cv.clientHeight),out=document.createElement('canvas');out.width=cv.width;out.height=cv.height;
@@ -249,7 +265,7 @@ function chartFeatureUi(prefix){
     status:by('_status','_avwap_status'),measure:by('_measure'),pan:by('_pan'),avwap:by('_avwap'),
     clearAvwap:by('_clear_avwap'),deleteMeasure:by('_delete_measure'),clearMeasures:by('_clear_measures'),
     zoomIn:by('_zoom_in'),zoomOut:by('_zoom_out'),reset:by('_zoom_reset','_reset'),
-    copy:by('_copy'),vwap:by('_vwap'),twap:by('_twap'),ema5ext:by('_ema5ext')
+    copy:by('_copy'),vwap:by('_vwap'),twap:by('_twap'),ema5ext:by('_ema5ext'),ema5extVal:by('_ema5ext_val')
   };
 }
 function cancelUnifiedChartSelection(cv,ui={}){
@@ -472,51 +488,58 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
     }
     x.restore();
   }
-  // ---- EMA5 Extension indicator (Thinkorswim: 5m 9-EMA, 30% threshold) ----
+  // ---- EMA5 Extension indicator (Thinkorswim: 5m 9-EMA, user-editable threshold) ----
   let extData = null; cv._extData = null;
   if(!daily && cv._showEMA5Ext !== false){
-    const ema5tf = 5, emaLen = 9, extThreshold = 30.0, alpha = 2 / (emaLen + 1);
-    // 5m aggregation of source bars
-    let fiveBars;
-    if(tf === 5){
-      fiveBars = b;
-    } else if(c.bars?._fiveBars && c.bars._fiveBarsSource === c.bars){
-      fiveBars = c.bars._fiveBars;
-    } else {
-      fiveBars = aggregateEvBars(c.bars || b, 5);
-      if(c.bars){ c.bars._fiveBars = fiveBars; c.bars._fiveBarsSource = c.bars; }
+    const defaultThreshold = 30.0;
+    let userThresh = Number(cv._ema5ExtThreshold);
+    if(!Number.isFinite(userThresh) || userThresh <= 0){
+      try {
+        const saved = localStorage.getItem('gap_ema5ext_threshold');
+        if(saved) userThresh = Number(saved);
+      } catch{}
     }
-    // Compute 9-EMA on 5m close across sessions
-    const ema5map = new Map();
+    const extThreshold = Number.isFinite(userThresh) && userThresh > 0 ? userThresh : defaultThreshold;
+
+    // Group all candles into chronological 5-minute buckets per session day
+    const bucketMap = new Map();
+    const bucketList = [];
+    for(let i = 0; i < b.t.length; i++){
+      const day = b.d?.[i] || c.date || '';
+      const dayIndex = multi ? dates.indexOf(day) : -1;
+      const minute = daily ? 0 : b.t[i] - (dayIndex >= 0 ? dayIndex * sessionSpan : 0);
+      const bucket5 = Math.floor(minute / 5) * 5;
+      const key = day + '|' + bucket5;
+      if(!bucketMap.has(key)){
+        const item = { key, day, bucket5, close: b.c[i] };
+        bucketMap.set(key, item);
+        bucketList.push(item);
+      } else {
+        bucketMap.get(key).close = b.c[i];
+      }
+    }
+
+    // Compute 9-period EMA on 5m close across all sessions
+    const alpha = 2 / (9 + 1); // 0.2
     let emaVal = null;
-    if(fiveBars && fiveBars.t && fiveBars.t.length){
-      for(let i = 0; i < fiveBars.t.length; i++){
-        const day5 = fiveBars.d?.[i] || c.date || '';
-        const cl5 = fiveBars.c[i];
-        if(emaVal == null) emaVal = cl5;
-        else emaVal = alpha * cl5 + (1 - alpha) * emaVal;
-        ema5map.set(day5 + '|' + fiveBars.t[i], emaVal);
-      }
+    const ema5Map = new Map();
+    for(let j = 0; j < bucketList.length; j++){
+      const cl = bucketList[j].close;
+      if(emaVal == null) emaVal = cl;
+      else emaVal = alpha * cl + (1 - alpha) * emaVal;
+      ema5Map.set(bucketList[j].key, emaVal);
     }
-    const getEmaVal = (day, minute) => {
-      const bucket = Math.floor(minute / ema5tf) * ema5tf;
-      const exact = ema5map.get(day + '|' + bucket);
-      if(exact != null) return exact;
-      // Search nearest preceding 5m bucket for the same day
-      for(let m = bucket - ema5tf; m >= 0; m -= ema5tf){
-        const val = ema5map.get(day + '|' + m);
-        if(val != null) return val;
-      }
-      return null;
-    };
+
     // Calculate extHigh, dayMax, sig per chart bar
     extData = new Array(b.t.length); cv._extData = extData;
     let curDay = '', curDayMax = -Infinity;
     for(let i = 0; i < b.t.length; i++){
       const day = b.d?.[i] || c.date || '';
-      const minute = multi ? (b.t[i] - Math.max(0, dates.indexOf(day)) * sessionSpan) : b.t[i];
+      const dayIndex = multi ? dates.indexOf(day) : -1;
+      const minute = daily ? 0 : b.t[i] - (dayIndex >= 0 ? dayIndex * sessionSpan : 0);
+      const bucket5 = Math.floor(minute / 5) * 5;
       if(day !== curDay){ curDay = day; curDayMax = -Infinity; }
-      const ema = getEmaVal(day, minute);
+      const ema = ema5Map.get(day + '|' + bucket5);
       if(ema != null && ema > 0){
         const extHigh = (b.h[i] - ema) / ema * 100;
         curDayMax = Math.max(curDayMax, extHigh);
@@ -526,19 +549,10 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
         extData[i] = null;
       }
     }
-    // 1) AssignBackgroundColor(if sig then Color.DARK_RED else Color.CURRENT)
-    clipP();
-    x.fillStyle = 'rgba(160, 20, 20, 0.28)';
-    const slotW = pw / (viewSpan / tf);
-    for(let i = 0; i < b.t.length; i++){
-      if(b.t[i] < viewStart - tf || b.t[i] > viewStart + viewSpan + tf) continue;
-      if(extData[i]?.sig){
-        const xx = X(b.t[i] + tf / 2);
-        x.fillRect(xx - slotW / 2, T, slotW, ph);
-      }
-    }
-    x.restore();
-    // 2) plot Arrow = sig and !sig[1]; + AddChartBubble(sig, high, Round(extHigh, 0) + "%", Color.RED, yes);
+
+    // Plot signals above candle ONLY (no red background):
+    // Arrow = sig and !sig[1] (RED down arrow)
+    // AddChartBubble(sig, high, Round(extHigh, 0) + "%", Color.RED, yes)
     clipP();
     let prevSig = false;
     for(let i = 0; i < b.t.length; i++){
@@ -589,10 +603,10 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
       prevSig = sig;
     }
     x.restore();
-    // 4) AddLabel(yes, "Ext: " + Round(extHigh, 1) + "%  |  Day max: " + Round(dayMax, 1) + "%", if sig then Color.RED else Color.GRAY);
+
+    // Top-left live readout label (Thinkorswim AddLabel)
     let targetIdx = cv._activeHoverIndex;
     if(targetIdx == null || !extData[targetIdx]){
-      // Default to latest visible bar with extData
       for(let i = b.t.length - 1; i >= 0; i--){
         if(b.t[i] <= viewStart + viewSpan && extData[i]){
           targetIdx = i;
@@ -602,7 +616,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
     }
     if(targetIdx != null && extData[targetIdx]){
       const ed = extData[targetIdx], isSig = ed.sig;
-      const labelText = `Ext: ${ed.extHigh >= 0 ? '+' : ''}${ed.extHigh.toFixed(1)}%  |  Day max: ${ed.dayMax >= 0 ? '+' : ''}${ed.dayMax.toFixed(1)}%`;
+      const labelText = `Ext: ${ed.extHigh >= 0 ? '+' : ''}${ed.extHigh.toFixed(1)}%  |  Day max: ${ed.dayMax >= 0 ? '+' : ''}${ed.dayMax.toFixed(1)}% (≥${extThreshold}%)`;
       x.font = 'bold 11px Consolas,monospace';
       const lw = x.measureText(labelText).width + 16, lh = 20, lx = L + 8, ly = T + 6;
       x.fillStyle = isSig ? 'rgba(130, 15, 15, 0.94)' : 'rgba(10, 14, 20, 0.88)';
