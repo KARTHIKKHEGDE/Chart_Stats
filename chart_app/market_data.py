@@ -434,6 +434,30 @@ def live_snapshot(t):
             "latest_time_ist": df.index[-1].astimezone(IST).strftime("%H:%M IST")}
 
 
+def yahoo_recent_live_bars(ticker, minutes=20):
+    """Return Yahoo 1-minute bars for the recent live window, when available."""
+    try:
+        import yfinance as yf
+        frame=yf.Ticker(str(ticker).upper().replace('.', '-')).history(
+            period='1d',interval='1m',prepost=True,auto_adjust=False,actions=False)
+        if frame is None or frame.empty:
+            return None
+        if frame.index.tz is None:
+            return None
+        frame.index=frame.index.tz_convert(ET)
+        frame=frame.rename(columns={'Open':'o','High':'h','Low':'l','Close':'c','Volume':'v'})
+        frame=frame[['o','h','l','c','v']].dropna(subset=['o','h','l','c']).astype(float)
+        today=dt.datetime.now(ET).date()
+        frame=frame[frame.index.date==today]
+        if frame.empty:
+            return None
+        cutoff=dt.datetime.now(ET)-dt.timedelta(minutes=max(1,int(minutes)))
+        recent=frame[frame.index>=cutoff]
+        return recent if not recent.empty else None
+    except Exception:
+        return None
+
+
 def latest_security_stats(t, force=False):
     """Fetch recent float and shares-outstanding metadata for the current report.
 

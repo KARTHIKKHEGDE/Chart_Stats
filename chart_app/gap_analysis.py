@@ -545,8 +545,22 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     # ---- [6] per-event 2-min charts (today first)
     evch = []
     if live["df"] is not None and len(live["df"]):
-        evch.append({"title": f"TODAY {day_str}  gap {pct(gap_live, 0)}  (live)", "date": day_str, "sim": True,
-                     "chart": chart_pack(live["df"], lm, pc, day_obj, fl_now)})
+        today_chart_df=live["df"].copy()
+        chart_source='Polygon/history + Yahoo recent bars'
+        try:
+            from chart_app.market_data import yahoo_recent_live_bars
+            yahoo_recent=yahoo_recent_live_bars(t)
+            if yahoo_recent is not None and not yahoo_recent.empty:
+                yahoo_recent=yahoo_recent[yahoo_recent.index.date==day_obj]
+                if not yahoo_recent.empty:
+                    cutoff=yahoo_recent.index.min()
+                    today_chart_df=today_chart_df[today_chart_df.index<cutoff]
+                    today_chart_df=pd.concat([today_chart_df,yahoo_recent]).sort_index()
+                    today_chart_df=today_chart_df[~today_chart_df.index.duplicated(keep='last')]
+        except Exception:
+            pass
+        evch.append({"title": f"TODAY {day_str}  gap {pct(gap_live, 0)}  (live · {chart_source})", "date": day_str, "sim": True,
+                     "chart": chart_pack(today_chart_df, lm, pc, day_obj, fl_now)})
     for i, e in enumerate(events, 1):
         evch.append({"title": f"#{i}  {fdate(e['date'])}  gap {pct(e['gap'], 0)}  O→C {pct(e['o2c'], 0)}", "date": e["date"],
                      "sim": id(e) in simset, "chart": e["chart"]})
