@@ -1449,7 +1449,7 @@ def sec_dilution_history():
     if asof_date>current_day:
         return jsonify({'error':'As-of date cannot be in the future.'}),400
     today=asof_date.isoformat()
-    cache_key=f'sec_dilution_history_v15_{ticker}_{today}_asof'
+    cache_key=f'sec_dilution_history_v16_{ticker}_{today}_asof'
     cached=cget(cache_key,30*60)
     if cached is not None:
         return jsonify(cached)
@@ -1471,7 +1471,7 @@ def sec_dilution_history():
         all_filings=sorted((item for item in _gap_deepdive_sec_filings(ticker)
                             if item.get('filing_date') and item.get('filing_date')<=today),
                            key=lambda item:item.get('filing_date',''),reverse=True)
-        likely=re.compile(r'offering|warrant|convertible|dilut|at.the.market|\bATM\b|equity line|shelf|resale|registered direct|private placement|purchase agreement|securities purchase|prospectus|financing|authorized shares|reverse split|sales agreement|subscription agreement|note purchase',re.I)
+        likely=re.compile(r'offering|warrant|convertible|dilut|at.the.market|\bATM\b|equity line|shelf|resale|registered direct|private placement|purchase agreement|securities purchase|prospectus|financing|authorized shares|reverse split|sales agreement|subscription agreement|note purchase|going concern|substantial doubt|liquidity|cash equivalents|extension|rights?',re.I)
         offering_form=re.compile(r'^(?:S-1|S-3|F-1|F-3|424B[1-7]|EFFECT|RW|POS AM|POSASR)(?:/A)?$',re.I)
         periodic_form=re.compile(r'^(?:10-K|10-Q|20-F)$',re.I)
         candidates=[item for item in all_filings if offering_form.search(str(item.get('form') or '')) or likely.search(str(item.get('title') or ''))]
@@ -1525,7 +1525,10 @@ def sec_dilution_history():
                      r'exercisable|expiration date',r'authorized shares?|reserved shares?',
                      r'19\.99|4\.99|9\.99',r'public float|non-affiliates?|one-third',
                      r'securities sold|shares issued|exercised|converted',r'shelf registration',
-                     r'equity line|purchase agreement|subscription agreement')
+                     r'equity line|purchase agreement|subscription agreement',
+                     r'going concern|substantial doubt|continue as a going concern',
+                     r'cash and cash equivalents|working capital|liquidity|operating cash flows?',
+                     r'extension|termination date|combination period',r'rights?')
             spans=[(0,min(len(text),900))]
             for pattern in patterns:
                 matches=list(re.finditer(pattern,text,re.I))
@@ -1801,13 +1804,23 @@ def sec_dilution_history():
             "Return active shelf registrations separately from ATMs: identify registered capacity, primary amount sold, "
             "remaining capacity, effective/expiration dates, and whether the shelf is currently usable. For every active ATM, calculate dollar capacity as the minimum of verified program remaining, applicable shelf remaining, and applicable baby-shelf remaining limit, then divide that capacity by the selected-date closing price for shares possible. Use only confirmed limits and say when any limit is unknown. If a shelf has an effective date "
             "but no stated expiration, calculate the Rule 415(a)(5) three-year date and label it calculated. Do not add overlapping "
-            "shelf registrations together. Also return three evidence-based qualitative risk signals: offering, overhang, and dilution_history. "
+            "shelf registrations together. Also return four evidence-based qualitative risk signals: offering, overhang, dilution_history, and financial. "
             "Use levels low/moderate/high/severe/not_confirmed, with a short explanation and source IDs. For overhang, compare confirmed active "
             "issuable shares with shares outstanding: >=50% severe, >=25% high, >=10% moderate, otherwise low; do not treat "
             "shelf capacity as active issuable shares. For dilution_history, use the number and scale of confirmed primary "
             "dilution events in the trailing 24 months; do not rate from registration filings alone. For offering, explain "
             "whether a live ATM/equity line or effective usable shelf is supported by evidence. These are this report's "
             "qualitative signals, not a Finviz score; use not_confirmed when evidence is insufficient. "
+            "Financial is separate from dilution: assess going-concern disclosures, management's substantial-doubt language, "
+            "cash and liquidity, working capital, operating cash burn, debt maturities, and reliance on extension financing. "
+            "Do not lower financial risk merely because no ATM is active. If management discloses substantial doubt about "
+            "continuing as a going concern, financial risk must be high or severe unless a later filing available by the selected "
+            "date explicitly resolves that doubt; cite both sources if relying on a resolution. "
+            "Reconcile promissory notes and related-party balances across periodic reports and later 8-Ks: list the latest "
+            "confirmed aggregate outstanding balance, identify additions, repayments, conversions, or amounts that cannot be reconciled, "
+            "and never substitute only the newest note for the earlier outstanding balance. For rights, state the conversion ratio and "
+            "calculate potential shares only when the outstanding-rights count is confirmed. For extensions, distinguish the maximum "
+            "shareholder-authorized deadline from the currently funded deadline and label each clearly. "
             "Use the selected as-of date on every market number. Estimate a practical one-day ATM amount using "
             "10-25% of ADTV only as an explicitly labeled assumption, subject to actual contractual/Reg M limits. "
             "Compute active shares as exercisable/convertible on the selected date plus ATM shares possible as of then; show contingent "
@@ -1829,7 +1842,7 @@ def sec_dilution_history():
             "{instrument, principal_and_interest, amount_as_of, conversion_terms, blockers, shares_today, status, source_ids}), "
             "active_shelves (array of {name, status, registered_amount, sold, remaining, remaining_as_of, effective_date, "
             "expiration_date, currently_usable, source_ids}), "
-            "risk_signals ({offering, overhang, dilution_history}, each {level, basis, source_ids}), "
+            "risk_signals ({offering, overhang, dilution_history, financial}, each {level, basis, source_ids}), "
             "ceo_ownership ({name, shares_owned, shares_as_of, source_ids}; shares_owned must be an exact number or null), "
             "active_participants (array of {name, role, related_instrument, involvement_as_of, source_ids}), "
             "major_warrant_holders (array of {name, related_tranche, warrants_held, percent_of_outstanding, ownership_as_of, source_ids}), "
@@ -1966,7 +1979,7 @@ def sec_dilution_history():
                                    'source_ids':row.get('source_ids') or []})
         raw_risk_signals=analysis.get('risk_signals') if isinstance(analysis.get('risk_signals'),dict) else {}
         risk_signals={}
-        for category in ('offering','overhang','dilution_history'):
+        for category in ('offering','overhang','dilution_history','financial'):
             item=raw_risk_signals.get(category) if isinstance(raw_risk_signals.get(category),dict) else {}
             risk_signals[category]={'level':str(item.get('level') or 'not_confirmed').strip().lower(),
                                     'basis':str(item.get('basis') or 'Evidence not confirmed.').strip(),
