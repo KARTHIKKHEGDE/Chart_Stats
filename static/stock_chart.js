@@ -538,25 +538,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
       }
     }
     x.restore();
-    // 2) plot EMA5 = ema; (Color.ORANGE, LineWeight 2)
-    clipP();
-    x.strokeStyle = '#ff9f43';
-    x.lineWidth = isLarge ? 2.2 : 1.6;
-    x.beginPath();
-    let on = false, lastDayE = '';
-    for(let i = 0; i < b.t.length; i++){
-      if(b.t[i] < viewStart - tf || b.t[i] > viewStart + viewSpan + tf){ on = false; continue; }
-      const ed = extData[i];
-      if(!ed){ on = false; continue; }
-      const day = b.d?.[i] || c.date || '';
-      if(day !== lastDayE){ on = false; lastDayE = day; }
-      const xx = X(b.t[i] + tf / 2), yy = Y(Math.min(hi, Math.max(lo, ed.ema)));
-      if(!on){ x.moveTo(xx, yy); on = true; } else x.lineTo(xx, yy);
-    }
-    x.stroke();
-    x.lineWidth = 1;
-    x.restore();
-    // 3) plot Arrow = sig and !sig[1]; + AddChartBubble(sig, high, Round(extHigh, 0) + "%", Color.RED, yes);
+    // 2) plot Arrow = sig and !sig[1]; + AddChartBubble(sig, high, Round(extHigh, 0) + "%", Color.RED, yes);
     clipP();
     let prevSig = false;
     for(let i = 0; i < b.t.length; i++){
