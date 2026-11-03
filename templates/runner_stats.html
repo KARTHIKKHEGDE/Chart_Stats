@@ -266,12 +266,12 @@ function render(j){
       +'<label style="flex-direction:row;align-items:center;gap:5px;color:#ddd">Sessions <select id="runner_chart_days" style="height:30px"><option value="1">1</option><option value="3">3</option><option value="5" selected>5</option><option value="10">10</option><option value="20">20</option><option value="60">60</option></select></label>'
       +'<label style="flex-direction:row;align-items:center;gap:5px;color:#d7ff6e"><input type="checkbox" id="runner_chart_bz" checked style="width:14px;height:14px"> Bone Zone (9/21 EMA)</label>'
       +'<label style="flex-direction:row;align-items:center;gap:5px;color:#fff"><input type="checkbox" id="runner_chart_vwap" checked style="width:14px;height:14px"> VWAP</label>'
-      +'<label style="flex-direction:row;align-items:center;gap:5px;color:#c084fc"><input type="checkbox" id="runner_chart_twap" style="width:14px;height:14px"> TWAP</label>'
+      +'<label style="flex-direction:row;align-items:center;gap:5px;color:#ff9f43"><input type="checkbox" id="runner_chart_ema5ext" checked style="width:14px;height:14px"> EMA5 Ext ≥30%</label>'
       +'<button id="runner_chart_avwap" class="btn-tool">AVWAP · Select A → B</button><button id="runner_chart_clear_avwap" class="btn-tool">Clear AVWAP</button>'
       +'<button id="runner_chart_measure" class="btn-tool">Measure range</button><button id="runner_chart_pan" class="btn-tool">Pan</button>'
       +'<button id="runner_chart_delete_measure" class="btn-tool">Delete range</button><button id="runner_chart_clear_measures" class="btn-tool">Clear ranges</button>'
       +'<button id="runner_chart_zoom_out" class="btn-tool" title="Zoom out">−</button><button id="runner_chart_zoom_in" class="btn-tool" title="Zoom in">+</button><button id="runner_chart_zoom_reset" class="btn-tool">Reset</button><button id="runner_chart_fullscreen" class="btn-tool">Full screen</button><button id="runner_chart_copy" class="btn-tool">Copy PNG</button></header>'
-      +'<div style="display:flex;gap:14px;flex-wrap:wrap;color:#aab4bf;font-size:11px;padding:4px 2px 8px"><span style="color:#fff">━ VWAP</span><span style="color:#c084fc">━ TWAP</span><span style="color:#ffe45c">AVWAP · set A/B</span><span style="color:#ffd23f">N News</span><span style="color:#62c8ff">S SEC filing</span></div>'
+      +'<div style="display:flex;gap:14px;flex-wrap:wrap;color:#aab4bf;font-size:11px;padding:4px 2px 8px"><span style="color:#fff">━ VWAP</span><span style="color:#ff9f43">━ 5m 9-EMA</span><span style="color:#ff5a5a">▼ EMA5 Ext ≥30%</span><span style="color:#ffe45c">AVWAP · set A/B</span><span style="color:#ffd23f">N News</span><span style="color:#62c8ff">S SEC filing</span></div>'
       +'<div id="runner_chart_wrap" style="position:relative;height:540px;min-height:300px;background:#050607;border:1px solid #242b33;overflow:hidden">'
       +'<canvas id="runner_chart_canvas" style="display:block;width:100%;height:100%"></canvas><canvas id="runner_chart_overlay" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas>'
       +'<div id="runner_chart_crosshair_v" hidden style="position:absolute;z-index:4;top:0;width:0;border-left:1px dashed rgba(220,232,244,.75);pointer-events:none"></div><div id="runner_chart_crosshair_h" hidden style="position:absolute;z-index:4;left:0;height:0;border-top:1px dashed rgba(220,232,244,.75);pointer-events:none"></div>'
@@ -530,7 +530,7 @@ function renderRunnerStockChart(){
   cv._marketEvents=state.events||[];cv._floatShares=state.floatShares;
   cv._panOffset=state.panOffset||0;cv._rangeZoom=state.zoom||1;cv._zoom=cv._rangeZoom;cv._yZoom=state.yZoom||1;
   cv._rangeMeasures=state.rangeMeasures||(state.rangeMeasures=[]);cv._selectedRangeId=state.selectedRangeId||null;
-  cv._avwapAnchors=state.avwapAnchors||null;cv._showVWAP=$('runner_chart_vwap').checked;cv._showTWAP=$('runner_chart_twap').checked;
+  cv._avwapAnchors=state.avwapAnchors||null;cv._showVWAP=$('runner_chart_vwap').checked;cv._showEMA5Ext=$('runner_chart_ema5ext').checked;
   cv._showHODAVWAP=false;cv._showCrosshair=true;cv._showOhlcTip=true;cv._renderDpr=2;
   if(!cv._featureControlsBound){
     cv._rangeMeasureMode=false;cv._zoomSelectMode=true;cv._panToolMode=false;cv._avwapSelectMode=false;
@@ -579,7 +579,7 @@ function initChart15(data){
     floatShares:Number(data.float_val)||null,panOffset:0,zoom:1,yZoom:1,rangeMeasures:[],selectedRangeId:null,avwapAnchors:null,loading:false
   };
   _chartState=state;$('runner_chart_tf').value=state.timeframe;$('runner_chart_days').value='5';
-  $('runner_chart_vwap').checked=true;$('runner_chart_twap').checked=false;$('runner_chart_bz').checked=true;
+  $('runner_chart_vwap').checked=true;$('runner_chart_ema5ext').checked=true;$('runner_chart_bz').checked=true;
   loadRunnerStockChartContext(state);
   $('runner_chart_tf').onchange=()=>{
     const previous=state.timeframe;state.timeframe=$('runner_chart_tf').value;
@@ -588,7 +588,7 @@ function initChart15(data){
     loadRunnerStockChartContext(state);
   };
   $('runner_chart_days').onchange=()=>{state.days=Number($('runner_chart_days').value);state.panOffset=0;state.zoom=1;loadRunnerStockChartContext(state);};
-  ['runner_chart_bz','runner_chart_vwap','runner_chart_twap'].forEach(id=>$(id).onchange=renderRunnerStockChart);
+  ['runner_chart_bz','runner_chart_vwap','runner_chart_ema5ext'].forEach(id=>$(id).onchange=renderRunnerStockChart);
   $('runner_chart_fullscreen').onclick=async()=>{const section=$('c15section');try{if(document.fullscreenElement)await document.exitFullscreen();else await section.requestFullscreen();}catch(error){$('runner_chart_status').textContent=`Could not enter full screen: ${error.message}`;}};
   if(!window._runnerChartFullscreenBound){window._runnerChartFullscreenBound=true;document.addEventListener('fullscreenchange',()=>{const button=$('runner_chart_fullscreen');if(button)button.textContent=document.fullscreenElement?'Exit full screen':'Full screen';renderRunnerStockChart();});}
   if(!window._runnerChartResizeBound){window._runnerChartResizeBound=true;window.addEventListener('resize',renderRunnerStockChart);}

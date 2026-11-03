@@ -229,7 +229,7 @@ function bindUnifiedChartFeatures(cv,ui,persist,redraw){
   cv._wheelZoomMore=(ratio,direction=-1)=>{const geometry=cv._rangeGeometry;if(!geometry)return;const rawZoom=(cv._rangeZoom||1)*Math.exp(direction*.18),minZoom=geometry.baseViewSpan/geometry.span,anchor=geometry.viewStart+ratio*geometry.viewSpan;if(rawZoom<minZoom-1e-6&&cv._onZoomOutMore){const requestedSessions=Math.ceil(geometry.baseViewSpan/rawZoom)+1;Promise.resolve(cv._onZoomOutMore(requestedSessions)).then(added=>{if(added){cv._wheelZoomMore(ratio,direction);return;}const zoom=minZoom,nextSpan=Math.min(geometry.span,geometry.baseViewSpan/zoom);setGapDeepDiveZoomView(cv,geometry,zoom,anchor-ratio*nextSpan);cv._gapDeepDiveRedraw?.();}).catch(()=>{});return;}const zoom=Math.max(minZoom,Math.min(24,rawZoom)),nextSpan=Math.min(geometry.span,geometry.baseViewSpan/zoom);setGapDeepDiveZoomView(cv,geometry,zoom,anchor-ratio*nextSpan);cv._gapDeepDiveRedraw?.();};
   ui.reset.onclick=()=>{cv._rangeZoom=1;cv._zoom=1;cv._panOffset=0;cv._yZoom=1;cv._featurePersist?.();cv._featureRedraw?.();};
   ui.copy.onclick=async()=>{try{await copyChartWithOverlays(cv,ui.overlay,ui.measureBox);ui.copy.textContent='Copied ✓';setTimeout(()=>ui.copy.textContent='Copy PNG',1200);}catch(error){ui.status.textContent='PNG copy unavailable: '+error.message;}};
-  [ui.vwap,ui.twap].forEach((toggle,index)=>toggle.onchange=()=>{if(index===0)cv._showVWAP=toggle.checked;else cv._showTWAP=toggle.checked;cv._featurePersist?.();cv._featureRedraw?.();});
+  [ui.vwap,ui.twap,ui.ema5ext].forEach((toggle,index)=>toggle?.addEventListener('change',()=>{if(index===0)cv._showVWAP=toggle.checked;else if(index===1)cv._showTWAP=toggle.checked;else cv._showEMA5Ext=toggle.checked;cv._featurePersist?.();cv._featureRedraw?.();}));
 }
 async function copyChartWithOverlays(cv,overlay,measureBox){
   const width=Math.max(1,cv.clientWidth),height=Math.max(1,cv.clientHeight),out=document.createElement('canvas');out.width=cv.width;out.height=cv.height;
@@ -249,7 +249,7 @@ function chartFeatureUi(prefix){
     status:by('_status','_avwap_status'),measure:by('_measure'),pan:by('_pan'),avwap:by('_avwap'),
     clearAvwap:by('_clear_avwap'),deleteMeasure:by('_delete_measure'),clearMeasures:by('_clear_measures'),
     zoomIn:by('_zoom_in'),zoomOut:by('_zoom_out'),reset:by('_zoom_reset','_reset'),
-    copy:by('_copy'),vwap:by('_vwap'),twap:by('_twap')
+    copy:by('_copy'),vwap:by('_vwap'),twap:by('_twap'),ema5ext:by('_ema5ext')
   };
 }
 function cancelUnifiedChartSelection(cv,ui={}){
@@ -318,14 +318,14 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
   cv._hoverItems=visible.map(i=>{const day=b.d?.[i]||c.date||'',dayIndex=multi?dates.indexOf(day):-1,minute=daily?0:b.t[i]-(dayIndex>=0?dayIndex*sessionSpan:0);return {key:`${day}|${b.t[i]}`,index:i,date:day,minute,x:X(b.t[i]+(daily?.5:tf/2)),label:daily?`${istFromEasternClock(day,0).split(' ')[0]} · Daily IST`:istFromEasternClock(day,minute),o:b.o[i],h:b.h[i],l:b.l[i],c:b.c[i],prevC:i>0?b.c[i-1]:c.pc,v:b.v[i]||0};});
   cv._rangePointAt=(px,py)=>{if(px<L||px>W-R||py<T||py>T+ph)return null;const plotTime=viewStart+(px-L)/pw*viewSpan,price=hi-(py-T)/ph*(hi-lo);let date=c.date||'',minute=plotTime;if(daily){const index=Math.max(0,Math.min(b.d.length-1,Math.round(plotTime)));date=b.d?.[index]||date;minute=0;}else if(multi){const index=Math.max(0,Math.min(dates.length-1,Math.floor((plotTime-240)/sessionSpan)));date=dates[index]||date;minute=plotTime-index*sessionSpan;}return {date,minute,plotTime,price,label:daily?`${formatDateMDY(date)} · Daily IST`:istFromEasternClock(date,minute)};};
   cv._rangePointAtX=px=>{const p=cv._hoverItems?.reduce((best,item)=>Math.abs(item.x-px)<Math.abs(best.x-px)?item:best,cv._hoverItems?.[0]);return p?{date:p.date,minute:p.minute,price:p.c,label:p.label}:null;};
-  cv._showChartHover=(px,py)=>{const readout=cv._hoverTimeReadout;if(px<L||px>W-R||!cv._hoverItems?.length){if(cv._hoverTip)cv._hoverTip.style.display='none';if(readout)readout.textContent='Hover a candle to see its time · IST';return}let item=cv._hoverItems.reduce((best,p)=>Math.abs(p.x-px)<Math.abs(best.x-px)?p:best,cv._hoverItems[0]);const fmt=n=>Number.isFinite(Number(n))?Number(n).toFixed(Number(n)<1?4:2):'—',ohlc=`O ${fmt(item.o)}  H ${fmt(item.h)}  L ${fmt(item.l)}  C ${fmt(item.c)}  V ${Number(item.v||0).toLocaleString('en-US')}`,bottomOhlc=!!(cv._showOhlcTip&&readout&&cv.id!=='kwModalCanvas');if(readout)readout.textContent=bottomOhlc?`${item.label} · ${ohlc}`:item.label;const tip=cv._hoverTip;if(!tip)return;tip.textContent=cv._showOhlcTip?`O ${fmt(item.o)}  H ${fmt(item.h)}\nL ${fmt(item.l)}  C ${fmt(item.c)}  V ${Number(item.v||0).toLocaleString('en-US')}`:'';tip.style.whiteSpace=cv._showOhlcTip?'pre-line':'nowrap';tip.style.display=cv._showOhlcTip&&!bottomOhlc?'block':'none';if(cv._quoteLine){const change=item.c-Number(item.prevC||0),pct=item.prevC?change/Number(item.prevC)*100:0,tp=(item.h+item.l+item.c)/3,dv=tp*item.v,float=Number(cv._floatShares),compact=n=>Number.isFinite(n)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(n):'—',money=n=>Number.isFinite(n)?(Math.abs(n)>=1000?'$'+compact(Math.abs(n)):Math.abs(n)<1?'$'+Math.abs(n).toFixed(4):'$'+Math.abs(n).toFixed(2)):'—',signedMoney=n=>`${n>=0?'+':'-'}${money(change)}`;cv._quoteLine.textContent=`${item.label} · %Chg ${pct>=0?'+':''}${pct.toFixed(2)}% · $Chg ${signedMoney(change)} · Vol ${Number(item.v).toLocaleString('en-US')} · $Vol ${money(dv)} · Float ${Number.isFinite(float)?compact(float)+' sh':'unavailable'}`;cv._quoteLine.style.color=change>=0?'#64d99b':'#ff7777';}if(cv.id==='kwModalCanvas'){tip.style.left='' ;tip.style.top='' ;}else if(cv._showOhlcTip&&!bottomOhlc){tip.style.left=Math.min(W-210,Math.max(L,px+14))+'px';tip.style.top=(cv.offsetTop+8)+'px';}else{tip.style.left=Math.max(4,cv.offsetLeft+8)+'px';tip.style.top=(cv.offsetTop+cv.offsetHeight+2)+'px';}cv.removeAttribute('title');};
+  cv._showChartHover=(px,py)=>{const readout=cv._hoverTimeReadout;if(px<L||px>W-R||!cv._hoverItems?.length){if(cv._hoverTip)cv._hoverTip.style.display='none';if(readout)readout.textContent='Hover a candle to see its time · IST';return}let item=cv._hoverItems.reduce((best,p)=>Math.abs(p.x-px)<Math.abs(best.x-px)?p:best,cv._hoverItems[0]);cv._activeHoverIndex=item.index;const fmt=n=>Number.isFinite(Number(n))?Number(n).toFixed(Number(n)<1?4:2):'—',ohlc=`O ${fmt(item.o)}  H ${fmt(item.h)}  L ${fmt(item.l)}  C ${fmt(item.c)}  V ${Number(item.v||0).toLocaleString('en-US')}`,bottomOhlc=!!(cv._showOhlcTip&&readout&&cv.id!=='kwModalCanvas');if(readout)readout.textContent=bottomOhlc?`${item.label} · ${ohlc}`:item.label;const tip=cv._hoverTip;if(!tip)return;tip.textContent=cv._showOhlcTip?`O ${fmt(item.o)}  H ${fmt(item.h)}\nL ${fmt(item.l)}  C ${fmt(item.c)}  V ${Number(item.v||0).toLocaleString('en-US')}`:'';tip.style.whiteSpace=cv._showOhlcTip?'pre-line':'nowrap';tip.style.display=cv._showOhlcTip&&!bottomOhlc?'block':'none';if(cv._quoteLine){const change=item.c-Number(item.prevC||0),pct=item.prevC?change/Number(item.prevC)*100:0,tp=(item.h+item.l+item.c)/3,dv=tp*item.v,float=Number(cv._floatShares),compact=n=>Number.isFinite(n)?new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(n):'—',money=n=>Number.isFinite(n)?(Math.abs(n)>=1000?'$'+compact(Math.abs(n)):Math.abs(n)<1?'$'+Math.abs(n).toFixed(4):'$'+Math.abs(n).toFixed(2)):'—',signedMoney=n=>`${n>=0?'+':'-'}${money(change)}`;const extEd=cv._extData?[item.index]:null;cv._quoteLine.textContent=`${item.label} · %Chg ${pct>=0?'+':''}${pct.toFixed(2)}% · $Chg ${signedMoney(change)} · Vol ${Number(item.v).toLocaleString('en-US')} · $Vol ${money(dv)} · Float ${Number.isFinite(float)?compact(float)+' sh':'unavailable'}${extEd?` · Ext ${extEd.extHigh>=0?'+':''}${extEd.extHigh.toFixed(1)}% (Day max ${extEd.dayMax>=0?'+':''}${extEd.dayMax.toFixed(1)}%)`:''}`;cv._quoteLine.style.color=change>=0?'#64d99b':'#ff7777';}if(cv.id==='kwModalCanvas'){tip.style.left='' ;tip.style.top='' ;}else if(cv._showOhlcTip&&!bottomOhlc){tip.style.left=Math.min(W-210,Math.max(L,px+14))+'px';tip.style.top=(cv.offsetTop+8)+'px';}else{tip.style.left=Math.max(4,cv.offsetLeft+8)+'px';tip.style.top=(cv.offsetTop+cv.offsetHeight+2)+'px';}cv.removeAttribute('title');};
   cv._viewSpan=viewSpan;cv._panSpan=span;cv._plotWidth=pw;cv._drawEvArgs=[c,sel,bzChecked,targetH,timeframe,zoom];
   if(!cv._panBound){
     cv._panBound=true;cv.style.cursor='grab';
     const hoverParent=cv.parentElement;if(hoverParent){if(getComputedStyle(hoverParent).position==='static')hoverParent.style.position='relative';const tip=document.createElement('div');tip.className='chartHoverTip';tip.style.cssText='display:none;position:absolute;z-index:9;pointer-events:none;background:rgba(8,12,16,.96);border:1px solid #465362;color:#e7eef5;padding:5px 7px;border-radius:3px;font:11px Consolas,monospace;white-space:nowrap;box-shadow:0 2px 8px #000';if(cv.id==='kwModalCanvas'){tip.style.position='static';tip.style.background='transparent';tip.style.border='0';tip.style.padding='0';document.querySelector('.kwModalLegend')?.appendChild(tip)}else hoverParent.appendChild(tip);cv._hoverTip=tip;}
     cv.addEventListener('pointerdown',e=>{if(e.button!==0)return;if(cv._avwapSelectMode){if(e.offsetX<L||e.offsetX>W-R)return;const p=cv._hoverItems?.reduce((a,z)=>Math.abs(z.x-e.offsetX)<Math.abs(a.x-e.offsetX)?z:a,cv._hoverItems?.[0]);if(!p)return;if(cv._avwapAnchors?.a==null){cv._avwapAnchors={a:p.index,b:null};cv._avwapOnChange?.(`Anchor A selected · ${p.label} · ${p.c}`);}else if(p.index<=cv._avwapAnchors.a){cv._avwapOnChange?.('Choose point B after point A in time.');}else{cv._avwapAnchors={...cv._avwapAnchors,b:p.index};cv._avwapSelectMode=false;cv._avwapOnChange?.(`AVWAP drawn · A ${cv._hoverItems.find(z=>z.index===cv._avwapAnchors.a)?.label||''} → B ${p.label}`);}e.preventDefault();e.stopPropagation();drawEv(cv,...cv._drawEvArgs);return;}if(cv._measureMode&&e.offsetX>L&&e.offsetX<W-R){const p=cv._hoverItems?.reduce((a,z)=>Math.abs(z.x-e.offsetX)<Math.abs(a.x-e.offsetX)?z:a,cv._hoverItems?.[0]);if(p){cv._measureActive=true;cv._measureStartKey=p.key;cv._measureEndKey=p.key;cv.setPointerCapture(e.pointerId);drawEv(cv,...cv._drawEvArgs);}return;}cv._panActive=true;cv._panMode=e.offsetX<=L?'price':'time';cv._panStartX=e.clientX;cv._panStartY=e.clientY;cv._panStartOffset=cv._panOffset||0;cv._panStartYZoom=cv._yZoom||1;cv._panDidMove=false;cv.setPointerCapture(e.pointerId);cv.style.cursor=cv._panMode==='price'?'ns-resize':'grabbing';});
     cv.addEventListener('pointermove',e=>{if(cv._measureActive){const p=cv._hoverItems?.reduce((a,z)=>Math.abs(z.x-e.offsetX)<Math.abs(a.x-e.offsetX)?z:a,cv._hoverItems?.[0]);if(p){cv._measureEndKey=p.key;drawEv(cv,...cv._drawEvArgs);}return;}if(!cv._panActive){cv.style.cursor=(cv._rangeMeasureMode||cv._avwapSelectMode||cv._zoomSelectMode)?'crosshair':(e.offsetX<=L?'ns-resize':'grab');if(cv._showCrosshair){cv._crosshair={x:e.offsetX,y:e.offsetY};drawGapDeepDiveCrosshair(cv);}scheduleGapDeepDiveHover(cv,e.offsetX,e.offsetY);return;}if(cv._hoverTip)cv._hoverTip.style.display='none';const dx=e.clientX-cv._panStartX,dy=e.clientY-cv._panStartY;if(Math.abs(dx)>3||Math.abs(dy)>3)cv._panDidMove=true;if(cv._panMode==='price'){cv._yZoom=Math.max(.5,Math.min(20,cv._panStartYZoom*Math.exp(-dy/140)));cv._onYZoomChange?.(cv._yZoom);}else{cv._panOffset=Math.max(cv._panMinOffset,Math.min(cv._panMaxOffset,cv._panStartOffset-dx*cv._viewSpan/Math.max(1,cv._plotWidth)));cv._onPanChange?.(cv._panOffset);}if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);});
-    cv.addEventListener('pointerleave',()=>{if(cv._hoverTip)cv._hoverTip.style.display='none';if(cv._hoverTimeReadout)cv._hoverTimeReadout.textContent='Hover a candle to see its time · IST';cv._pendingHover=null;if(cv._hoverUpdateTimer){clearTimeout(cv._hoverUpdateTimer);cv._hoverUpdateTimer=0;}if(cv._showCrosshair&&cv._crosshair){cv._crosshair=null;drawGapDeepDiveCrosshair(cv);}});
+    cv.addEventListener('pointerleave',()=>{cv._activeHoverIndex=null;if(cv._hoverTip)cv._hoverTip.style.display='none';if(cv._hoverTimeReadout)cv._hoverTimeReadout.textContent='Hover a candle to see its time · IST';cv._pendingHover=null;if(cv._hoverUpdateTimer){clearTimeout(cv._hoverUpdateTimer);cv._hoverUpdateTimer=0;}if(cv._showCrosshair&&cv._crosshair){cv._crosshair=null;drawGapDeepDiveCrosshair(cv);}});
     cv.addEventListener('pointerup',e=>{if(cv._measureActive){cv._measureActive=false;return;}if(!cv._panActive)return;cv._panActive=false;cv.style.cursor='grab';if(cv._panDidMove&&cv._panMode==='time'){const dx=e.clientX-cv._panStartX;if(cv._panMinOffset===cv._panMaxOffset&&Math.abs(dx)>20)cv._onPanEdge?.(dx<0?1:-1);else if(cv._panOffset>=cv._panMaxOffset-1)cv._onPanEdge?.(1);else if(cv._panOffset<=cv._panMinOffset+1)cv._onPanEdge?.(-1);}});
     cv.addEventListener('pointercancel',()=>{cv._panActive=false;cv.style.cursor='grab';});
     cv.addEventListener('wheel',e=>{if(e.offsetX>L)return;e.preventDefault();cv._yZoom=Math.max(.5,Math.min(20,(cv._yZoom||1)*Math.exp(-Math.sign(e.deltaY)*.15)));cv._onYZoomChange?.(cv._yZoom);if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);},{passive:false});
@@ -461,7 +461,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
       prevT=b.t[i];prevTp=tp;
     }
     clipP();
-    if(cv._showTWAP!==false){poly(twap,'#c084fc',isLarge?1.9:1.4);x.setLineDash([2,3]);poly(activeTwap,'#e879f9',isLarge?1.5:1.1);x.setLineDash([]);}
+    if(cv._showTWAP===true){poly(twap,'#c084fc',isLarge?1.9:1.4);x.setLineDash([2,3]);poly(activeTwap,'#e879f9',isLarge?1.5:1.1);x.setLineDash([]);}
     if(cv._showHODAVWAP===true){x.setLineDash([5,3]);poly(avh,'#ffd23f',isLarge?2.2:1.5);x.setLineDash([]);}
     const anchors=cv._avwapAnchors;
     if(anchors&&Number.isInteger(anchors.a)&&Number.isInteger(anchors.b)&&anchors.b>anchors.a){
@@ -472,6 +472,171 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
     }
     x.restore();
   }
+  // ---- EMA5 Extension indicator (Thinkorswim: 5m 9-EMA, 30% threshold) ----
+  let extData = null; cv._extData = null;
+  if(!daily && cv._showEMA5Ext !== false){
+    const ema5tf = 5, emaLen = 9, extThreshold = 30.0, alpha = 2 / (emaLen + 1);
+    // 5m aggregation of source bars
+    let fiveBars;
+    if(tf === 5){
+      fiveBars = b;
+    } else if(c.bars?._fiveBars && c.bars._fiveBarsSource === c.bars){
+      fiveBars = c.bars._fiveBars;
+    } else {
+      fiveBars = aggregateEvBars(c.bars || b, 5);
+      if(c.bars){ c.bars._fiveBars = fiveBars; c.bars._fiveBarsSource = c.bars; }
+    }
+    // Compute 9-EMA on 5m close across sessions
+    const ema5map = new Map();
+    let emaVal = null;
+    if(fiveBars && fiveBars.t && fiveBars.t.length){
+      for(let i = 0; i < fiveBars.t.length; i++){
+        const day5 = fiveBars.d?.[i] || c.date || '';
+        const cl5 = fiveBars.c[i];
+        if(emaVal == null) emaVal = cl5;
+        else emaVal = alpha * cl5 + (1 - alpha) * emaVal;
+        ema5map.set(day5 + '|' + fiveBars.t[i], emaVal);
+      }
+    }
+    const getEmaVal = (day, minute) => {
+      const bucket = Math.floor(minute / ema5tf) * ema5tf;
+      const exact = ema5map.get(day + '|' + bucket);
+      if(exact != null) return exact;
+      // Search nearest preceding 5m bucket for the same day
+      for(let m = bucket - ema5tf; m >= 0; m -= ema5tf){
+        const val = ema5map.get(day + '|' + m);
+        if(val != null) return val;
+      }
+      return null;
+    };
+    // Calculate extHigh, dayMax, sig per chart bar
+    extData = new Array(b.t.length); cv._extData = extData;
+    let curDay = '', curDayMax = -Infinity;
+    for(let i = 0; i < b.t.length; i++){
+      const day = b.d?.[i] || c.date || '';
+      const minute = multi ? (b.t[i] - Math.max(0, dates.indexOf(day)) * sessionSpan) : b.t[i];
+      if(day !== curDay){ curDay = day; curDayMax = -Infinity; }
+      const ema = getEmaVal(day, minute);
+      if(ema != null && ema > 0){
+        const extHigh = (b.h[i] - ema) / ema * 100;
+        curDayMax = Math.max(curDayMax, extHigh);
+        const sig = extHigh >= extThreshold;
+        extData[i] = { ema, extHigh, dayMax: curDayMax, sig };
+      } else {
+        extData[i] = null;
+      }
+    }
+    // 1) AssignBackgroundColor(if sig then Color.DARK_RED else Color.CURRENT)
+    clipP();
+    x.fillStyle = 'rgba(160, 20, 20, 0.28)';
+    const slotW = pw / (viewSpan / tf);
+    for(let i = 0; i < b.t.length; i++){
+      if(b.t[i] < viewStart - tf || b.t[i] > viewStart + viewSpan + tf) continue;
+      if(extData[i]?.sig){
+        const xx = X(b.t[i] + tf / 2);
+        x.fillRect(xx - slotW / 2, T, slotW, ph);
+      }
+    }
+    x.restore();
+    // 2) plot EMA5 = ema; (Color.ORANGE, LineWeight 2)
+    clipP();
+    x.strokeStyle = '#ff9f43';
+    x.lineWidth = isLarge ? 2.2 : 1.6;
+    x.beginPath();
+    let on = false, lastDayE = '';
+    for(let i = 0; i < b.t.length; i++){
+      if(b.t[i] < viewStart - tf || b.t[i] > viewStart + viewSpan + tf){ on = false; continue; }
+      const ed = extData[i];
+      if(!ed){ on = false; continue; }
+      const day = b.d?.[i] || c.date || '';
+      if(day !== lastDayE){ on = false; lastDayE = day; }
+      const xx = X(b.t[i] + tf / 2), yy = Y(Math.min(hi, Math.max(lo, ed.ema)));
+      if(!on){ x.moveTo(xx, yy); on = true; } else x.lineTo(xx, yy);
+    }
+    x.stroke();
+    x.lineWidth = 1;
+    x.restore();
+    // 3) plot Arrow = sig and !sig[1]; + AddChartBubble(sig, high, Round(extHigh, 0) + "%", Color.RED, yes);
+    clipP();
+    let prevSig = false;
+    for(let i = 0; i < b.t.length; i++){
+      if(b.t[i] < viewStart - tf || b.t[i] > viewStart + viewSpan + tf){ prevSig = false; continue; }
+      const ed = extData[i];
+      const sig = !!ed?.sig;
+      if(sig){
+        const xx = X(b.t[i] + tf / 2), barHigh = Y(b.h[i]);
+        const text = Math.round(ed.extHigh) + '%';
+        x.font = 'bold 9px Consolas,monospace';
+        const tw = x.measureText(text).width, bw = tw + 8, bh = 14;
+        const bx = Math.round(xx - bw / 2), by = Math.round(barHigh - bh - 5);
+        // Bubble pill
+        x.fillStyle = 'rgba(210, 25, 25, 0.95)';
+        x.strokeStyle = '#ff6666';
+        x.lineWidth = 1;
+        x.beginPath();
+        x.roundRect(bx, by, bw, bh, 3);
+        x.fill();
+        x.stroke();
+        // Bubble pointer
+        x.beginPath();
+        x.moveTo(xx - 3, by + bh);
+        x.lineTo(xx + 3, by + bh);
+        x.lineTo(xx, by + bh + 3);
+        x.closePath();
+        x.fill();
+        // Bubble text
+        x.fillStyle = '#ffffff';
+        x.textAlign = 'center';
+        x.textBaseline = 'middle';
+        x.fillText(text, xx, by + bh / 2 + 0.5);
+        // Down Arrow on first bar of signal run
+        if(!prevSig){
+          const arrowTipY = by - 3;
+          x.fillStyle = '#ff2222';
+          x.strokeStyle = '#ffbbbb';
+          x.lineWidth = 1;
+          x.beginPath();
+          x.moveTo(xx - 6, arrowTipY - 10);
+          x.lineTo(xx + 6, arrowTipY - 10);
+          x.lineTo(xx, arrowTipY);
+          x.closePath();
+          x.fill();
+          x.stroke();
+        }
+      }
+      prevSig = sig;
+    }
+    x.restore();
+    // 4) AddLabel(yes, "Ext: " + Round(extHigh, 1) + "%  |  Day max: " + Round(dayMax, 1) + "%", if sig then Color.RED else Color.GRAY);
+    let targetIdx = cv._activeHoverIndex;
+    if(targetIdx == null || !extData[targetIdx]){
+      // Default to latest visible bar with extData
+      for(let i = b.t.length - 1; i >= 0; i--){
+        if(b.t[i] <= viewStart + viewSpan && extData[i]){
+          targetIdx = i;
+          break;
+        }
+      }
+    }
+    if(targetIdx != null && extData[targetIdx]){
+      const ed = extData[targetIdx], isSig = ed.sig;
+      const labelText = `Ext: ${ed.extHigh >= 0 ? '+' : ''}${ed.extHigh.toFixed(1)}%  |  Day max: ${ed.dayMax >= 0 ? '+' : ''}${ed.dayMax.toFixed(1)}%`;
+      x.font = 'bold 11px Consolas,monospace';
+      const lw = x.measureText(labelText).width + 16, lh = 20, lx = L + 8, ly = T + 6;
+      x.fillStyle = isSig ? 'rgba(130, 15, 15, 0.94)' : 'rgba(10, 14, 20, 0.88)';
+      x.strokeStyle = isSig ? '#ff4d4d' : '#3a4654';
+      x.lineWidth = 1;
+      x.beginPath();
+      x.roundRect(lx, ly, lw, lh, 4);
+      x.fill();
+      x.stroke();
+      x.fillStyle = isSig ? '#ff9999' : '#a0abb6';
+      x.textAlign = 'left';
+      x.textBaseline = 'middle';
+      x.fillText(labelText, lx + 8, ly + lh / 2 + 0.5);
+    }
+  }
+  // ---- end EMA5 Extension indicator ----
   x.lineWidth = 1;
   x.fillStyle = '#8a8a8a';
   x.fillText('vol', L + 2, vy0 + 10);
