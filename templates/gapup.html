@@ -1150,7 +1150,7 @@ function syncTickerChatWidget(statusMessage=''){
   if(switched){question.value='';tickerChatDisplayedTicker=ticker;}
   title.textContent=ticker?`💬 Ask AI · ${ticker}`:'💬 Ask AI';
   context.textContent=tab?.result
-    ?`Using ${ticker}'s report, filings, news, and chart history. Chat history is separate for each ticker.`
+    ?`Using ${ticker}'s report, SEC filings, news, and chart history. Filing questions are checked against the relevant source filings. Chat history is separate for each ticker.`
     :'Load a ticker report to ask questions about it.';
   question.placeholder=ticker?`Ask anything about ${ticker}…`:'Load a ticker report first…';
   const unavailable=!tab?.result,pending=!!ticker&&tickerChatPending.has(ticker);
@@ -1203,6 +1203,7 @@ document.addEventListener('submit',async event=>{
     const context=aioPayload(tab,ticker,report);
     delete context.user;delete context.token;
     context.ticker=ticker;
+    context.sec_as_of=report.as_of||asOf||'';
     context.chart_summary=String(tab.lastText||'').slice(0,6000);
     const priorHistory=tickerChatHistories.get(ticker)||[];
     const response=await fetch('/api/ticker-chat',{method:'POST',headers:{'Content-Type':'application/json'},
