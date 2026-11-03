@@ -72,21 +72,25 @@ select{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;f
 .dilutionStatusCard{margin-top:16px;padding:15px 17px;border:1px solid #a55a21;border-left:4px solid #ff8a3d;border-radius:6px;background:#21150f}.dilutionStatusCard h3{margin:0 0 7px;color:#ffb16e;font-size:13px;letter-spacing:.07em;text-transform:uppercase}.dilutionStatusCard p{margin:0;color:#fff;font:600 16px/1.6 Arial,sans-serif}
 .dilutionSnapshotGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin-top:8px}.dilutionSnapshotGrid>span{display:flex;flex-direction:column;gap:3px;min-width:0;padding:10px 12px;border:1px solid #283842;border-radius:5px;background:#0e151a;color:#eaf1f5;font:14px/1.45 Arial,sans-serif}.dilutionSnapshotGrid b{color:#88b9d2;font:11px Consolas,monospace;text-transform:uppercase;letter-spacing:.03em}.dilutionSnapshotGrid small{color:#8da6b7;font:11px/1.4 Consolas,monospace}
 .dilutionInstrumentDetails{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:7px 12px;margin-top:9px}.dilutionInstrumentDetails>span{color:#d5dfe6;font:13px/1.5 Arial,sans-serif}.dilutionInstrumentDetails b{color:#8da6b7;font-size:12px}
-#ticker_ai_chat_widget{position:fixed;z-index:100500;right:18px;bottom:18px;width:min(390px,calc(100vw - 24px));height:min(540px,72vh);display:flex;flex-direction:column;overflow:hidden;border:1px solid #345365;border-radius:10px;background:#080e13;color:#e8edf3;box-shadow:0 14px 50px #000b;font-family:Arial,sans-serif}
+#ticker_ai_chat_widget{position:fixed;z-index:100500;right:22px;bottom:22px;width:min(440px,calc(100vw - 32px));height:min(680px,78vh);min-height:360px;display:flex;flex-direction:column;overflow:hidden;border:1px solid #2e4858;border-radius:16px;background:#0b1117;color:#e8edf3;box-shadow:0 18px 60px #000c;font-family:Arial,sans-serif;animation:tickerChatIn .18s ease-out}
+@keyframes tickerChatIn{from{opacity:0;transform:translateY(10px) scale(.99)}to{opacity:1;transform:translateY(0) scale(1)}}
 #ticker_ai_chat_widget[hidden]{display:none}
-.tickerAiChatHead{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid #263640;background:#0c151c}
+.tickerAiChatHead{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid #263640;background:#0d1720}
 .tickerAiChatHead h2{flex:1;min-width:0;margin:0;color:#83d3ff;font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tickerAiChatClose{width:32px;height:32px;border:1px solid #394750;border-radius:5px;background:#151d23;color:#dce5ec;font-size:20px;cursor:pointer}
-.tickerAiChatContext{margin:0;padding:8px 13px;color:#91a7b6;font-size:12px;line-height:1.45;border-bottom:1px solid #1e2b34}
-.tickerAiChatMessages{display:flex;flex:1;flex-direction:column;gap:9px;min-height:0;overflow:auto;padding:12px}
-.tickerAiChatMessage{max-width:95%;padding:9px 11px;border-radius:7px;font:14px/1.55 Arial,sans-serif;white-space:pre-wrap;overflow-wrap:anywhere}
-.tickerAiChatMessage.user{align-self:flex-end;background:#102436;border:1px solid #254a62;color:#e3f4ff}
-.tickerAiChatMessage.assistant{align-self:flex-start;background:#10171d;border:1px solid #26343e;color:#dce5ec}
-.tickerAiChatForm{display:flex;gap:8px;align-items:flex-end;padding:10px 12px;border-top:1px solid #263640}
-.tickerAiChatForm textarea{flex:1;min-width:0;min-height:42px;max-height:110px;resize:vertical;padding:9px;background:#070c10;border:1px solid #34434e;border-radius:5px;color:#e8edf3;font:14px/1.45 Arial,sans-serif}
-.tickerAiChatForm button{min-height:40px;padding:7px 12px;border:1px solid #1e6b91;border-radius:5px;background:#0d2b3c;color:#8edcff;font-weight:700;cursor:pointer}
+.tickerAiChatContext{margin:0;padding:9px 16px;color:#9aabba;font-size:12px;line-height:1.45;border-bottom:1px solid #1e2b34}
+.tickerAiChatMessages{display:flex;flex:1;flex-direction:column;gap:13px;min-height:0;overflow:auto;padding:18px 16px;scroll-behavior:smooth;overscroll-behavior:contain}
+.tickerAiChatMessage{max-width:88%;padding:11px 13px;border-radius:13px;font:14px/1.6 Arial,sans-serif;white-space:pre-wrap;overflow-wrap:anywhere;box-shadow:0 2px 8px #0003}
+.tickerAiChatMessage.user{align-self:flex-end;background:#12324a;border:1px solid #285573;color:#eff8ff;border-bottom-right-radius:4px}
+.tickerAiChatMessage.assistant{align-self:flex-start;background:#141c23;border:1px solid #2b3842;color:#e2eaf0;border-bottom-left-radius:4px}
+.tickerAiChatForm{display:flex;gap:9px;align-items:flex-end;padding:12px;border-top:1px solid #263640;background:#0d141a}
+.tickerAiChatForm textarea{flex:1;min-width:0;min-height:48px;max-height:140px;resize:none;padding:12px;background:#080d12;border:1px solid #34434e;border-radius:12px;color:#e8edf3;font:14px/1.5 Arial,sans-serif;outline:none;transition:border-color .15s,box-shadow .15s}
+.tickerAiChatForm textarea:focus{border-color:#2787b5;box-shadow:0 0 0 3px #1683b326}
+.tickerAiChatForm button{min-height:48px;padding:8px 16px;border:1px solid #1e789f;border-radius:10px;background:#0e3850;color:#9be0ff;font-weight:700;cursor:pointer;transition:background .15s,transform .15s}
+.tickerAiChatForm button:hover:not(:disabled){background:#14516e;transform:translateY(-1px)}
 .tickerAiChatForm button:disabled{opacity:.55;cursor:wait}
-.tickerAiChatStatus{min-height:18px;padding:0 12px 9px;color:#91a7b6;font:12px/1.45 Arial,sans-serif}
+.tickerAiChatStatus{min-height:22px;padding:0 16px 9px;color:#91a7b6;font:12px/1.45 Arial,sans-serif}
+@media(max-width:600px){#ticker_ai_chat_widget{right:8px;bottom:8px;width:calc(100vw - 16px);height:min(78vh,680px);min-height:320px;border-radius:14px}}
 /* Give the research dialogs room to breathe and keep text readable at 100% zoom. */
 .newsAiDialog,.aioDialog,.filingExplainDialog{width:min(1120px,96vw);max-height:94vh;padding:clamp(22px,3vw,38px);font-family:Arial,sans-serif}
 .newsAiHead h2,.aioHead h2,.filingExplainHeader h2{font-size:clamp(21px,2vw,27px);line-height:1.35}
@@ -1136,8 +1140,8 @@ function renderTickerChatMessages(panel,ticker){
   const list=panel.querySelector('[data-ticker-chat-messages]');
   if(!list)return;
   const history=tickerChatHistories.get(ticker)||[];
-  list.innerHTML=history.map(message=>`<div class="tickerAiChatMessage ${message.role==='user'?'user':'assistant'}"><strong>${message.role==='user'?'You':'AI'}:</strong> ${esc(message.content)}</div>`).join('');
-  list.scrollTop=list.scrollHeight;
+  list.innerHTML=history.map(message=>`<div class="tickerAiChatMessage ${message.role==='user'?'user':'assistant'}">${esc(message.content)}</div>`).join('');
+  requestAnimationFrame(()=>{list.scrollTo({top:list.scrollHeight,behavior:'smooth'});});
 }
 function syncTickerChatWidget(statusMessage=''){
   const widget=$('#ticker_ai_chat_widget');
@@ -1155,7 +1159,7 @@ function syncTickerChatWidget(statusMessage=''){
   question.placeholder=ticker?`Ask anything about ${ticker}…`:'Load a ticker report first…';
   const unavailable=!tab?.result,pending=!!ticker&&tickerChatPending.has(ticker);
   question.disabled=unavailable||pending;button.disabled=unavailable||pending;
-  if(status)status.textContent=statusMessage||(pending?`Preparing an answer for ${ticker}…`:switched&&ticker?`Switched to ${ticker}. This ticker has its own conversation.`:unavailable?'':'');
+  if(status)status.textContent=statusMessage||(pending?`Reading filings and preparing an answer for ${ticker}…`:switched&&ticker?`Switched to ${ticker}. This ticker has its own conversation.`:unavailable?'':'');
   renderTickerChatMessages(widget,ticker);
 }
 document.addEventListener('click',event=>{
@@ -1193,6 +1197,8 @@ document.addEventListener('submit',async event=>{
   if(question.length>1200){if(status)status.textContent='Keep your question under 1,200 characters.';return;}
   if(tickerChatPending.has(ticker))return;
   questionField.value='';
+  const pendingHistory=tickerChatHistories.get(ticker)||[];
+  tickerChatHistories.set(ticker,[...pendingHistory,{role:'user',content:question}].slice(-16));
   tickerChatPending.add(ticker);syncTickerChatWidget();
   let finalStatus='';
   try{
@@ -1213,9 +1219,10 @@ document.addEventListener('submit',async event=>{
     const answer=String(result.answer||'').trim();
     if(!answer)throw new Error('The AI returned an empty answer. Please retry.');
     if(openTabs[ticker]!==tab)return;
-    tickerChatHistories.set(ticker,[...priorHistory,{role:'user',content:question},{role:'assistant',content:answer}].slice(-16));
+    tickerChatHistories.set(ticker,[...(tickerChatHistories.get(ticker)||[]),{role:'assistant',content:answer}].slice(-16));
     finalStatus=`Answered for ${ticker}${result.provider?` · ${result.provider}`:''}.`;
   }catch(error){
+    tickerChatHistories.set(ticker,(tickerChatHistories.get(ticker)||[]).filter((item,index,array)=>!(item.role==='user'&&index===array.length-1&&item.content===question)));
     finalStatus=error.message||'Could not answer this question.';
   }finally{
     tickerChatPending.delete(ticker);
