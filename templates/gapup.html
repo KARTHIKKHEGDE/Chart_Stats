@@ -259,6 +259,9 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
       <span style="color:#9ba3ad;font-size:13px">This year · Premarket high ≥ +70% vs prior close · Premarket dollar volume ≥ $10M</span>
       <label style="display:flex;align-items:center;gap:6px;color:#ddd;font-size:13px">All charts interval <select id="gap_deepdive_tf" style="height:30px;margin:0"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label>
       <label style="display:flex;align-items:center;gap:6px;color:#ddd;font-size:13px">Group by <select id="gap_deepdive_group_by" style="height:30px;margin:0"><option value="ticker" selected>Ticker</option><option value="player">Financing player</option></select></label>
+      <label style="display:inline-flex;align-items:center;gap:5px;color:#d7ff6e;font-size:13px;cursor:pointer"><input id="gap_deepdive_bz" type="checkbox" checked style="width:15px;height:15px;vertical-align:middle"> Bone Zone (9/21 EMA)</label>
+      <label style="display:inline-flex;align-items:center;gap:5px;color:#fff;font-size:13px;cursor:pointer"><input id="gap_deepdive_vwap" type="checkbox" checked style="width:15px;height:15px;vertical-align:middle"> VWAP</label>
+      <label style="display:inline-flex;align-items:center;gap:4px;color:#ff5a5a;font-size:13px;cursor:pointer"><input id="gap_deepdive_ema5ext" type="checkbox" checked style="width:15px;height:15px;vertical-align:middle"><span>EMA5 Ext ≥</span><input id="gap_deepdive_ema5ext_val" type="number" min="5" max="300" step="5" value="30" style="width:48px;height:24px;padding:0 3px;background:#0d1117;border:1px solid #ff5a5a;color:#ff8888;font:bold 12px Consolas,monospace;border-radius:3px;text-align:center" title="Extension % threshold above 5m 9-EMA"><span>%</span></label>
       <span id="gap_deepdive_status" style="margin-left:auto;color:#aeb6c0;font-size:13px">Opening the saved scan…</span>
     </header>
     <div id="gap_deepdive_grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px"></div>
@@ -1799,10 +1802,10 @@ function renderTab(tab, r, isRefresh){
     (surgeDays?`<div class="foot">Loading premarket spike days…</div>`:`<div class="foot" data-surge-status>Checking this history in the background…</div>`)+`</div>`;
   o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">`+
      `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:7px">${esc(T.p6)}<label style="font-size:11px;color:#aaa">All charts <select id="ev_all_tf" class="evtf"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label><select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
-     (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#e8e8e8"><input type="checkbox" id="bz" checked style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/21 EMA cloud + BB)</label></div>`+
+     (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#d7ff6e;cursor:pointer"><input type="checkbox" id="bz" checked style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/21 EMA cloud + BB)</label><label style="margin-left:10px;font-size:13px;color:#fff;cursor:pointer"><input type="checkbox" id="ev_all_vwap" checked style="width:auto;height:auto;vertical-align:middle"> VWAP</label><label style="margin-left:10px;font-size:13px;color:#ff5a5a;cursor:pointer"><input type="checkbox" id="ev_all_ema5ext" checked style="width:auto;height:auto;vertical-align:middle"><span>EMA5 Ext ≥</span><input id="ev_all_ema5ext_val" type="number" min="5" max="300" step="5" value="30" style="width:48px;height:22px;padding:0 3px;background:#0d1117;border:1px solid #ff5a5a;color:#ff8888;font:bold 12px Consolas,monospace;border-radius:3px;text-align:center" title="Extension % threshold above 5m 9-EMA"><span>%</span></label></div>`+
      `<span style="font-size:12px;color:#29a8ff;font-weight:normal">🔍 Click a premarket spike chart for full Deepdive controls</span></div>`+
   `<div class="evgrid">`+tab.EV.map((_,i)=>premarketSpikeChartCard(i)).join('')+
-     `<\/div><div class="foot"><span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance.">━ VWAP<\/span> &nbsp; <span style="color:#c084fc">━ TWAP</span> &nbsp; <span style="color:#e879f9">┅ active-minute TWAP</span> &nbsp; <span style="color:#ffd23f">┅ HOD-anchored AVWAP</span> &nbsp; <span style="color:#ffd23f">N News</span> &nbsp; <span style="color:#62c8ff">S SEC filing</span>  <span class="y" data-tip="Pre-market High — highest price before the US market open. Common fade target.">┅ PM high<\/span>  <span class="d" data-tip="Previous Close — yesterday’s close. Gap % is measured from here.">┅ prev close<\/span> &nbsp; <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period EMA on 2-min closes. Fast trend line.">━ EMA9<\/span> <span style="color:#ffa500" data-tip="EMA 21 — 20-period EMA on 2-min closes. Slower trend line. Bearish when EMA9 drops below it.">━ EMA21<\/span> <span class="g" data-tip="Bone Zone cloud — shaded between EMA9 &amp; EMA21. Green = bullish. Red = bearish.">▒<\/span><span class="r">▒<\/span> cloud <span class="d" data-tip="Bollinger Bands (20-period, 2 std dev). Shows expected volatility range on the 2-min chart.">━ BB(20,2)<\/span> &nbsp; <span data-tip="SELL signal — short entry triggered by an entry model.">▼ SELL<\/span> &nbsp; <span data-tip="BUY / Cover signal — close the short here. P&amp;L % shown next to it.">▲ BUY<\/span>. <span data-tip="Lighter shaded background = pre-market session before the US open; all chart times are IST.">Shaded = premarket<\/span>. X axis = IST. Measure: activate Measure, then drag across bars for volume, estimated dollar volume, and float rotation.<\/div><\/div>`;
+     `<\/div><div class="foot"><span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance.">━ VWAP<\/span> &nbsp; <span style="color:#ff5a5a" data-tip="EMA5 Extension — flagged when high exceeds 5m 9-EMA by threshold % (Thinkorswim).">▼ % 5m 9-EMA Ext</span> &nbsp; <span style="color:#ffd23f">┅ HOD-anchored AVWAP</span> &nbsp; <span style="color:#ffd23f">N News</span> &nbsp; <span style="color:#62c8ff">S SEC filing</span>  <span class="y" data-tip="Pre-market High — highest price before the US market open. Common fade target.">┅ PM high<\/span>  <span class="d" data-tip="Previous Close — yesterday’s close. Gap % is measured from here.">┅ prev close<\/span> &nbsp; <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period EMA on 2-min closes. Fast trend line.">━ EMA9<\/span> <span style="color:#ffa500" data-tip="EMA 21 — 20-period EMA on 2-min closes. Slower trend line. Bearish when EMA9 drops below it.">━ EMA21<\/span> <span class="g" data-tip="Bone Zone cloud — shaded between EMA9 &amp; EMA21. Green = bullish. Red = bearish.">▒<\/span><span class="r">▒<\/span> cloud <span class="d" data-tip="Bollinger Bands (20-period, 2 std dev). Shows expected volatility range on the 2-min chart.">━ BB(20,2)<\/span> &nbsp; <span data-tip="SELL signal — short entry triggered by an entry model.">▼ SELL<\/span> &nbsp; <span data-tip="BUY / Cover signal — close the short here. P&amp;L % shown next to it.">▲ BUY<\/span>. <span data-tip="Lighter shaded background = pre-market session before the US open; all chart times are IST.">Shaded = premarket<\/span>. X axis = IST. Measure: activate Measure, then drag across bars for volume, estimated dollar volume, and float rotation.<\/div><\/div>`;
 
   const pmGapText = Number.isFinite(r.chart.premarket_gap_pct)
     ? `${(r.chart.premarket_gap_pct*100).toFixed(1)}% (PM high vs prev close)` : 'Not available';
@@ -1828,11 +1831,54 @@ function renderTab(tab, r, isRefresh){
 
   const sigSelect = tab.container.querySelector('#sig');
   const bzCheck = tab.container.querySelector('#bz');
-  const allTf=tab.container.querySelector('#ev_all_tf');
-  const applyAllChartSettings=()=>{tab.EV.forEach((_,i)=>{const card=tab.container.querySelector(`[data-ev-slot="${i}"]`);if(!card)return;card._chartTf=allTf.value;card._chartDays=allTf.value==='1d'?200:5;card._panOffset=0;card._yZoom=1;card._zoom=card._chartTf==='1d'?1/card._chartDays:1;card._contextEdgeDone={};const tf=card.querySelector('.evtf');if(tf)tf.value=card._chartTf;});drawEvAll(tab.EV,tab.container);};
-  if(allTf)allTf.onchange=applyAllChartSettings;
+  const allTf = tab.container.querySelector('#ev_all_tf');
+  const allVwap = tab.container.querySelector('#ev_all_vwap');
+  const allEma5Ext = tab.container.querySelector('#ev_all_ema5ext');
+  const allEma5ExtVal = tab.container.querySelector('#ev_all_ema5ext_val');
+  if(bzCheck) bzCheck.checked = localStorage.getItem('gap_deepdive_bz') !== '0';
+  if(allVwap) allVwap.checked = localStorage.getItem('gap_deepdive_vwap') !== '0';
+  if(allEma5Ext) allEma5Ext.checked = localStorage.getItem('gap_deepdive_ema5ext') !== '0';
+  if(allEma5ExtVal) allEma5ExtVal.value = localStorage.getItem('gap_ema5ext_threshold') || '30';
+  const applyAllChartSettings = () => {
+    tab.EV.forEach((_, i) => {
+      const card = tab.container.querySelector(`[data-ev-slot="${i}"]`);
+      if(!card) return;
+      card._chartTf = allTf.value;
+      card._chartDays = allTf.value === '1d' ? 200 : 5;
+      card._panOffset = 0; card._yZoom = 1; card._zoom = card._chartTf === '1d' ? 1 / card._chartDays : 1;
+      card._contextEdgeDone = {};
+      const tf = card.querySelector('.evtf');
+      if(tf) tf.value = card._chartTf;
+    });
+    drawEvAll(tab.EV, tab.container);
+  };
+  if(allTf) allTf.onchange = applyAllChartSettings;
   if(sigSelect) sigSelect.onchange = () => drawEvAll(tab.EV, tab.container);
-  if(bzCheck) bzCheck.onchange = () => drawEvAll(tab.EV, tab.container);
+  if(bzCheck) bzCheck.onchange = () => {
+    try { localStorage.setItem('gap_deepdive_bz', bzCheck.checked ? '1' : '0'); } catch{}
+    tab.EV.forEach((_, i) => { const card = tab.container.querySelector(`[data-ev-slot="${i}"]`); if(card) card._showBz = bzCheck.checked; });
+    drawEvAll(tab.EV, tab.container);
+  };
+  if(allVwap) allVwap.onchange = () => {
+    try { localStorage.setItem('gap_deepdive_vwap', allVwap.checked ? '1' : '0'); } catch{}
+    tab.EV.forEach((_, i) => { const card = tab.container.querySelector(`[data-ev-slot="${i}"]`); if(card) card._showVWAP = allVwap.checked; });
+    drawEvAll(tab.EV, tab.container);
+  };
+  if(allEma5Ext) allEma5Ext.onchange = () => {
+    try { localStorage.setItem('gap_deepdive_ema5ext', allEma5Ext.checked ? '1' : '0'); } catch{}
+    tab.EV.forEach((_, i) => { const card = tab.container.querySelector(`[data-ev-slot="${i}"]`); if(card) card._showEMA5Ext = allEma5Ext.checked; });
+    drawEvAll(tab.EV, tab.container);
+  };
+  if(allEma5ExtVal) {
+    const onVal = () => {
+      const val = Math.max(1, Math.min(500, Number(allEma5ExtVal.value) || 30));
+      try { localStorage.setItem('gap_ema5ext_threshold', String(val)); } catch{}
+      tab.EV.forEach((_, i) => { const card = tab.container.querySelector(`[data-ev-slot="${i}"]`); if(card) card._ema5ExtThreshold = val; });
+      drawEvAll(tab.EV, tab.container);
+    };
+    allEma5ExtVal.onchange = onVal;
+    allEma5ExtVal.oninput = onVal;
+  }
   const pathNormSelect = tab.container.querySelector('#path_norm');
   if(pathNormSelect){
     pathNormSelect.value = tab.pathNormalization;
@@ -1880,7 +1926,13 @@ function drawEvAll(evList, containerEl){
   const selEl = cEl.querySelector('#sig');
   const sel = selEl ? selEl.value : 'none';
   const bzEl = cEl.querySelector('#bz');
-  const bzChecked = bzEl ? bzEl.checked : false;
+  const bzChecked = bzEl ? bzEl.checked : (localStorage.getItem('gap_deepdive_bz') !== '0');
+  const allVwapEl = cEl.querySelector('#ev_all_vwap');
+  const allEma5ExtEl = cEl.querySelector('#ev_all_ema5ext');
+  const allEma5ExtValEl = cEl.querySelector('#ev_all_ema5ext_val');
+  const vwapChecked = allVwapEl ? allVwapEl.checked : (localStorage.getItem('gap_deepdive_vwap') !== '0');
+  const ema5ExtChecked = allEma5ExtEl ? allEma5ExtEl.checked : (localStorage.getItem('gap_deepdive_ema5ext') !== '0');
+  const ema5ExtVal = (allEma5ExtValEl && Number(allEma5ExtValEl.value)) || Number(localStorage.getItem('gap_ema5ext_threshold')) || 30;
   const tabForCharts=Object.values(openTabs).find(tab=>tab.container===cEl);
   if(!window.evLazyObserver)window.evLazyObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){entry.target._chartVisible=true;const t=Object.values(openTabs).find(x=>x.container.contains(entry.target));if(t){if(entry.target._chartItem?.premarketSpikeChart)loadPremarketSpikeChart(t,entry.target,entry.target._chartItem);drawEvAll(t.EV,t.container);}window.evLazyObserver.unobserve(entry.target);}}),{rootMargin:'450px 0px'});
   list.forEach((c,i)=>{
@@ -1914,7 +1966,7 @@ function drawEvAll(evList, containerEl){
       card._panOffset=0;loadChartContext(card,tabForCharts,edge);
     };
     const renderItem=card._contextChart?{...item,chart:{...item.chart,bars:card._contextChart}}:item;
-    cv._anchorDate=card._sessionDate;cv._eventTicker=tabForCharts?.result?.head?.ticker||item.ticker||'';cv._panOffset=card._panOffset||0;cv._onPanChange=value=>card._panOffset=value;cv._onPanEdge=card._onPanEdge;cv._showVWAP=card._showVWAP!==false;cv._showEMA5Ext=card._showEMA5Ext!==false;cv._avwapAnchors=card._avwapAnchors||null;
+    cv._anchorDate=card._sessionDate;cv._eventTicker=tabForCharts?.result?.head?.ticker||item.ticker||'';cv._panOffset=card._panOffset||0;cv._onPanChange=value=>card._panOffset=value;cv._onPanEdge=card._onPanEdge;cv._showVWAP=card._showVWAP!==undefined?card._showVWAP:vwapChecked;cv._showEMA5Ext=card._showEMA5Ext!==undefined?card._showEMA5Ext:ema5ExtChecked;cv._ema5ExtThreshold=card._ema5ExtThreshold||ema5ExtVal;cv._avwapAnchors=card._avwapAnchors||null;
     if(!card._chartVisible&&$('#chart_modal').style.display!=='flex'){window.evLazyObserver.observe(card);return;}
     const markerDates=card._contextDates?.length?card._contextDates:[card._sessionDate||item.date],markerKey=`${String(tabForCharts?.result?.head?.ticker||'').toUpperCase()}|${[...new Set(markerDates)].sort().join(',')}`;
     if(tabForCharts&&cv._marketEventKey!==markerKey){cv._marketEventKey=markerKey;cv._marketEvents=[];loadChartMarketEvents(tabForCharts.result?.head?.ticker,markerDates).then(events=>{if(cv._marketEventKey!==markerKey||!cv.isConnected)return;cv._marketEvents=events;if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);if($('#chart_modal').style.display==='flex'&&currentModalSlot===i)renderModalChart();});}
@@ -2616,8 +2668,13 @@ function drawGapDeepDiveCanvas(cv,baseChart,timeframe,targetH){
   const isModal=cv.id==='gap_chart_modal_canvas',settings=state?.chartSettings||{};
   cv._eventTicker=baseChart.ticker||gapDeepDiveCurrent?.item?.ticker||'';
   cv._renderDpr=isModal?3:2;
-  cv._showVWAP=isModal?$('#gap_chart_vwap').checked:settings.vwap!==false;
-  cv._showEMA5Ext=isModal?$('#gap_chart_ema5ext').checked:settings.ema5ext!==false;cv._ema5ExtThreshold=isModal?(Number($('#gap_chart_ema5ext_val')?.value)||30):(settings.ema5ext_threshold||Number(localStorage.getItem('gap_ema5ext_threshold'))||30);
+  const globalBz=$('#gap_deepdive_bz')?.checked;
+  const globalVwap=$('#gap_deepdive_vwap')?.checked;
+  const globalEma5Ext=$('#gap_deepdive_ema5ext')?.checked;
+  const globalEma5Val=Number($('#gap_deepdive_ema5ext_val')?.value);
+  cv._showVWAP=isModal?$('#gap_chart_vwap').checked:(globalVwap!==undefined?globalVwap:(settings.vwap!==false));
+  cv._showEMA5Ext=isModal?$('#gap_chart_ema5ext').checked:(globalEma5Ext!==undefined?globalEma5Ext:(settings.ema5ext!==false));
+  cv._ema5ExtThreshold=isModal?(Number($('#gap_chart_ema5ext_val')?.value)||Number(localStorage.getItem('gap_ema5ext_threshold'))||30):(Number.isFinite(globalEma5Val)&&globalEma5Val>0?globalEma5Val:(settings.ema5ext_threshold||Number(localStorage.getItem('gap_ema5ext_threshold'))||30));
   cv._onZoomOutMore=isModal?requiredSessions=>loadGapDeepDiveMore(cv,requiredSessions):null;
   if(state){cv._anchorDate=baseChart.date;if(!isModal||!cv._modalPanInitialized){cv._panOffset=state.panOffset||0;if(isModal)cv._modalPanInitialized=true;}if(isModal)state.panOffset=cv._panOffset||0;cv._onPanChange=value=>{state.panOffset=value;};cv._onPanEdge=side=>loadGapDeepDiveAdjacent(cv,baseChart,side);}
   if(isModal){
@@ -2634,7 +2691,7 @@ function drawGapDeepDiveCanvas(cv,baseChart,timeframe,targetH){
       cv._gapDeepDiveState.selectedRangeId=cv._selectedRangeId;
     },()=>renderGapDeepDiveModal());
   }
-  const showBz=isModal?$('#gap_chart_bz').checked:settings.bz!==false;
+  const showBz=isModal?$('#gap_chart_bz').checked:(globalBz!==undefined?globalBz:(settings.bz!==false));
   cv._rangeZoom=isModal?(cv._rangeZoom||1):(settings.rangeZoom||1);
   cv._yZoom=isModal?(cv._yZoom||1):(settings.yZoom||1);
   drawEv(cv,chart,'none',showBz,targetH,timeframe,cv._rangeZoom);
@@ -2790,7 +2847,11 @@ async function openGapDeepDiveChart(item,jobId){
     const cv=$('#gap_chart_modal_canvas'),gridCv=[...$('#gap_deepdive_grid').querySelectorAll('canvas[data-key]')].find(node=>node.dataset.key===gapDeepDiveKey(item)),timeframe=$('#gap_deepdive_tf').value||'2m';cv.dataset.key=gapDeepDiveKey(item);cv._gapDeepDiveState=gridCv?._gapDeepDiveState||{days:5,dates:[],bars:null,panOffset:0,loading:false,timeframe,daysSelected:false,loadedDays:0,contextCache:{}};configureGapDeepDiveTimeframe(timeframe);$('#gap_chart_tf').value=timeframe;
     const state=cv._gapDeepDiveState;
     const settings=state.chartSettings||{};
-    $('#gap_chart_bz').checked=settings.bz!==false;$('#gap_chart_vwap').checked=settings.vwap!==false;$('#gap_chart_ema5ext').checked=settings.ema5ext!==false;if($('#gap_chart_ema5ext_val'))$('#gap_chart_ema5ext_val').value=String(settings.ema5ext_threshold||localStorage.getItem('gap_ema5ext_threshold')||30);
+    const gBz=$('#gap_deepdive_bz')?.checked, gVwap=$('#gap_deepdive_vwap')?.checked, gExt=$('#gap_deepdive_ema5ext')?.checked, gExtVal=$('#gap_deepdive_ema5ext_val')?.value;
+    $('#gap_chart_bz').checked=gBz!==undefined?gBz:(settings.bz!==false);
+    $('#gap_chart_vwap').checked=gVwap!==undefined?gVwap:(settings.vwap!==false);
+    $('#gap_chart_ema5ext').checked=gExt!==undefined?gExt:(settings.ema5ext!==false);
+    if($('#gap_chart_ema5ext_val'))$('#gap_chart_ema5ext_val').value=String(gExtVal||settings.ema5ext_threshold||localStorage.getItem('gap_ema5ext_threshold')||30);
     if(timeframe!=='1d'){state.days=5;state.daysSelected=true;}
     cv._avwapAnchors=null;cv._avwapSelectMode=false;cv._rangeMeasures=[];cv._selectedRangeId=null;cv._rangeZoom=settings.rangeZoom??1;cv._panOffset=state.panOffset||0;cv._modalPanInitialized=true;cv._yZoom=settings.yZoom||1;cv._rangeMeasureMode=false;cv._zoomSelectMode=true;cv._panToolMode=false;cv._zoomDrag=null;cv.style.cursor='crosshair';$('#gap_chart_measure_box').hidden=true;$('#gap_chart_measure').dataset.active='';$('#gap_chart_measure').style.borderColor='';$('#gap_chart_measure').textContent='Measure range';$('#gap_chart_pan').dataset.active='';$('#gap_chart_pan').style.borderColor='';$('#gap_chart_avwap_status').textContent='Hold and drag on the chart to zoom. Choose Pan to drag the chart.';
     $('#gap_chart_quote_line').textContent='Float loading · move the cursor over a candle for change and volume';$('#gap_chart_hover_time').textContent='Hover a candle to see its time · IST';$('#gap_deepdive_chart_modal').style.display='flex';setTimeout(renderGapDeepDiveModal,30);
@@ -2807,6 +2868,10 @@ function closeGapDeepDiveChart(){
   const current=gapDeepDiveCurrent,cv=$('#gap_chart_modal_canvas'),state=cv._gapDeepDiveState;
   if(current&&state){
     const timeframe=$('#gap_chart_tf').value||'2m',settings={bz:$('#gap_chart_bz').checked,vwap:$('#gap_chart_vwap').checked,ema5ext:$('#gap_chart_ema5ext').checked,ema5ext_threshold:Number($('#gap_chart_ema5ext_val')?.value)||30,rangeZoom:cv._rangeZoom||1,yZoom:cv._yZoom||1};
+    if($('#gap_deepdive_bz'))$('#gap_deepdive_bz').checked=settings.bz;
+    if($('#gap_deepdive_vwap'))$('#gap_deepdive_vwap').checked=settings.vwap;
+    if($('#gap_deepdive_ema5ext'))$('#gap_deepdive_ema5ext').checked=settings.ema5ext;
+    if($('#gap_deepdive_ema5ext_val'))$('#gap_deepdive_ema5ext_val').value=String(settings.ema5ext_threshold);
     state.chartSettings=settings;state.panOffset=cv._panOffset||0;state.rangeZoom=settings.rangeZoom;state.yZoom=settings.yZoom;
     if(current.card&&current.tab){
       const card=current.card,tab=current.tab,days=timeframe==='1d'?(Number(state.days)||5):5;
@@ -2819,7 +2884,8 @@ function closeGapDeepDiveChart(){
     }else{
       const gridCv=[...$('#gap_deepdive_grid').querySelectorAll('canvas[data-key]')].find(node=>node.dataset.key===gapDeepDiveKey(current.item));
       const chart=gapDeepDiveCharts.get(gapDeepDiveKey(current.item));
-      if(gridCv&&chart){gridCv._gapDeepDiveState=state;gridCv._rangeZoom=settings.rangeZoom;gridCv._yZoom=settings.yZoom;drawGapDeepDiveCanvas(gridCv,chart,timeframe,540);}
+      if(gridCv&&chart){gridCv._gapDeepDiveState=state;gridCv._rangeZoom=settings.rangeZoom;gridCv._yZoom=settings.yZoom;}
+      redrawAllGapDeepDiveCharts();
     }
   }
   $('#gap_deepdive_chart_modal').style.display='none';cv._avwapSelectMode=false;gapDeepDiveCurrent=null;
@@ -2876,7 +2942,38 @@ function openGapDeepDiveFilings(){
   target.searchParams.set('gap_filings_date',date);
   window.open(target.toString(),'_blank','noopener');
 }
+function redrawAllGapDeepDiveCharts(){
+  const timeframe=$('#gap_deepdive_tf')?.value||'2m';
+  $('#gap_deepdive_grid').querySelectorAll('canvas[data-index][data-chart-loaded="1"]').forEach(cv=>{
+    const chart=gapDeepDiveCharts.get(cv.dataset.key);
+    if(!chart)return;
+    if(timeframe==='1d')loadGapDeepDiveGridDaily(cv,chart);
+    else drawGapDeepDiveCanvas(cv,chart,timeframe,540);
+  });
+  if(gapDeepDiveCurrent)renderGapDeepDiveModal();
+}
+function syncGapDeepDiveGlobalToModal(){
+  if($('#gap_chart_bz')&&$('#gap_deepdive_bz'))$('#gap_chart_bz').checked=$('#gap_deepdive_bz').checked;
+  if($('#gap_chart_vwap')&&$('#gap_deepdive_vwap'))$('#gap_chart_vwap').checked=$('#gap_deepdive_vwap').checked;
+  if($('#gap_chart_ema5ext')&&$('#gap_deepdive_ema5ext'))$('#gap_chart_ema5ext').checked=$('#gap_deepdive_ema5ext').checked;
+  if($('#gap_chart_ema5ext_val')&&$('#gap_deepdive_ema5ext_val'))$('#gap_chart_ema5ext_val').value=$('#gap_deepdive_ema5ext_val').value;
+}
+if($('#gap_deepdive_bz'))$('#gap_deepdive_bz').checked=localStorage.getItem('gap_deepdive_bz')!=='0';
+if($('#gap_deepdive_vwap'))$('#gap_deepdive_vwap').checked=localStorage.getItem('gap_deepdive_vwap')!=='0';
+if($('#gap_deepdive_ema5ext'))$('#gap_deepdive_ema5ext').checked=localStorage.getItem('gap_deepdive_ema5ext')!=='0';
+if($('#gap_deepdive_ema5ext_val'))$('#gap_deepdive_ema5ext_val').value=localStorage.getItem('gap_ema5ext_threshold')||'30';
+
+$('#gap_deepdive_bz').onchange=()=>{try{localStorage.setItem('gap_deepdive_bz',$('#gap_deepdive_bz').checked?'1':'0');}catch{}syncGapDeepDiveGlobalToModal();redrawAllGapDeepDiveCharts();};
+$('#gap_deepdive_vwap').onchange=()=>{try{localStorage.setItem('gap_deepdive_vwap',$('#gap_deepdive_vwap').checked?'1':'0');}catch{}syncGapDeepDiveGlobalToModal();redrawAllGapDeepDiveCharts();};
+$('#gap_deepdive_ema5ext').onchange=()=>{try{localStorage.setItem('gap_deepdive_ema5ext',$('#gap_deepdive_ema5ext').checked?'1':'0');}catch{}syncGapDeepDiveGlobalToModal();redrawAllGapDeepDiveCharts();};
+const onDeepDiveExtVal=()=>{const val=Math.max(1,Math.min(500,Number($('#gap_deepdive_ema5ext_val').value)||30));try{localStorage.setItem('gap_ema5ext_threshold',String(val));}catch{}syncGapDeepDiveGlobalToModal();redrawAllGapDeepDiveCharts();};
+$('#gap_deepdive_ema5ext_val').onchange=onDeepDiveExtVal;
+$('#gap_deepdive_ema5ext_val').oninput=onDeepDiveExtVal;
+
 $('#gap_chart_bz').onchange=renderGapDeepDiveModal;
+$('#gap_chart_vwap').onchange=renderGapDeepDiveModal;
+$('#gap_chart_ema5ext').onchange=renderGapDeepDiveModal;
+if($('#gap_chart_ema5ext_val')){$('#gap_chart_ema5ext_val').onchange=renderGapDeepDiveModal;$('#gap_chart_ema5ext_val').oninput=renderGapDeepDiveModal;}
 $('#gap_deepdive_tf').onchange=()=>{const timeframe=$('#gap_deepdive_tf').value,cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Interval changed. Select AVWAP again to choose new anchor points.';if(gapDeepDiveCurrent){$('#gap_chart_tf').value=timeframe;configureGapDeepDiveTimeframe(timeframe);}setGapDeepDiveTimeframe(timeframe);if(gapDeepDiveCurrent)loadGapDeepDiveContext();};
 $('#gap_chart_tf').onchange=()=>{const timeframe=$('#gap_chart_tf').value,cv=$('#gap_chart_modal_canvas');cv._avwapAnchors=null;cv._avwapSelectMode=false;$('#gap_chart_avwap_status').textContent='Interval changed. Select AVWAP again to choose new anchor points.';configureGapDeepDiveTimeframe(timeframe);setGapDeepDiveTimeframe(timeframe);loadGapDeepDiveContext();};
 window.addEventListener('keydown',e=>{if(e.key!=='Escape'||$('#gap_deepdive_chart_modal').style.display!=='flex')return;const cv=$('#gap_chart_modal_canvas');if(cancelUnifiedChartSelection(cv,cv._featureUi)){e.preventDefault();e.stopImmediatePropagation();return;}closeGapDeepDiveChart();},true);
