@@ -1043,7 +1043,7 @@ def recent_filings_feed():
 _FILING_CATEGORY_ORDER = ["Financials", "News", "Prospectuses and Registrations", "Proxies", "Ownership", "Other"]
 _FILING_FORM_CATEGORIES = {
     "Financials": {"10-K", "10-K/A", "10-KT", "10-Q", "10-Q/A", "20-F", "20-F/A", "40-F", "NT 10-K", "NT 10-Q"},
-    "News": {"8-K", "8-K/A", "6-K"},
+    "News": {"8-K", "8-K/A", "6-K", "6-K/A"},
     "Prospectuses and Registrations": {"S-1", "S-1/A", "S-3", "S-3/A", "S-3ASR", "S-4", "S-4/A", "S-8", "F-1", "F-1/A", "F-3", "F-3/A", "FWP", "POS AM", "RW", "424H"},
     "Proxies": {"DEF 14A", "PRE 14A", "DEFA14A", "DEFM14A", "PREM14A", "DEFC14A", "DEF 14C", "PRE 14C", "PX14A6G"},
     "Ownership": {"3", "4", "5", "144", "SC 13D", "SC 13D/A", "SC 13G", "SC 13G/A", "SCHEDULE 13D", "SCHEDULE 13D/A", "SCHEDULE 13G", "SCHEDULE 13G/A"},
@@ -1089,6 +1089,7 @@ def _filing_rows_from_submission(recent, cik, ticker, company):
             continue
         category = _filing_category(form)
         filed = str(value("filingDate", index) or "")
+        report_date = str(value("reportDate", index) or "")
         accession = str(value("accessionNumber", index) or "")
         accession_path = accession.replace("-", "")
         primary_document = str(value("primaryDocument", index) or "")
@@ -1112,7 +1113,7 @@ def _filing_rows_from_submission(recent, cik, ticker, company):
         dilution_signal = (form.upper().startswith("424B") or form.upper() in {"S-1", "S-1/A", "S-3", "S-3/A", "F-1", "F-1/A", "F-3", "F-3/A", "FWP"}
                            or (form.upper().startswith("8-K") and any(code in {"1.01", "3.02"} for code in item_codes)))
         row = {"ticker": ticker, "company": company, "form": form, "date": filed,
-               "period": str(value("reportDate", index) or ""), "desc": description,
+               "period": report_date if report_date != filed else "", "desc": description,
                "items": raw_items, "url": url, "accession": accession, "cik": str(int(cik)),
                "dilution_signal": dilution_signal}
         grouped[category].append(row)
