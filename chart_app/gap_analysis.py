@@ -26,6 +26,7 @@ LOOKBACK_DAYS = app.LOOKBACK_DAYS
 MAX_EVENTS = app.MAX_EVENTS
 MIN_DAY_VOL = app.MIN_DAY_VOL
 MIN_PM_VOL = app.MIN_PM_VOL
+PM_GRADE_MIN_SPIKE = 0.20
 MIN_PRICE = app.MIN_PRICE
 NPTS = app.NPTS
 PM_START = app.PM_START
@@ -52,6 +53,11 @@ def analyze_event(t, i, daily, ctx):
     m = metrics(df, pc, True)
     if not m["rg"] or m["open"] <= 0 or m["pm_vol"] < MIN_PM_VOL:
         return None
+    pm_high_pct = (m["pm_high"] / pc - 1) if m.get("pm_high") and pc > 0 else None
+    is_gap_up = (m["open"] / pc - 1) >= GAP_MIN
+    is_pm_spike = pm_high_pct is not None and pm_high_pct >= PM_GRADE_MIN_SPIKE and m["pm_vol"] > 0
+    if not is_gap_up and not is_pm_spike:
+        return None
     fl, stale = float_at(row["date"], ctx)
     cf = ctx_feats(daily, i)
     o, hod, lod, close = m["open"], m["hod"], m["lod"], m["close"]
@@ -61,7 +67,7 @@ def analyze_event(t, i, daily, ctx):
         "date": row["date"], "pc": pc, "gap": o / pc - 1, "open": o, "hod": hod, "lod": lod, "close": close,
         "volume": row["v"], "hod_min": m["hod_min"], "hod_bkt": hod_bucket(m["hod_min"]),
         "pm_high": m["pm_high"], "pm_hi_min": m.get("pm_hi_min"),
-        "pm_high_pct": (m["pm_high"] / pc - 1) if m["pm_high"] else None,
+        "pm_high_pct": pm_high_pct, "pm_spike": is_pm_spike,
         "o2h": hod / o - 1, "o2l": lod / o - 1, "o2c": o2c, "hod_close": h2c,
         "close_pos": m["close_pos"], "close_vs_lod": m["close_vs_lod"], "gap_fill": m["gap_fill"],
         "lost_min": m["lost_min"], "vb_min": m["vb_min"], "vb_to_close": m["vb_to_close"],
@@ -167,7 +173,9 @@ def detect_events(daily, splits, session_day):
         if d >= session_day or d < cutoff or r["date"] in sd:
             continue
         pc = daily[i - 1]["c"]
-        if pc > 0 and r["o"] / pc - 1 >= GAP_MIN and r["o"] >= MIN_PRICE and r["v"] >= MIN_DAY_VOL:
+        is_gap_up = pc > 0 and r["o"] / pc - 1 >= GAP_MIN and r["o"] >= MIN_PRICE
+        possible_pm_spike = pc > 0 and r.get("h", 0) / pc - 1 >= PM_GRADE_MIN_SPIKE and r.get("h", 0) >= MIN_PRICE
+        if pc > 0 and (is_gap_up or possible_pm_spike) and r["v"] >= MIN_DAY_VOL:
             out.append(i)
     return out[-MAX_EVENTS:]
 
@@ -228,33 +236,55 @@ def stats(S):
     return st
 
 
-def grade(st):
+def premarket_spike_stats(events):
+    fades = [e.get("pm_fade") for e in events if e.get("pm_spike") and nn(e.get("pm_fade"))]
+    meaningful_fades = sum(value <= -0.10 for value in fades)
+    return {"n": len(fades), "fade_rate": meaningful_fades / len(fades) if fades else None,
+            "median_fade": med(fades)}
+
+
+def grade(st, pm_stats=None):
     n = st["n"]
-    if n < 1:
+    pm_stats = pm_stats or {"n": 0, "fade_rate": None, "median_fade": None}
+    pm_n = pm_stats.get("n", 0)
+    if n < 1 and pm_n < 1:
         return None
-    fade_rate = rate(st["below_open"])
-    s_fade = (fade_rate if fade_rate is not None else 0.0) * 100
-    s_o2c = clamp(-(st["med_o2c"] or 0) / 0.20) * 100
-    s_sq = clamp(1 - (st["p75_o2h"] or 0) / 0.60) * 100
-    s_cons = (((rate(st["early_hod"]) or 0) + (rate(st["vwap_never"]) or 0)) / 2) * 100
-    d1_rate = rate(st["d1_red"])
-    s_d2 = d1_rate * 100 if d1_rate is not None else 50
-    s_n = min(n / 20, 1) * 100
-    s_vwap = (rate(st.get("vwap_failed_reclaim", (0, 0))) or 0) * 100
-    s_spread = clamp(((st.get("med_hod_vwap_twap_spread") or 0) + .02) / .08) * 100
-    s_twap_touch = (rate(st.get("twap_touch_after_hod", (0, 0))) or 0) * 100
-    score = .26*s_fade + .16*s_o2c + .16*s_sq + .12*s_cons + .08*s_d2 + .05*s_n + .06*s_vwap + .05*s_spread + .06*s_twap_touch
+    pm_magnitude = clamp(abs(pm_stats.get("median_fade") or 0) / .30) * 100
+    s_pm = (.70 * (pm_stats.get("fade_rate") or 0) + .20 * pm_magnitude / 100 +
+            .10 * min(pm_n / 10, 1)) * 100 if pm_n else None
+    comps = []
+    if n:
+        fade_rate = rate(st["below_open"])
+        s_fade = (fade_rate if fade_rate is not None else 0.0) * 100
+        s_o2c = clamp(-(st["med_o2c"] or 0) / 0.20) * 100
+        s_sq = clamp(1 - (st["p75_o2h"] or 0) / 0.60) * 100
+        s_cons = (((rate(st["early_hod"]) or 0) + (rate(st["vwap_never"]) or 0)) / 2) * 100
+        d1_rate = rate(st["d1_red"])
+        s_d2 = d1_rate * 100 if d1_rate is not None else 50
+        s_n = min(n / 20, 1) * 100
+        s_vwap = (rate(st.get("vwap_failed_reclaim", (0, 0))) or 0) * 100
+        s_spread = clamp(((st.get("med_hod_vwap_twap_spread") or 0) + .02) / .08) * 100
+        s_twap_touch = (rate(st.get("twap_touch_after_hod", (0, 0))) or 0) * 100
+        base_score = (.26*s_fade + .16*s_o2c + .16*s_sq + .12*s_cons + .08*s_d2 + .05*s_n +
+                      .06*s_vwap + .05*s_spread + .06*s_twap_touch)
+        score = .75 * base_score + .25 * s_pm if s_pm is not None else base_score
+        comps = [("Fade rate (red close vs open)", 26, s_fade), ("Median open→close", 16, s_o2c),
+                 ("Squeeze risk (p75 open→HOD)", 16, s_sq), ("Early HOD / VWAP-loss consistency", 12, s_cons),
+                 ("Day-1 follow-through", 8, s_d2), ("Sample size", 5, s_n),
+                 ("Failed VWAP reclaim", 6, s_vwap), ("VWAP premium to TWAP at HOD", 5, s_spread),
+                 ("TWAP touch after HOD", 6, s_twap_touch)]
+        if s_pm is not None:
+            comps = [(name, weight * .75, value) for name, weight, value in comps]
+    else:
+        score = s_pm
+    if s_pm is not None:
+        comps.append(("Premarket spike faded ≥10% before open", 25 if n else 100, s_pm))
     score = round(score)
     letter = "F"
     for th, l in [(85, "A"), (80, "A-"), (75, "B+"), (70, "B"), (65, "B-"), (60, "C+"), (55, "C"), (50, "C-"), (40, "D")]:
         if score >= th:
             letter = l
             break
-    comps = [("Fade rate (red close vs open)", 26, s_fade), ("Median open→close", 16, s_o2c),
-             ("Squeeze risk (p75 open→HOD)", 16, s_sq), ("Early HOD / VWAP-loss consistency", 12, s_cons),
-             ("Day-1 follow-through", 8, s_d2), ("Sample size", 5, s_n),
-             ("Failed VWAP reclaim", 6, s_vwap), ("VWAP premium to TWAP at HOD", 5, s_spread),
-             ("TWAP touch after HOD", 6, s_twap_touch)]
     return {"score": score, "letter": letter, "comps": comps}
 
 
@@ -410,7 +440,10 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     st = stats(S)
     open_hod = recent_open_hod_stats(daily)
     hod_times = recent_hod_times(t, daily)
-    g = grade(st)
+    gap_events = [e for e in events if e.get("gap", 0) >= GAP_MIN]
+    pm_events = [e for e in events if e.get("pm_spike")]
+    pm_st = premarket_spike_stats(pm_events)
+    g = grade(st, pm_st)
     pc, cur = live["pc"], live["cur"]
     fl_now = live["float"] or live["so"]
     open_ = lm.get("open")
@@ -458,7 +491,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
              "Downlegs (#)", "Downleg %s"]
     cols5 = ["#", "Date", "Day #", "Day 1", "Day 1 Ret", "D2 ret", "D3", "D5", "Squeeze 1/3/5d", "Drawdn 1/3/5d"]
     R2, R3, R4, R5, dim = [], [], [], [], []
-    for i, e in enumerate(events, 1):
+    for i, e in enumerate(gap_events, 1):
         d = fdate(e["date"])
         star = "*" if e["stale"] else ""
         rot = "—" if e["rot_hod"] is None else f"{e['rot_hod']:.1f}x{star}"
@@ -511,10 +544,10 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
              "the next 1/3/5 sessions (e.g. +19/+25/+25). Day #: 1 = first gap day, 2+ = consecutive gapper.")
     spike_cols = ["Date", "Premkt Spike %", "Gap Up (RTH)", "PM High Time (IST)", "O → H (RTH)", "O → C (RTH)", "H → L (RTH)", "$ Vol Till High", "Premkt Vol", "$ Vol Reg Hr / $ Premkt"]
     spike_rows = []
-    for e in events:
+    for e in pm_events:
         pm_high_pct = e.get("pm_high_pct")
         pm_dv = e.get("pm_dv")
-        if pm_high_pct is None or pm_high_pct <= 0.40 or pm_dv is None or pm_dv <= 10_000_000:
+        if pm_high_pct is None or pm_high_pct < PM_GRADE_MIN_SPIKE or pm_dv is None or pm_dv <= 0:
             continue
         ratio = None
         if e.get("pm_dv") and e.get("rg_dv") not in (None, 0):
@@ -534,7 +567,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     if not spike_rows:
         spike_rows = [[C("—", "w", None) for _ in spike_cols]]
     tables = [
-        {"title": "[2A] PREMARKET SPIKE DAYS (>40% rise, >$10M premarket $ volume)", "cols": spike_cols, "rows": spike_rows, "dim": [], "foot": "Premarket spike = PM high versus previous close. Gap Up (RTH) = RTH open versus previous close. O→H, O→C, and H→L use RTH prices; O→C is the RTH close versus RTH open."},
+        {"title": "[2A] PREMARKET SPIKE DAYS (≥20% rise with premarket trading volume)", "cols": spike_cols, "rows": spike_rows, "dim": [], "foot": "Premarket spike = PM high versus previous close. Gap Up (RTH) = RTH open versus previous close. O→H, O→C, and H→L use RTH prices; O→C is the RTH close versus RTH open."},
         {"title": f"[2] HISTORICAL GAP UPS (last 1 year, gap ≥ {GAP_MIN*100:.0f}%) — click headers to sort",
          "cols": cols2, "rows": R2, "dim": dim, "foot": foot2},
         {"title": "[3] PREMARKET ANALYSIS", "cols": cols3, "rows": R3, "dim": dim, "foot": foot3},
@@ -568,12 +601,15 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     # ---- extras: stats / patterns
     summary = summary_text(st)
     if g:
-        verdict = verdict_text(g, st)
+        verdict = verdict_text(g, st) if st["n"] else "Premarket-only grade · " + (
+            f"{pm_st['fade_rate']:.0%} of {pm_st['n']} spikes faded ≥10% before the open; median high→open {pct(pm_st['median_fade'], 0)}")
+        if st["n"] and pm_st["n"]:
+            verdict += f" · Premarket fade ≥10%: {pm_st['fade_rate']:.0%} ({pm_st['n']} spikes)"
         gcls = "g" if g["letter"][0] in "AB" else "y" if g["letter"][0] == "C" else "r"
         head = {"grade": g["letter"], "score": f"{g['score']}/100", "gcls": gcls,
-                "verdict": verdict, "total": len(events)}
+                "verdict": verdict, "total": len(gap_events), "pm_n": pm_st["n"]}
     else:
-        head = {"grade": "N/A", "score": "—", "gcls": "r", "verdict": "Not enough history.", "total": len(events)}
+        head = {"grade": "N/A", "score": "—", "gcls": "r", "verdict": "Not enough history.", "total": len(gap_events), "pm_n": pm_st["n"]}
 
     mcols = ["Entry (short; exit at close / stop)", "Stop loss", "Trades", "Win %", "Avg win", "Avg loss", "Expectancy",
              "Avg R (per-model stop)", "Median squeeze", "Worst squeeze"]
@@ -746,7 +782,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
             "open_hod_stats": open_hod, "hod_times": hod_times, "tables": tables,
             "evcharts": evch, "session_dates": [r["date"] for r in daily] + [day_str, next_session.isoformat()],
             "model_names": ["2m ORB low break", "5m ORB low break", "Short at open"],
-            "pd": {"cols": mcols, "rows": mrows, "foot": mfoot},
+        "pd": {"cols": mcols, "rows": mrows, "foot": mfoot}, "premarket_grade": pm_st,
             "chart": chart, "dilution_url": dilution_url, "text": "\n".join(text)}
 
 

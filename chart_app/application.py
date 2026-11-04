@@ -645,7 +645,9 @@ def run_job(job, t, refresh):
                         if bucket(target_path[vwap_now_k]) != bucket(analog_path[vwap_now_k]): d += .7
             return d
 
-        S = sorted(events, key=dist)[:SIM_K]
+        # Premarket-only spike sessions inform the dedicated PM fade grade, but
+        # should not contaminate the regular-session gap-up analog set.
+        S = sorted((e for e in events if e.get("gap", 0) >= GAP_MIN), key=dist)[:SIM_K]
         notes = []
         if lg < GAP_MIN:
             notes.append(f"Today's gap ({lg*100:+.0f}%) is below the {GAP_MIN*100:.0f}% threshold; showing history anyway.")
