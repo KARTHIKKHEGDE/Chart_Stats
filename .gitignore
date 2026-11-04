@@ -60,3 +60,7 @@ venv.bak/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Strategy backtest (local only)
+strategy backtest/
+strategy_backtest/

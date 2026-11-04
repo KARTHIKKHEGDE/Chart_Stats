@@ -240,7 +240,10 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
     <button id="cp">Copy all</button>
 
     <div style="margin-left:auto;display:flex;align-items:center;gap:10px;font-size:13px;color:#8a8a8a">
-      <button id="scanner_open_btn" style="display:none;height:36px;padding:0 14px;border:2px solid #29a8ff;background:#071a28;color:#6cc4ff;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Live gap-up scanner">🔎 Scanner</button>
+      <button id="scanner_open_btn" style="height:36px;padding:0 14px;border:2px solid #00e676;background:#032014;color:#00e676;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px;display:inline-flex;align-items:center;gap:6px" title="Live Premarket Spike Scanner (≥50% Spike · ≥$5M Dollar Vol)">
+        <span>⚡</span> Premarket Scanner
+        <span id="scanner_count_badge" style="display:none;background:#00e676;color:#000;border-radius:10px;padding:1px 6px;font-size:11px;font-weight:bold;margin-left:4px">0</span>
+      </button>
       <button id="nav_multiday_btn" style="height:36px;padding:0 14px;border:2px solid #00c9a7;background:#002b24;color:#00c9a7;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Multi-day Rally & First Red Day (FRD) Structure Tool">📊 Runner Stats</button>
       <button id="nav_keyword_btn" style="height:36px;padding:0 14px;border:2px solid #8b74ff;background:#120f24;color:#b7a8ff;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Search SEC filings by financing player">⌕ Search Keyword</button>
       <button id="nav_gap_deepdive_btn" style="height:36px;padding:0 14px;border:2px solid #ffd23f;background:#211b05;color:#ffe17d;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Historical premarket gap deep dive">↗ Gap Up Deepdive</button>
@@ -311,29 +314,64 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
   </div>
 </div>
 
-<!-- Live Gap-Up Scanner -->
-<div id="scanner_modal" style="position:fixed;top:96px;right:24px;z-index:90000;display:none;width:min(1280px,calc(100vw - 48px));pointer-events:none">
-  <section style="width:100%;max-height:82vh;display:flex;flex-direction:column;background:#090b0e;border:1px solid #29a8ff;border-radius:6px;box-shadow:0 12px 40px rgba(0,0,0,.8);pointer-events:auto;overflow:hidden">
-    <header style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:15px 18px;border-bottom:1px solid #252b31">
-      <div style="font-size:17px;font-weight:bold;color:#6cc4ff">🔎 Live Gap-Up Scanner</div>
-      <div style="font-size:12px;color:#999">Price &gt;$0.40 and &lt;$20 · Gap &gt;40% · Dollar volume ≥$500K</div>
-      <div style="margin-left:auto;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-        <label style="display:flex;align-items:center;gap:8px;color:#ffd23f;font-size:13px;cursor:pointer"><input id="scanner_alarm" type="checkbox" style="width:17px;height:17px"> Voice alerts</label>
+<!-- Live Premarket Spike Scanner -->
+<div id="scanner_modal" style="position:fixed;top:70px;right:20px;z-index:90000;display:none;width:min(1320px,calc(100vw - 40px));pointer-events:none">
+  <section style="width:100%;max-height:86vh;display:flex;flex-direction:column;background:#080d12;border:2px solid #00e676;border-radius:10px;box-shadow:0 20px 60px rgba(0,0,0,0.9), 0 0 30px rgba(0,230,118,0.2);pointer-events:auto;overflow:hidden">
+    <header style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:14px 18px;background:#0c141d;border-bottom:1px solid #1a2734">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:22px">⚡</span>
+        <div>
+          <div style="font-size:16px;font-weight:900;color:#00e676;letter-spacing:0.4px">Premarket Spike Scanner</div>
+          <div style="font-size:11px;color:#7e95a7">Filters: Premarket Spike ≥50% · Premarket Dollar Volume ≥$5,000,000 · Refreshed Every Minute</div>
+        </div>
       </div>
-      <button id="scanner_refresh_btn" style="height:32px;font-size:13px;padding:0 12px">Refresh</button>
-      <button id="scanner_close_btn" style="height:32px;font-size:13px;padding:0 12px" onclick="closeScanner()">Close</button>
+
+      <div style="display:flex;align-items:center;gap:10px;margin-left:auto;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:6px;background:rgba(0,230,118,0.12);border:1px solid #00e67666;padding:4px 10px;border-radius:4px;font-size:12px;color:#00e676">
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#00e676;box-shadow:0 0 8px #00e676"></span>
+          <span>Still ≥50%: <b id="scanner_green_badge">0</b></span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;background:rgba(255,210,63,0.12);border:1px solid #ffd23f66;padding:4px 10px;border-radius:4px;font-size:12px;color:#ffd23f">
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ffd23f;box-shadow:0 0 8px #ffd23f"></span>
+          <span>Faded &lt;50%: <b id="scanner_yellow_badge">0</b></span>
+        </div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:12px;color:#8ba2b5;background:#060a0f;padding:4px 8px;border-radius:4px;border:1px solid #1f2e3d">
+          <span>Auto-refresh:</span>
+          <span id="scanner_countdown" style="color:#00e676;font-weight:bold;min-width:24px">60s</span>
+        </div>
+        <button id="scanner_refresh_btn" style="height:32px;font-size:12px;padding:0 12px;background:#042114;border:1px solid #00e676;color:#00e676;cursor:pointer;font-weight:bold;border-radius:4px;display:flex;align-items:center;gap:5px">↻ Refresh Now</button>
+        <button id="scanner_close_btn" style="height:32px;font-size:12px;padding:0 12px;background:#141a21;border:1px solid #334455;color:#aaa;cursor:pointer;border-radius:4px" onclick="closeScanner()">✕ Close</button>
+      </div>
     </header>
-    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:10px 18px;background:#0d1014;border-bottom:1px solid #252b31;font-size:12px">
-      <label style="display:flex;align-items:center;gap:5px"><input id="scanner_vwap_alert" type="checkbox" style="width:15px;height:15px"> VWAP</label>
-      <span id="scanner_settings_status" style="margin-left:auto;color:#777">Settings save per user</span>
+
+    <div style="padding:10px 18px;background:#05090d;border-bottom:1px solid #16202a;display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#7e95a7;flex-wrap:wrap;gap:10px">
+      <div id="scanner_status">Loading scanner data…</div>
+      <div style="display:flex;align-items:center;gap:16px;font-size:11px">
+        <span>🟢 <b>Green</b>: Current gain ≥50% (vibrancy scales with size)</span>
+        <span>🟡 <b>Yellow</b>: Spiked ≥50% in premarket, now below 50%</span>
+        <span>💡 Click any ticker to load notes & charts</span>
+      </div>
     </div>
-    <div style="padding:10px 18px;color:#888;font-size:12px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
-      <span id="scanner_status">Waiting for scan…</span><span>Yahoo premarket prices · Alpaca SIP volume (up to 15-min delay) · Click a ticker to load its notes</span>
-    </div>
-    <div style="overflow:auto;padding:0 18px 18px">
-      <table style="width:100%;border-collapse:collapse"><thead><tr style="color:#aaa;text-align:left;border-bottom:1px solid #333">
-        <th style="padding:8px">Ticker</th><th style="padding:8px;text-align:right">Price</th><th style="padding:8px;text-align:right">Gap</th><th style="padding:8px;text-align:right">Volume</th><th style="padding:8px;text-align:right">$ Volume</th>
-      </tr></thead><tbody id="scanner_rows"><tr><td colspan="5" style="padding:18px;color:#777;text-align:center">No scan yet</td></tr></tbody></table>
+
+    <div style="overflow-y:auto;overflow-x:auto;padding:0;max-height:calc(86vh - 120px)">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="color:#8094a6;text-align:left;background:#0c131b;border-bottom:1px solid #1f2c38;position:sticky;top:0;z-index:2">
+            <th style="padding:10px 14px">Ticker</th>
+            <th style="padding:10px 14px">Status</th>
+            <th style="padding:10px 14px;text-align:right">Current Price</th>
+            <th style="padding:10px 14px;text-align:right">Current Gain</th>
+            <th style="padding:10px 14px;text-align:right">PM Peak Spike</th>
+            <th style="padding:10px 14px;text-align:right">Prev Close</th>
+            <th style="padding:10px 14px;text-align:right">PM $ Volume</th>
+            <th style="padding:10px 14px;text-align:right">PM Shares</th>
+            <th style="padding:10px 14px;text-align:center">Action</th>
+          </tr>
+        </thead>
+        <tbody id="scanner_rows">
+          <tr><td colspan="9" style="padding:32px;color:#7e95a7;text-align:center">Loading scanner data…</td></tr>
+        </tbody>
+      </table>
     </div>
   </section>
 </div>
@@ -3042,7 +3080,7 @@ $('#logout_btn').onclick=()=>{
 };
 
 let adminPwd = '';
-let appUiVisibility = {scanner:false, runner_stats:true};
+let appUiVisibility = {scanner:true, runner_stats:true};
 let appUiVisibilityTimer = null;
 
 function applyAppUiVisibility(value){
@@ -3768,56 +3806,133 @@ function loadScannerVoices(){
   if(preferredVoice) scannerSettings.voice_uri = preferredVoice.voiceURI;
 }
 
-async function refreshScanner(){
+let scannerCountdownSec = 60;
+let scannerCountdownTimer = null;
+
+function startScannerCountdown(){
+  if(scannerCountdownTimer) clearInterval(scannerCountdownTimer);
+  scannerCountdownSec = 60;
+  scannerCountdownTimer = setInterval(()=>{
+    scannerCountdownSec--;
+    const el = $('#scanner_countdown');
+    if(el) el.textContent = scannerCountdownSec + 's';
+    if(scannerCountdownSec <= 0){
+      scannerCountdownSec = 60;
+      refreshScanner();
+    }
+  }, 1000);
+}
+
+async function refreshScanner(force=false){
   if(scannerBusy || !currentUser || !sessionToken) return;
   scannerBusy = true;
   const status = $('#scanner_status');
+  if(status && force) status.textContent = 'Requesting fresh scan from Yahoo Finance…';
   try {
-    const url = '/api/scanner?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken);
+    const url = '/api/scanner?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken)+(force ? '&force=1' : '');
     const res = await fetch(url);
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Scanner request failed');
     const tickers = data.tickers || [];
-    loadScannerApproachHistory(data.session_date || new Date().toISOString().slice(0,10));
     const body = $('#scanner_rows');
+    
+    // Update badge counters
+    const greenCount = data.green_count || tickers.filter(t=>t.status==='green').length;
+    const yellowCount = data.yellow_count || tickers.filter(t=>t.status==='yellow').length;
+    if($('#scanner_green_badge')) $('#scanner_green_badge').textContent = greenCount;
+    if($('#scanner_yellow_badge')) $('#scanner_yellow_badge').textContent = yellowCount;
+    const countBadge = $('#scanner_count_badge');
+    if(countBadge){
+      countBadge.textContent = tickers.length;
+      countBadge.style.display = tickers.length ? 'inline-block' : 'none';
+    }
+
     if(!tickers.length){
-      body.innerHTML = '<tr><td colspan="5" style="padding:18px;color:#777;text-align:center">'+
-        (data.scanning ? 'Scanning Yahoo US tickers for today’s premarket gaps…' :
-         data.scan_error ? 'Yahoo premarket scan failed: '+esc(data.scan_error) : 'No tickers currently meet all scanner conditions.')+
+      body.innerHTML = '<tr><td colspan="9" style="padding:32px;color:#7e95a7;text-align:center">' +
+        (data.scanning ? 'Currently scanning Yahoo US tickers in parallel for today\'s premarket spikes…' :
+         data.error ? 'Scan notice: ' + esc(data.error) : 'No tickers currently meet the criteria (PM Spike ≥50% & PM $ Volume ≥$5M).') +
         '</td></tr>';
     } else {
-      body.innerHTML = tickers.map(row=>`<tr class="scanner-result-row" data-ticker="${esc(row.ticker)}" style="border-bottom:1px solid #20242a;cursor:pointer" title="Load notes for ${esc(row.ticker)}" onmouseover="this.style.background='#101820'" onmouseout="this.style.background='transparent'">`+
-        `<td style="padding:9px;color:#6cc4ff;font-weight:bold">${esc(row.ticker)}</td>`+
-        `<td style="padding:9px;text-align:right">$${Number(row.price).toFixed(2)}</td>`+
-        `<td style="padding:9px;text-align:right;color:#3ddc84">+${Number(row.gap_pct).toFixed(1)}%</td>`+
-        `<td style="padding:9px;text-align:right">${Number(row.volume).toLocaleString()}</td>`+
-        `<td style="padding:9px;text-align:right">$${Number(row.dollar_volume).toLocaleString()}</td></tr>`).join('');
-      body.querySelectorAll('[data-ticker]').forEach(row=>row.onclick=()=>selectScannerTicker(row.dataset.ticker));
-    }
-    const stamp = new Date((data.updated || Date.now()/1000)*1000).toLocaleTimeString();
-    status.textContent = data.scanning
-      ? (data.scan_phase === 'alpaca'
-        ? `Checking Alpaca premarket volume · ${Number(data.scan_candidates||0).toLocaleString()} Yahoo gap candidates`
-        : `Checking Yahoo premarket gaps · ${Number(data.scan_symbols_done||0).toLocaleString()} / ${Number(data.scan_universe_total||0).toLocaleString()} TC2000 tickers`)
-      : `${tickers.length} matching ticker${tickers.length===1?'':'s'} · ${data.scan_error ? 'Coverage incomplete: '+esc(data.scan_error)+' · ' : ''}Updated ${stamp} · Full scan refreshes every 60 seconds`;
-    if(scannerAlarmEnabled){
-      tickers.forEach(row=>{
-        const newEvents = (row.approaches || []).filter(event=>{
-          const enabled = event.code === 'VWAP' && scannerSettings.vwap_enabled;
-          const approachPct = Number(scannerSettings.approach_pct);
-          const previousDistancePct = Number(event.previous_distance_pct);
-          if(!enabled || Number(event.distance_pct) > approachPct ||
-             !Number.isFinite(previousDistancePct) || previousDistancePct <= approachPct) return false;
-          const id = `${row.ticker}:${event.code}`;
-          if(scannerSeenApproaches.has(id)) return false;
-          saveScannerApproach(id);
-          return true;
-        });
-        if(newEvents.length) announceScannerTicker(row.ticker, newEvents.map(event=>event.label).join('. '));
+      body.innerHTML = tickers.map(row=>{
+        const isGreen = row.status === 'green' || Number(row.current_pct) >= 50.0;
+        const curPct = Number(row.current_pct || 0);
+        const spikePct = Number(row.pm_spike_pct || 0);
+        const price = Number(row.price || 0);
+        const pmHigh = Number(row.pm_high || 0);
+        const prevClose = Number(row.previous_close || 0);
+        const dvol = Number(row.dollar_volume || 0);
+        const vol = Number(row.volume || 0);
+        
+        let statusBadge = '';
+        let gainColStyle = '';
+        let rowStyle = 'border-bottom:1px solid #18232e;cursor:pointer;transition:background 0.15s;';
+        
+        if(isGreen){
+          // More size -> deeper / brighter / more vibrant green
+          let greenColor = '#22c55e';
+          let badgeBg = 'rgba(34, 197, 94, 0.18)';
+          let badgeBorder = '#22c55e';
+          let rowBg = 'rgba(34, 197, 94, 0.03)';
+          
+          if(curPct >= 200){
+            greenColor = '#39ff14'; // Neon ultra green
+            badgeBg = 'rgba(57, 255, 20, 0.3)';
+            badgeBorder = '#39ff14';
+            rowBg = 'rgba(57, 255, 20, 0.1)';
+          } else if(curPct >= 120){
+            greenColor = '#00ff66'; // Electric green
+            badgeBg = 'rgba(0, 255, 102, 0.24)';
+            badgeBorder = '#00ff66';
+            rowBg = 'rgba(0, 255, 102, 0.06)';
+          } else if(curPct >= 75){
+            greenColor = '#00e676'; // Vivid emerald green
+            badgeBg = 'rgba(0, 230, 118, 0.2)';
+            badgeBorder = '#00e676';
+            rowBg = 'rgba(0, 230, 118, 0.04)';
+          }
+          
+          gainColStyle = `color:${greenColor};font-weight:900;font-size:15px;text-shadow:0 0 12px ${greenColor}55`;
+          statusBadge = `<span style="display:inline-flex;align-items:center;gap:5px;background:${badgeBg};border:1px solid ${badgeBorder};color:${greenColor};padding:3px 9px;border-radius:4px;font-size:11px;font-weight:bold;letter-spacing:0.4px">`+
+            `<span style="width:6px;height:6px;border-radius:50%;background:${greenColor};box-shadow:0 0 6px ${greenColor}"></span> STILL ≥50%</span>`;
+          rowStyle += `background:${rowBg};`;
+        } else {
+          // Yellow for stocks that spiked >= 50% in PM, but are now faded below 50%
+          const yellowColor = '#ffd23f';
+          const badgeBg = 'rgba(255, 210, 63, 0.14)';
+          const badgeBorder = '#ffd23f';
+          gainColStyle = `color:${yellowColor};font-weight:bold;font-size:14px`;
+          statusBadge = `<span style="display:inline-flex;align-items:center;gap:5px;background:${badgeBg};border:1px solid ${badgeBorder};color:${yellowColor};padding:3px 9px;border-radius:4px;font-size:11px;font-weight:bold;letter-spacing:0.4px">`+
+            `<span style="width:6px;height:6px;border-radius:50%;background:${yellowColor};box-shadow:0 0 6px ${yellowColor}"></span> FADED &lt;50%</span>`;
+          rowStyle += `background:rgba(255, 210, 63, 0.02);`;
+        }
+
+        const dvolFormatted = dvol >= 1e9 ? `$${(dvol/1e9).toFixed(2)}B` : `$${(dvol/1e6).toFixed(2)}M`;
+        
+        return `<tr class="scanner-result-row" data-ticker="${esc(row.ticker)}" style="${rowStyle}" onmouseover="this.style.filter='brightness(1.2)'" onmouseout="this.style.filter='none'">`+
+          `<td style="padding:10px 14px"><strong style="color:#ffffff;font-size:15px;letter-spacing:0.5px">${esc(row.ticker)}</strong></td>`+
+          `<td style="padding:10px 14px">${statusBadge}</td>`+
+          `<td style="padding:10px 14px;text-align:right;font-weight:bold;color:#f0f6fc">$${price >= 1 ? price.toFixed(2) : price.toFixed(4)}</td>`+
+          `<td style="padding:10px 14px;text-align:right;${gainColStyle}">${curPct >= 0 ? '+' : ''}${curPct.toFixed(1)}%</td>`+
+          `<td style="padding:10px 14px;text-align:right;color:#00e676;font-weight:bold">+${spikePct.toFixed(1)}% <span style="font-size:11px;color:#8ba2b5;font-weight:normal">($${pmHigh >= 1 ? pmHigh.toFixed(2) : pmHigh.toFixed(4)})</span></td>`+
+          `<td style="padding:10px 14px;text-align:right;color:#8ba2b5">$${prevClose >= 1 ? prevClose.toFixed(2) : prevClose.toFixed(4)}</td>`+
+          `<td style="padding:10px 14px;text-align:right;font-weight:bold;color:#ffd23f">${dvolFormatted}</td>`+
+          `<td style="padding:10px 14px;text-align:right;color:#cbd6df">${vol.toLocaleString()}</td>`+
+          `<td style="padding:10px 14px;text-align:center"><button style="padding:3px 10px;font-size:11px;background:#0d1822;border:1px solid #29a8ff;color:#6cc4ff;border-radius:3px;cursor:pointer;font-weight:bold" onclick="event.stopPropagation();selectScannerTicker('${esc(row.ticker)}')">Load Notes →</button></td>`+
+          `</tr>`;
+      }).join('');
+      
+      body.querySelectorAll('[data-ticker]').forEach(row=>{
+        row.onclick = () => selectScannerTicker(row.dataset.ticker);
       });
     }
+
+    const stamp = new Date((data.updated || Date.now()/1000)*1000).toLocaleTimeString();
+    if(status){
+      status.innerHTML = `<span><b>${tickers.length}</b> qualifying stock${tickers.length===1?'':'s'} found (${greenCount} green, ${yellowCount} yellow) · Last updated at <b>${stamp}</b></span>`;
+    }
+    startScannerCountdown();
   } catch(e){
-    status.textContent = 'Scanner error: ' + e.message;
+    if(status) status.textContent = 'Scanner error: ' + e.message;
   } finally {
     scannerBusy = false;
   }
@@ -3832,7 +3947,7 @@ function selectScannerTicker(ticker){
 
 if($('#scanner_open_btn')) $('#scanner_open_btn').onclick = toggleScanner;
 if($('#scanner_close_btn')) $('#scanner_close_btn').onclick = closeScanner;
-if($('#scanner_refresh_btn')) $('#scanner_refresh_btn').onclick = refreshScanner;
+if($('#scanner_refresh_btn')) $('#scanner_refresh_btn').onclick = () => refreshScanner(true);
 if($('#scanner_alarm')) $('#scanner_alarm').onchange = e=>{
   scannerAlarmEnabled = e.target.checked;
   saveScannerSettings();

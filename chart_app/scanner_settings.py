@@ -44,7 +44,7 @@ _APP_UI_VISIBILITY_USER_KEY = "app_ui_visibility_user"
 _APP_UI_VISIBILITY_DEFAULT_KEY = "app_ui_visibility_default"
 
 
-_APP_UI_VISIBILITY_DEFAULTS = {"scanner": False, "runner_stats": True}
+_APP_UI_VISIBILITY_DEFAULTS = {"scanner": True, "runner_stats": True}
 
 
 _app_ui_visibility_file = Path(__file__).resolve().parent.parent / ".app_ui_visibility.json"
