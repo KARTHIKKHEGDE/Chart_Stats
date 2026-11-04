@@ -96,7 +96,7 @@ def _write_local_scanner_settings(username, settings):
 def _normalize_app_ui_visibility(value):
     source = value if isinstance(value, dict) else {}
     return {
-        "scanner": False,
+        "scanner": source.get("scanner", True) is not False,
         "runner_stats": source.get("runner_stats") is not False,
     }
 

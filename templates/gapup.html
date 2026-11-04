@@ -3092,7 +3092,7 @@ function applyAppUiVisibility(value){
   const runnerButton = $('#nav_multiday_btn');
   const runnerNewTabButton = $('#open_multiday_newtab');
   const runnerAdminButton = $('#multiday_stats_btn');
-  if(scannerButton) scannerButton.style.display = appUiVisibility.scanner ? '' : 'none';
+  if(scannerButton) scannerButton.style.display = appUiVisibility.scanner !== false ? 'inline-flex' : 'none';
   if(runnerButton) runnerButton.style.display = appUiVisibility.runner_stats ? '' : 'none';
   if(runnerNewTabButton) runnerNewTabButton.style.display = appUiVisibility.runner_stats ? '' : 'none';
   if(runnerAdminButton) runnerAdminButton.style.display = appUiVisibility.runner_stats ? '' : 'none';
