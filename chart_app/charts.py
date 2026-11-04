@@ -1314,7 +1314,7 @@ def sec_filing_explanation():
     if not parts:
         return jsonify({'error': 'SEC filing document URL is unavailable.'}), 404
     cache_file=quote(parts.get('filename') or 'index',safe='.-_')
-    cache_key = f"sec_filing_explanation_v4_{parts['cik']}_{parts['accession_path']}_{cache_file}"
+    cache_key = f"sec_filing_explanation_v5_{parts['cik']}_{parts['accession_path']}_{cache_file}"
     cached = cget(cache_key, 30 * 86400)
     if cached is not None:
         return jsonify(cached)
@@ -1358,6 +1358,33 @@ def sec_filing_explanation():
                             item['explain_url'] = linked_record.get('document_url') or item['explain_url']
             except Exception:
                 pass
+
+        # Earnings figures are often only in an 8-K's linked EX-99 press release,
+        # not in the 8-K cover page. Read those exhibits to capture the actual amounts.
+        earnings_exhibit_sections=[]
+        if source_item and str(source_item.get('form') or '').upper().startswith('8-K'):
+            candidates=[]
+            for item in related:
+                link_parts=_sec_archive_url_parts(item.get('url') or '')
+                filename=(link_parts or {}).get('filename','').rsplit('/',1)[-1]
+                label=f"{item.get('title','')} {filename}"
+                if (link_parts and link_parts['accession_path']==parts['accession_path'] and
+                    re.search(r'(?:ex[-_]?99(?:[-_]\d+)?|exhibit\s*99|press\s+release|earnings\s+release|financial\s+results)',label,re.I)):
+                    candidates.append((item,filename))
+            seen_exhibits=set()
+            for item,filename in candidates:
+                if filename.casefold() in seen_exhibits or len(earnings_exhibit_sections)>=3:
+                    continue
+                seen_exhibits.add(filename.casefold())
+                try:
+                    exhibit_text,_=_filing_document_text(item.get('url') or '')
+                except Exception:
+                    app.logger.info('Could not read linked earnings exhibit %s',filename)
+                    continue
+                if len(exhibit_text)>=80:
+                    earnings_exhibit_sections.append(
+                        f"Linked exhibit {item.get('title') or filename} (primary source for earnings figures):\n{exhibit_text[:10000]}")
+        earnings_exhibit_context='\n\n'.join(earnings_exhibit_sections)
 
         supplemental_contexts={}
         if source_item and (str(source_item.get('form') or '').upper()=='RW' or
@@ -1456,6 +1483,7 @@ def sec_filing_explanation():
             "a brief, plain-language phrase suitable for parentheses after its exact title. Use only evidence in "
             "the filing text. If the connection is not clear, say 'referenced, connection unclear'. Do not invent "
             "a connection. Include one item for each listed source ID.\n\n"
+            "For earnings, revenue, or financial-results filings, the primary task is to state the actual reported or estimated figures, not just that results were announced. Read linked earnings exhibits included below and put the key numbers prominently in the summary and key_points: revenue, comparison period and change, gross profit, operating expenses, operating loss or net income/loss, EPS if disclosed, adjusted EBITDA, and cash or guidance when disclosed. Include units and clearly label each period. Distinguish preliminary/unaudited estimates from finalized results; never calculate or invent missing figures. If a figure (such as EPS) is not disclosed in the source, say it was not provided.\n\n"
             "When explaining a withdrawal, read the linked original registration and any included underwriting "
             "agreement. State who the proposed underwriter was, what the company proposed to sell and the key "
             "terms/risks stated in the registration, and clearly distinguish proposed terms from an offering that "
@@ -1465,7 +1493,7 @@ def sec_filing_explanation():
             f"Exact SEC filing title: {exact_title or 'SEC filing'}\n"
             f"Ticker: {ticker or 'unknown'}\nForm: {source_item.get('form', '') if source_item else ''}\n"
             f"Linked SEC filing titles (keep these titles unchanged):\n{related_context}\n\n"
-            f"Filing text (may be truncated):\n{excerpt}\n\n{related_document_text}"
+            f"Filing text (may be truncated):\n{excerpt}\n\n{related_document_text}\n\n{earnings_exhibit_context}"
         )
         answer, provider = _call_filing_ai(prompt)
         parsed_answer=_parse_ai_json_object(answer)
