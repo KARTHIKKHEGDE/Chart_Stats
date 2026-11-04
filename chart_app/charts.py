@@ -35,7 +35,7 @@ import requests
 from pathlib import Path
 from html.parser import HTMLParser
 from urllib.parse import quote, urljoin, urlparse
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
 from flask import g
 from chart_app.yahoo_limiter import YAHOO_REQUEST_SEMAPHORE
 
@@ -670,7 +670,7 @@ def _run_gap_deepdive(job_id):
     try:
         job.update(status='running', message=f'Scanning {len(GAP_DEEPDIVE_TICKERS)} tickers for {year}…', done=0, total=len(GAP_DEEPDIVE_TICKERS), min_pm_gap_pct=70)
         cput(f"gap_deepdive_job_{job_id}", job)
-        with ThreadPoolExecutor(max_workers=min(8, max(1, len(GAP_DEEPDIVE_TICKERS)))) as pool:
+        with ThreadPoolExecutor(max_workers=min(10, max(1, len(GAP_DEEPDIVE_TICKERS)))) as pool:
             futures = {pool.submit(scan_ticker, ticker): ticker for ticker in GAP_DEEPDIVE_TICKERS}
             for future in as_completed(futures):
                 ticker = futures[future]
@@ -2963,10 +2963,14 @@ def chart_context():
             raw=_gap_chart_context_minute_chunk(ticker,first,last)
             return poly_frame(raw) if raw else pd.DataFrame()
         with ThreadPoolExecutor(max_workers=min(4,max(1,len(chunks)))) as pool:
-            for offset in range(0,len(chunks),4):
-                batch=chunks[offset:offset+4]
-                futures={pool.submit(read_chunk,bounds):dates for _,(bounds,dates) in batch}
-                for future in as_completed(futures):
+            chunk_iter=iter(chunks);futures={}
+            for _ in range(min(4,len(chunks))):
+                try:_,(bounds,dates)=next(chunk_iter)
+                except StopIteration:break
+                futures[pool.submit(read_chunk,bounds)]=dates
+            while futures:
+                completed,_=wait(tuple(futures),return_when=FIRST_COMPLETED)
+                for future in completed:
                     frame=future.result();dates=futures.pop(future)
                     if not frame.empty:
                         for date in dates:
@@ -2974,6 +2978,9 @@ def chart_context():
                             pack_day(date,dayframe)
                         dayframe=None
                     del frame
+                    try:_,(bounds,dates)=next(chunk_iter)
+                    except StopIteration:continue
+                    futures[pool.submit(read_chunk,bounds)]=dates
         packed_parts=[]
         for date in chart_dates:
             packed=packed_by_date.get(date)

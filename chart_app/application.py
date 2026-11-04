@@ -571,7 +571,7 @@ def run_job(job, t, refresh):
             fetch_args=[(t,i,daily) for i in idxs]
             # Keep provider concurrency bounded: spawning one worker per
             # event/key can saturate connection pools and trigger rate limits.
-            fetch_workers=min(n_keys,n_events,8)
+            fetch_workers=min(n_keys,n_events,10)
             analyze_workers=min(4,n_events)
             cached_sessions=sum(cget(f"{t}_{daily[i]['date']}_1m_polygon_v1") is not None for i in idxs)
             uncached_sessions=max(0,n_events-cached_sessions)

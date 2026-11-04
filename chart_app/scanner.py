@@ -271,16 +271,25 @@ def _run_scanner_cycle():
         with ThreadPoolExecutor(max_workers=12, thread_name_prefix="yahoo-pm-chart") as pool:
             # Keep only a bounded set of futures; candidate universes can contain
             # hundreds of symbols and eager submission retains every Future.
-            for offset in range(0,len(candidates),24):
-                futures=[pool.submit(_scrape_yahoo_premarket_chart,sym) for sym in candidates[offset:offset+24]]
-                for future in as_completed(futures):
-                    item=future.result()
-                    if item:
-                        results.append(item)
-                        partial=sorted(results,key=lambda x:(0 if x["status"]=="green" else 1,
-                            -x["current_pct"] if x["status"]=="green" else -x["pm_spike_pct"],-x["dollar_volume"]))
-                        with _scanner_cache_lock:
-                            _scanner_cache.update(at=time.time(),rows=list(partial),session_date=session_date,scanning=True,error="")
+            candidates_iter=iter(candidates)
+            pending={}
+            for _ in range(min(12,len(candidates))):
+                try:symbol=next(candidates_iter)
+                except StopIteration:break
+                pending[pool.submit(_scrape_yahoo_premarket_chart,symbol)]=symbol
+            while pending:
+                future=next(as_completed(tuple(pending)))
+                pending.pop(future,None)
+                item=future.result()
+                if item:
+                    results.append(item)
+                    partial=sorted(results,key=lambda x:(0 if x["status"]=="green" else 1,
+                        -x["current_pct"] if x["status"]=="green" else -x["pm_spike_pct"],-x["dollar_volume"]))
+                    with _scanner_cache_lock:
+                        _scanner_cache.update(at=time.time(),rows=list(partial),session_date=session_date,scanning=True,error="")
+                try:symbol=next(candidates_iter)
+                except StopIteration:continue
+                pending[pool.submit(_scrape_yahoo_premarket_chart,symbol)]=symbol
 
         # Sort: Green first (descending by current_pct), then Yellow (descending by pm_spike_pct)
         results.sort(

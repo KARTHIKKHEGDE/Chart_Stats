@@ -2815,7 +2815,7 @@ async function gapDeepDiveBrowserCachePut(key,chart){
 }
 function flushGapDeepDiveChartQueue(){
   if(gapDeepDiveChartBatchTimer){clearTimeout(gapDeepDiveChartBatchTimer);gapDeepDiveChartBatchTimer=null;}
-  while(gapDeepDiveChartQueue.length&&gapDeepDiveChartActiveBatches<1){
+  while(gapDeepDiveChartQueue.length&&gapDeepDiveChartActiveBatches<2){
     const batch=gapDeepDiveChartQueue.splice(0,4);if(!batch.length)break;gapDeepDiveChartActiveBatches++;
     const url='/api/gap-deepdive/'+encodeURIComponent(batch[0].jobId)+'/charts?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken);
     fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({charts:batch.map(x=>({ticker:x.item.ticker,date:x.item.date}))})})
