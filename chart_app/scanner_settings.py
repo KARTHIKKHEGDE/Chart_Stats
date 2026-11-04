@@ -21,8 +21,8 @@ from chart_app.application import (
 from chart_app import auth as _auth
 
 DEFAULT_SCANNER_SETTINGS = {
-    "version": 5,
-    "voice_enabled": False,
+    "version": 6,
+    "voice_enabled": True,
     "voice_uri": "",
     "approach_pct": 2.0,
     "vwap_enabled": True,
@@ -68,8 +68,8 @@ def _normalize_scanner_settings(value):
     except (TypeError, ValueError):
         approach_pct = DEFAULT_SCANNER_SETTINGS["approach_pct"]
     return {
-        "version": 5,
-        "voice_enabled": False if version < 4 else bool(source.get("voice_enabled", DEFAULT_SCANNER_SETTINGS["voice_enabled"])),
+        "version": 6,
+        "voice_enabled": True if version < 6 else bool(source.get("voice_enabled", DEFAULT_SCANNER_SETTINGS["voice_enabled"])),
         "news_enabled": bool(source.get("news_enabled", DEFAULT_SCANNER_SETTINGS["news_enabled"])) if version >= 5 else False,
         "voice_uri": str(source.get("voice_uri") or "")[:300],
         "approach_pct": round(max(0.1, min(10.0, approach_pct)), 2),

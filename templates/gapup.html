@@ -339,7 +339,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
           <span>Auto-refresh:</span>
           <span id="scanner_countdown" style="color:#00e676;font-weight:bold;min-width:24px">15s</span>
         </div>
-        <div style="font-size:11px;color:#8ba2b5;background:#060a0f;padding:5px 8px;border:1px solid #1f2e3d;border-radius:4px;white-space:nowrap"><span id="scanner_voice_status">Loading female voice…</span></div>
+        <label style="display:inline-flex;align-items:center;gap:7px;white-space:nowrap;background:#060a0f;border:1px solid #1f2e3d;border-radius:4px;padding:6px 9px;font-size:12px;color:#cbd6df;cursor:pointer"><input id="scanner_voice_enabled" type="checkbox" style="appearance:auto;-webkit-appearance:checkbox;width:14px;min-width:14px;height:14px;min-height:14px;margin:0;padding:0;flex:none;accent-color:#00e676"> Read ticker names</label>
         <label style="display:inline-flex;align-items:center;gap:7px;white-space:nowrap;background:#060a0f;border:1px solid #1f2e3d;border-radius:4px;padding:6px 9px;font-size:12px;color:#cbd6df;cursor:pointer" title="Speak the latest headline after each ticker announcement"><input id="scanner_news_read" type="checkbox" style="appearance:auto;-webkit-appearance:checkbox;width:14px;min-width:14px;height:14px;min-height:14px;margin:0;padding:0;flex:none;accent-color:#00e676"> Read latest news</label>
         <button id="scanner_refresh_btn" style="height:32px;font-size:12px;padding:0 12px;background:#042114;border:1px solid #00e676;color:#00e676;cursor:pointer;font-weight:bold;border-radius:4px;display:flex;align-items:center;gap:5px">↻ Refresh Now</button>
         <button id="scanner_close_btn" style="height:32px;font-size:12px;padding:0 12px;background:#141a21;border:1px solid #334455;color:#aaa;cursor:pointer;border-radius:4px" onclick="closeScanner()">✕ Close</button>
@@ -3591,7 +3591,7 @@ let scannerAlertSession = '';
 let scannerSeenApproaches = new Set();
 let scannerAnnouncementSession = '';
 let scannerTickerAnnouncements = {};
-const scannerSettingsDefaults = {version:5,voice_enabled:true,approach_pct:2,vwap_enabled:true,news_enabled:false};
+const scannerSettingsDefaults = {version:6,voice_enabled:true,approach_pct:2,vwap_enabled:true,news_enabled:false};
 let scannerSettings = {...scannerSettingsDefaults};
 let scannerSettingsUser = '';
 let scannerSettingsLoadPromise = null;
@@ -3615,26 +3615,26 @@ function startScannerPolling(){
 function migrateScannerSettings(settings){
   const source = settings && typeof settings === 'object' ? settings : {};
   const migrated = {...scannerSettingsDefaults, ...source};
-  // Ticker readout is automatic; users only control optional news readout.
-  migrated.voice_enabled = true;
+  if(Number(source.version || 0) < 6) migrated.voice_enabled = true;
   if(Number(source.version || 0) < 5) migrated.news_enabled = false;
   delete migrated.bone_2m_enabled;
   delete migrated.bone_5m_enabled;
   delete migrated.voice_volume;
-  migrated.version = 5;
+  migrated.version = 6;
   return migrated;
 }
 
 function applyScannerSettings(settings){
   scannerSettings = migrateScannerSettings(settings);
-  scannerAlarmEnabled = true;
+  scannerAlarmEnabled = !!scannerSettings.voice_enabled;
+  if($('#scanner_voice_enabled')) $('#scanner_voice_enabled').checked = scannerAlarmEnabled;
   if($('#scanner_news_read')) $('#scanner_news_read').checked = !!scannerSettings.news_enabled;
 }
 
 function readScannerSettingsControls(){
   return {
-    version: 5,
-    voice_enabled: true,
+    version: 6,
+    voice_enabled: $('#scanner_voice_enabled') ? $('#scanner_voice_enabled').checked : scannerAlarmEnabled,
     news_enabled: $('#scanner_news_read') ? $('#scanner_news_read').checked : !!scannerSettings.news_enabled,
     approach_pct: scannerSettings.approach_pct || 2,
     vwap_enabled: scannerSettings.vwap_enabled !== false
@@ -3683,7 +3683,7 @@ async function loadScannerSettings(){
 
 function saveScannerSettings(){
   scannerSettings = readScannerSettingsControls();
-  scannerAlarmEnabled = true;
+  scannerAlarmEnabled = scannerSettings.voice_enabled;
   try { localStorage.setItem('gap_scanner_user_settings_'+currentUser, JSON.stringify(scannerSettings)); } catch(e){}
   if($('#scanner_settings_status')) $('#scanner_settings_status').textContent = 'Saving…';
   clearTimeout(scannerSettingsSaveTimer);
@@ -3828,8 +3828,6 @@ function loadScannerVoices(){
   const femaleVoices = availableVoices.filter(voice => /^en([_-]|$)/i.test(voice.lang) && femaleVoiceNames.test(voice.name));
   const preferredVoice = femaleVoices.sort((a,b)=>a.name.localeCompare(b.name))[0];
   scannerVoices = preferredVoice ? [preferredVoice] : [];
-  const voiceStatus = $('#scanner_voice_status');
-  if(voiceStatus) voiceStatus.textContent = preferredVoice ? 'Female voice ready' : 'Female English voice unavailable';
   if(preferredVoice && scannerAlarmEnabled) playNextScannerAnnouncement();
 }
 
@@ -3977,6 +3975,20 @@ function selectScannerTicker(ticker){
 if($('#scanner_open_btn')) $('#scanner_open_btn').onclick = toggleScanner;
 if($('#scanner_close_btn')) $('#scanner_close_btn').onclick = closeScanner;
 if($('#scanner_refresh_btn')) $('#scanner_refresh_btn').onclick = () => refreshScanner(true);
+if($('#scanner_voice_enabled')) $('#scanner_voice_enabled').onchange = e=>{
+  scannerAlarmEnabled = e.target.checked;
+  saveScannerSettings();
+  if(scannerAlarmEnabled){
+    if('speechSynthesis' in window) window.speechSynthesis.resume();
+    refreshScanner();
+    playNextScannerAnnouncement();
+  } else if('speechSynthesis' in window){
+    scannerSpeechQueue = [];
+    scannerSpeechActive = false;
+    if(scannerSpeechTimer){ clearTimeout(scannerSpeechTimer); scannerSpeechTimer = null; }
+    window.speechSynthesis.cancel();
+  }
+};
 if($('#scanner_news_read')) $('#scanner_news_read').onchange = saveScannerSettings;
 loadScannerVoices();
 if('speechSynthesis' in window) window.speechSynthesis.onvoiceschanged = loadScannerVoices;
