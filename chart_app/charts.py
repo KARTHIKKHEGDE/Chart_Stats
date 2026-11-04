@@ -1058,10 +1058,14 @@ _FILING_FORM_DESCRIPTIONS = {
     "10-K": "Annual report", "10-K/A": "Annual report amendment", "10-Q": "Quarterly report",
     "10-Q/A": "Quarterly report amendment", "20-F": "Foreign issuer annual report",
     "40-F": "Canadian issuer annual report", "8-K": "Current report", "8-K/A": "Current report amendment",
-    "6-K": "Foreign issuer report", "S-1": "Registration statement", "S-3": "Shelf registration",
-    "F-1": "Foreign issuer registration statement", "F-3": "Foreign issuer shelf registration",
+    "6-K": "Foreign issuer report", "S-1": "Registration statement", "S-1/A": "Registration statement amendment",
+    "S-3": "Shelf registration", "S-3/A": "Shelf registration amendment",
+    "F-1": "Foreign issuer registration statement", "F-1/A": "Foreign issuer registration statement amendment",
+    "F-3": "Foreign issuer shelf registration", "F-3/A": "Foreign issuer shelf registration amendment",
     "FWP": "Free writing prospectus", "DEF 14A": "Definitive proxy statement",
-    "PRE 14A": "Preliminary proxy statement", "4": "Insider transaction report",
+    "PRE 14A": "Preliminary proxy statement", "DEFA14A": "Additional proxy material",
+    "DEFM14A": "Additional definitive proxy material", "PREM14A": "Additional preliminary proxy material",
+    "4": "Insider transaction report",
     "SC 13D": "Beneficial ownership report", "SC 13G": "Beneficial ownership report",
 }
 
@@ -1097,11 +1101,22 @@ def _filing_rows_from_submission(recent, cik, ticker, company):
         raw_items = str(value("items", index) or "")
         item_codes = re.findall(r"\d{1,2}\.\d{2}", raw_items)
         item_labels = [_FILING_8K_ITEM_LABELS[code] for code in item_codes if code in _FILING_8K_ITEM_LABELS]
-        generic_descriptions = {form.upper(), "CURRENT REPORT", "FOREIGN ISSUER REPORT", "ANNUAL REPORT", "QUARTERLY REPORT"}
+        generic_descriptions = {form.upper(), f"FORM {form.upper()}", "CURRENT REPORT", "FOREIGN ISSUER REPORT", "ANNUAL REPORT", "QUARTERLY REPORT"}
         if form.upper().startswith("8-K") and item_labels:
             description = " · ".join(dict.fromkeys(item_labels))
+        elif category == "Financials" and report_date and form.upper().startswith(("10-Q",)):
+            try:
+                period_date = dt.date.fromisoformat(report_date)
+                description = f"Q{((period_date.month - 1) // 3) + 1}"
+            except ValueError:
+                description = primary_description or "Quarterly report"
+        elif category == "Financials" and report_date and form.upper() in {"10-K", "10-K/A", "20-F", "20-F/A", "40-F"}:
+            description = f"FY {report_date[:4]}"
+        elif form.upper().startswith("424B") and (not primary_description or primary_description.upper() in generic_descriptions):
+            description = "Prospectus supplement"
         elif not primary_description or primary_description.upper() in generic_descriptions:
-            description = _FILING_FORM_DESCRIPTIONS.get(form.upper(), primary_description or form)
+            description = ("" if form.upper() in {"8-K", "8-K/A", "6-K", "6-K/A"}
+                           else _FILING_FORM_DESCRIPTIONS.get(form.upper(), ""))
         else:
             description = primary_description
         if accession_path and primary_document:
@@ -1113,7 +1128,7 @@ def _filing_rows_from_submission(recent, cik, ticker, company):
         dilution_signal = (form.upper().startswith("424B") or form.upper() in {"S-1", "S-1/A", "S-3", "S-3/A", "F-1", "F-1/A", "F-3", "F-3/A", "FWP"}
                            or (form.upper().startswith("8-K") and any(code in {"1.01", "3.02"} for code in item_codes)))
         row = {"ticker": ticker, "company": company, "form": form, "date": filed,
-               "period": report_date if report_date != filed else "", "desc": description,
+               "period": report_date if category == "Financials" and report_date != filed else "", "desc": description,
                "items": raw_items, "url": url, "accession": accession, "cik": str(int(cik)),
                "dilution_signal": dilution_signal}
         grouped[category].append(row)
