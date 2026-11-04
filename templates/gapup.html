@@ -27,8 +27,8 @@ select{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;f
 .recent-filings-heading{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:12px;color:#aebdcc;font-size:13px;letter-spacing:.06em}
 .recent-filings-heading a,.recent-filing-open{color:#00e88b;text-decoration:none;font-size:11px;white-space:nowrap}
 .recent-filings-date{display:flex;align-items:center;gap:6px;color:#8da6bd;font:11px Consolas,monospace;letter-spacing:0}.recent-filings-date input{width:132px;height:27px;padding:2px 5px;background:#0d1115;border:1px solid #303a42;border-radius:3px;color:#dce5ec;font:11px Consolas,monospace}
-.recent-filings-list{max-height:520px;overflow:auto;padding-right:5px}
-.categorized-filings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;max-height:760px;overflow:auto;padding:2px}
+.recent-filings-list{max-height:none;overflow:visible;padding-right:0}
+.categorized-filings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;max-height:none;overflow:visible;padding:2px}
 .filing-category-card{min-width:0;overflow:hidden;border:1px solid #28323a;border-radius:6px;background:#090d11}
 .filing-category-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-bottom:1px solid #26313a;background:#10161b}
 .filing-category-head h3{min-width:0;margin:0;color:#e8edf3;font:700 14px/1.35 Arial,sans-serif}
@@ -131,7 +131,7 @@ select{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;f
 #filing_explanation_modal .filingExplainSection p,#filing_explanation_modal .filingExplainSection li{font:18px/1.75 Arial,sans-serif}
 #filing_explanation_modal .filingExplainMeta{font-size:14px}
 @media(max-width:700px){.recent-filings-panel{padding:12px}.recent-filings-heading{align-items:flex-start}.recent-filing-head{align-items:flex-start}.recent-filing-foot{align-items:flex-start;flex-direction:column;gap:6px}.recent-filing-company{flex-basis:65%}.recent-filing-age{white-space:normal}.dilutionHistoryHead{flex-direction:column}}
-@media(max-width:900px){.categorized-filings-grid{grid-template-columns:1fr;max-height:840px}}
+@media(max-width:900px){.categorized-filings-grid{grid-template-columns:1fr}}
 @media(max-width:900px){.three.recent-layout{grid-template-columns:1fr}.recent-filings-panel{grid-column:span 1}}
 @media(max-width:1500px) and (min-width:701px){
   #gap_deepdive_chart_modal{padding:6px!important}
