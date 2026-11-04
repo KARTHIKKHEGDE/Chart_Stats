@@ -190,7 +190,7 @@ canvas{display:block;width:100%}
 .gap-session-card canvas{width:100%;height:540px;display:block;cursor:zoom-in}
 @media(max-width:900px){.gap-session-grid{grid-template-columns:1fr}}
 body.deepdive-page .bar{padding:12px 24px}
-body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#rf,body.deepdive-page .bar>#cp,body.deepdive-page #scanner_open_btn,body.deepdive-page #nav_multiday_btn,body.deepdive-page #nav_keyword_btn{display:none!important}
+body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#rf,body.deepdive-page #scanner_open_btn,body.deepdive-page #nav_multiday_btn,body.deepdive-page #nav_keyword_btn,body.deepdive-page #nav_anychart_btn{display:none!important}
 #ag_tip{position:fixed;z-index:2147483647;background:#111;border:1px solid #444;color:#e0e0e0;font-size:12px;padding:7px 11px;border-radius:4px;max-width:300px;line-height:1.5;pointer-events:none;opacity:0;transition:opacity 0.15s;box-shadow:0 4px 16px rgba(0,0,0,0.7);white-space:pre-wrap;display:block}
 #ag_tip.visible{opacity:1}
 [data-tip]{cursor:help}
@@ -257,7 +257,6 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
     <input id="t" placeholder="ticker" autocomplete="off" spellcheck="false">
     <button id="go">Get notes</button>
     <button id="rf">Refresh</button>
-    <button id="cp">Copy all</button>
 
     <div style="margin-left:auto;display:flex;align-items:center;gap:10px;font-size:13px;color:#8a8a8a">
       <button id="scanner_open_btn" style="height:36px;padding:0 14px;border:2px solid #00e676;background:#032014;color:#00e676;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px;display:inline-flex;align-items:center;gap:6px" title="Live Premarket Spike Scanner (≥50% Spike · ≥$5M Dollar Vol)">
@@ -267,6 +266,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
       <button id="nav_multiday_btn" style="height:36px;padding:0 14px;border:2px solid #00c9a7;background:#002b24;color:#00c9a7;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Multi-day Rally & First Red Day (FRD) Structure Tool">📊 Runner Stats</button>
       <button id="nav_keyword_btn" style="height:36px;padding:0 14px;border:2px solid #8b74ff;background:#120f24;color:#b7a8ff;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Search SEC filings by financing player">⌕ Search Keyword</button>
       <button id="nav_gap_deepdive_btn" style="height:36px;padding:0 14px;border:2px solid #ffd23f;background:#211b05;color:#ffe17d;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Historical premarket gap deep dive">↗ Gap Up Deepdive</button>
+      <button id="nav_anychart_btn" style="height:36px;padding:0 14px;border:2px solid #62c8ff;background:#071a25;color:#8fd8ff;font-weight:bold;cursor:pointer;border-radius:4px;font-size:13px" title="Open a historical chart for any ticker and date">▥ Anychart</button>
       <span>User: <span id="u_name" style="color:#29a8ff;font-weight:bold"></span><span id="u_badge"></span></span>
       <button id="logout_btn" style="height:34px;font-size:12px;padding:0 12px;border-color:#444">Exit</button>
     </div>
@@ -284,11 +284,31 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
       <label style="display:flex;align-items:center;gap:6px;color:#ddd;font-size:13px">Group by <select id="gap_deepdive_group_by" style="height:30px;margin:0"><option value="ticker" selected>Ticker</option><option value="player">Financing player</option></select></label>
       <label style="display:inline-flex;align-items:center;gap:5px;color:#d7ff6e;font-size:13px;cursor:pointer"><input id="gap_deepdive_bz" type="checkbox" checked style="width:15px;height:15px;vertical-align:middle"> Bone Zone (9/21 EMA)</label>
       <label style="display:inline-flex;align-items:center;gap:5px;color:#fff;font-size:13px;cursor:pointer"><input id="gap_deepdive_vwap" type="checkbox" checked style="width:15px;height:15px;vertical-align:middle"> VWAP</label>
+      <label style="display:inline-flex;align-items:center;gap:5px;color:#8fd3ff;font-size:13px;cursor:pointer" title="When enabled, drag across the chart to set or adjust the profile range; drag its edges to resize."><input type="checkbox" data-volume-profile-toggle style="width:15px;height:15px;vertical-align:middle"> Volume Profile</label>
       <label style="display:inline-flex;align-items:center;gap:4px;color:#ff5a5a;font-size:13px;cursor:pointer"><input id="gap_deepdive_ema5ext" type="checkbox" checked style="width:15px;height:15px;vertical-align:middle"><span>EMA5 Ext ≥</span><input id="gap_deepdive_ema5ext_val" type="number" min="5" max="300" step="5" value="30" style="width:48px;height:24px;padding:0 3px;background:#0d1117;border:1px solid #ff5a5a;color:#ff8888;font:bold 12px Consolas,monospace;border-radius:3px;text-align:center" title="Extension % threshold above 5m 9-EMA"><span>%</span></label>
       <span id="gap_deepdive_status" style="margin-left:auto;color:#aeb6c0;font-size:13px">Opening the saved scan…</span>
     </header>
     <div id="gap_deepdive_grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px"></div>
 <section id="gap_common_pattern" hidden style="margin-top:20px;padding:14px;background:#090c10;border:1px solid #29313a;border-radius:5px"><header style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px"><strong id="gap_common_pattern_title" style="font-size:17px;color:#ffe17d">Most common intraday pattern</strong><span id="gap_common_pattern_status" style="color:#9ba6b0;font-size:13px">Waiting for chart data…</span></header><canvas id="gap_common_pattern_canvas" style="display:block;width:100%;height:430px"></canvas><div id="gap_common_pattern_note" style="padding-top:8px;color:#9ba6b0;font-size:12px">Typical regular-session price path, normalized to the open. Chart times are displayed in IST. White line = the cluster’s average VWAP.</div></section>
+  </section>
+  <section id="anychart_view" style="display:none;padding:22px 30px;background:#050607;min-height:80vh">
+    <header style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+      <strong style="font-size:20px;color:#8fd8ff">Anychart</strong>
+      <form id="anychart_search_form" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <input id="anychart_ticker" placeholder="Ticker" maxlength="10" autocomplete="off" spellcheck="false" required style="width:150px;height:34px;text-transform:uppercase">
+        <label style="display:flex;align-items:center;gap:6px;color:#cbd3dc;font-size:13px">Date <input id="anychart_date" type="date" required style="height:34px;margin:0"></label>
+        <button type="submit" style="height:36px;padding:0 14px;border:1px solid #62c8ff;background:#071a25;color:#8fd8ff;font-weight:bold;cursor:pointer;border-radius:4px">Load chart</button>
+      </form>
+      <label style="display:flex;align-items:center;gap:6px;color:#ddd;font-size:13px">Interval <select id="anychart_tf" style="height:32px;margin:0"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label>
+      <label style="display:inline-flex;align-items:center;gap:5px;color:#d7ff6e;font-size:13px;cursor:pointer"><input id="anychart_bz" type="checkbox" checked style="width:15px;height:15px;vertical-align:middle"> Bone Zone (9/21 EMA)</label>
+      <label style="display:inline-flex;align-items:center;gap:5px;color:#fff;font-size:13px;cursor:pointer"><input id="anychart_vwap" type="checkbox" checked style="width:15px;height:15px;vertical-align:middle"> VWAP</label>
+      <label style="display:inline-flex;align-items:center;gap:5px;color:#ff7777;font-size:13px;cursor:pointer"><input id="anychart_ema5ext" type="checkbox" checked style="width:15px;height:15px;vertical-align:middle"> EMA5 Ext ≥ <input id="anychart_ema5ext_val" type="number" min="5" max="300" step="5" value="30" style="width:48px;height:24px;padding:0 3px;background:#0d1117;border:1px solid #ff5a5a;color:#ff8888;font:bold 12px Consolas,monospace;border-radius:3px;text-align:center"> %</label>
+      <label style="display:inline-flex;align-items:center;gap:5px;color:#8fd3ff;font-size:13px;cursor:pointer" title="Drag across the chart to set or adjust the profile range; drag its edges to resize."><input type="checkbox" data-volume-profile-toggle style="width:15px;height:15px;vertical-align:middle"> Volume Profile</label>
+      <button type="button" id="anychart_back_btn" style="height:34px;padding:0 12px;margin-left:auto">← Main terminal</button>
+    </header>
+    <div id="anychart_tabs" style="display:none;align-items:center;gap:6px;overflow-x:auto;padding:6px 0 10px;border-bottom:1px solid #26313b"></div>
+    <div id="anychart_status" style="color:#9ba6b0;font-size:13px;padding:8px 2px">Enter a ticker and date to load its 11-session chart window.</div>
+    <div id="anychart_panels"></div>
   </section>
   <div id="gap_deepdive_chart_modal" style="position:fixed;inset:0;z-index:100001;display:none;align-items:center;justify-content:center;padding:12px;background:rgba(0,0,0,.94)" onclick="if(event.target===this)closeGapDeepDiveChart()">
     <section style="width:98vw;height:97vh;max-width:2200px;display:flex;flex-direction:column;background:#07090c;border:1px solid #35404a;border-radius:6px;overflow:hidden">
@@ -299,6 +319,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
           <label style="font-size:12px;color:#ddd">Interval <select id="gap_chart_tf" style="height:30px;margin:0"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label>
           <label style="font-size:12px;color:#d7ff6e"><input id="gap_chart_bz" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"> Bone Zone (9/21 EMA)</label>
           <label style="font-size:12px;color:#fff"><input id="gap_chart_vwap" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"> VWAP</label>
+          <label style="font-size:12px;color:#8fd3ff;cursor:pointer" title="When enabled, drag across the chart to set or adjust the profile range; drag its edges to resize."><input type="checkbox" data-volume-profile-toggle style="width:14px;height:14px;vertical-align:middle"> Volume Profile</label>
           <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:#ff5a5a;cursor:pointer"><input id="gap_chart_ema5ext" type="checkbox" checked style="width:14px;height:14px;vertical-align:middle"><span>EMA5 Ext ≥</span><input id="gap_chart_ema5ext_val" type="number" min="5" max="300" step="5" value="30" style="width:48px;height:24px;padding:0 3px;background:#0d1117;border:1px solid #ff5a5a;color:#ff8888;font:bold 12px Consolas,monospace;border-radius:3px;text-align:center" title="Extension % threshold above 5m 9-EMA"><span>%</span></label>
           <button id="gap_chart_avwap" style="height:32px;padding:0 12px;border-color:#ffd23f;color:#ffe17d">AVWAP · Select A → B</button>
           <button id="gap_chart_clear_avwap" style="height:32px;padding:0 10px;font-size:12px">Clear AVWAP</button>
@@ -1924,7 +1945,7 @@ function renderTab(tab, r, isRefresh){
     (surgeDays?`<div class="foot">Loading premarket spike days…</div>`:`<div class="foot" data-surge-status>Checking this history in the background…</div>`)+`</div>`;
   o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">`+
      `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:7px">${esc(T.p6)}<label style="font-size:11px;color:#aaa">All charts <select id="ev_all_tf" class="evtf"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label><select id="sig"><option value="none" selected>No signals</option><option value="all">All entry models</option>`+
-     (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#d7ff6e;cursor:pointer"><input type="checkbox" id="bz" checked style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/21 EMA cloud + BB)</label><label style="margin-left:10px;font-size:13px;color:#fff;cursor:pointer"><input type="checkbox" id="ev_all_vwap" checked style="width:auto;height:auto;vertical-align:middle"> VWAP</label><label style="margin-left:10px;font-size:13px;color:#ff5a5a;cursor:pointer"><input type="checkbox" id="ev_all_ema5ext" checked style="width:auto;height:auto;vertical-align:middle"><span>EMA5 Ext ≥</span><input id="ev_all_ema5ext_val" type="number" min="5" max="300" step="5" value="30" style="width:48px;height:22px;padding:0 3px;background:#0d1117;border:1px solid #ff5a5a;color:#ff8888;font:bold 12px Consolas,monospace;border-radius:3px;text-align:center" title="Extension % threshold above 5m 9-EMA"><span>%</span></label></div>`+
+     (r.model_names||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')+`</select><label style="margin-left:14px;font-size:13px;color:#d7ff6e;cursor:pointer"><input type="checkbox" id="bz" checked style="width:auto;height:auto;vertical-align:middle"> Bone zone (9/21 EMA cloud + BB)</label><label style="margin-left:10px;font-size:13px;color:#fff;cursor:pointer"><input type="checkbox" id="ev_all_vwap" checked style="width:auto;height:auto;vertical-align:middle"> VWAP</label><label style="margin-left:10px;font-size:13px;color:#8fd3ff;cursor:pointer" title="When enabled, drag across any chart to set or adjust the profile range; drag its edges to resize."><input type="checkbox" data-volume-profile-toggle style="width:auto;height:auto;vertical-align:middle"> Volume Profile</label><label style="margin-left:10px;font-size:13px;color:#ff5a5a;cursor:pointer"><input type="checkbox" id="ev_all_ema5ext" checked style="width:auto;height:auto;vertical-align:middle"><span>EMA5 Ext ≥</span><input id="ev_all_ema5ext_val" type="number" min="5" max="300" step="5" value="30" style="width:48px;height:22px;padding:0 3px;background:#0d1117;border:1px solid #ff5a5a;color:#ff8888;font:bold 12px Consolas,monospace;border-radius:3px;text-align:center" title="Extension % threshold above 5m 9-EMA"><span>%</span></label></div>`+
      `<span style="font-size:12px;color:#29a8ff;font-weight:normal">🔍 Click a premarket spike chart for full Deepdive controls</span></div>`+
   `<div class="evgrid">`+tab.EV.map((_,i)=>premarketSpikeChartCard(i)).join('')+
      `<\/div><div class="foot"><span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance.">━ VWAP<\/span> &nbsp; <span style="color:#ff5a5a" data-tip="EMA5 Extension — flagged when high exceeds 5m 9-EMA by threshold % (Thinkorswim).">▼ % 5m 9-EMA Ext</span> &nbsp; <span style="color:#ffd23f">┅ HOD-anchored AVWAP</span> &nbsp; <span style="color:#ffd23f">N News</span> &nbsp; <span style="color:#62c8ff">S SEC filing</span>  <span class="y" data-tip="Pre-market High — highest price before the US market open. Common fade target.">┅ PM high<\/span>  <span class="d" data-tip="Previous Close — yesterday’s close. Gap % is measured from here.">┅ prev close<\/span> &nbsp; <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period EMA on 2-min closes. Fast trend line.">━ EMA9<\/span> <span style="color:#ffa500" data-tip="EMA 21 — 20-period EMA on 2-min closes. Slower trend line. Bearish when EMA9 drops below it.">━ EMA21<\/span> <span class="g" data-tip="Bone Zone cloud — shaded between EMA9 &amp; EMA21. Green = bullish. Red = bearish.">▒<\/span><span class="r">▒<\/span> cloud <span class="d" data-tip="Bollinger Bands (20-period, 2 std dev). Shows expected volatility range on the 2-min chart.">━ BB(20,2)<\/span> &nbsp; <span data-tip="SELL signal — short entry triggered by an entry model.">▼ SELL<\/span> &nbsp; <span data-tip="BUY / Cover signal — close the short here. P&amp;L % shown next to it.">▲ BUY<\/span>. <span data-tip="Lighter shaded background = pre-market session before the US open; all chart times are IST.">Shaded = premarket<\/span>. X axis = IST. Measure: activate Measure, then drag across bars for volume, estimated dollar volume, and float rotation.<\/div><\/div>`;
@@ -2578,14 +2599,7 @@ window.addEventListener('resize',()=>{
   }
 });
 
-async function copyAll(){
-  if(!activeTab || !openTabs[activeTab] || !openTabs[activeTab].lastText) return;
-  const txt = openTabs[activeTab].lastText;
-  try{await navigator.clipboard.writeText(txt)}
-  catch(e){const a=document.createElement('textarea');a.value=txt;document.body.appendChild(a);a.select();document.execCommand('copy');a.remove();}
-  const b=$('#cp'); b.textContent='Copied ✓'; setTimeout(()=>b.textContent='Copy all',1200);
-}
-$('#go').onclick=()=>run(false); $('#rf').onclick=()=>run(true); $('#cp').onclick=copyAll;
+$('#go').onclick=()=>run(false); $('#rf').onclick=()=>run(true);
 $('#t').addEventListener('keydown',e=>{
   if(e.key!=='Enter')return;
   e.preventDefault();
@@ -2623,6 +2637,63 @@ async function gapDeepDiveJson(response){
   let data;try{data=JSON.parse(body);}catch{throw new Error(`Chart request returned invalid JSON (HTTP ${response.status}): ${body.slice(0,120)}`);}
   if(!response.ok)throw new Error(data.error||`Request failed (HTTP ${response.status})`);return data;
 }
+const anychartTabs=new Map();let anychartActiveKey='',anychartTabSequence=0;
+function showAnychart(){
+  $('#tabs_view').style.display='none';$('#tab_bar').style.display='none';$('#multiday_view').style.display='none';$('#gap_deepdive_view').style.display='none';$('#anychart_view').style.display='block';
+  if(anychartActiveKey)activateAnychartTab(anychartActiveKey);
+}
+function renderAnychartTabs(){
+  const root=$('#anychart_tabs');root.innerHTML='';root.style.display=anychartTabs.size?'flex':'none';
+  for(const [key,tab] of anychartTabs){
+    const button=document.createElement('button');button.type='button';button.style.cssText=`display:inline-flex;align-items:center;gap:10px;white-space:nowrap;padding:8px 11px;border:1px solid ${key===anychartActiveKey?'#62c8ff':'#303943'};background:${key===anychartActiveKey?'#0b2635':'#0b0d10'};color:${key===anychartActiveKey?'#b8e9ff':'#aab4bf'};cursor:pointer;border-radius:4px`;
+    const label=document.createElement('span');label.textContent=`${tab.ticker} · ${tab.date}`;button.appendChild(label);
+    const close=document.createElement('span');close.textContent='×';close.title='Close chart tab';close.style.cssText='font-size:17px;color:#8d98a3';close.onclick=e=>{e.stopPropagation();closeAnychartTab(key)};button.appendChild(close);
+    button.onclick=()=>activateAnychartTab(key);root.appendChild(button);
+  }
+}
+function activateAnychartTab(key){
+  const tab=anychartTabs.get(key);if(!tab)return;anychartActiveKey=key;
+  for(const [tabKey,item] of anychartTabs)item.panel.style.display=tabKey===key?'block':'none';
+  $('#anychart_tf').value=tab.timeframe;$('#anychart_ticker').value=tab.ticker;$('#anychart_date').value=tab.date;$('#anychart_status').textContent=tab.status||`${tab.ticker} · ${tab.date} · 5 prior and 5 following trading sessions`;
+  renderAnychartTabs();if(tab.chart&&tab.panel.isConnected)drawGapDeepDiveCanvas(tab.canvas,tab.chart,tab.timeframe,Math.max(560,Math.floor(innerHeight*.76)));
+}
+function closeAnychartTab(key){
+  const tab=anychartTabs.get(key);if(!tab)return;tab.panel.remove();anychartTabs.delete(key);
+  if(anychartActiveKey===key)anychartActiveKey=[...anychartTabs.keys()].at(-1)||'';
+  renderAnychartTabs();if(anychartActiveKey)activateAnychartTab(anychartActiveKey);else $('#anychart_status').textContent='Enter a ticker and date to load its 11-session chart window.';
+}
+async function loadAnychartTab(tab,timeframe=tab.timeframe){
+  const requestId=(tab.requestId||0)+1;if(tab.chart&&tab.timeframe!==timeframe){tab.canvas._avwapAnchors=null;tab.canvas._rangeMeasures=[];tab.canvas._selectedRangeId=null;tab.canvas._volumeProfileRange=null;}tab.requestId=requestId;tab.timeframe=timeframe;tab.status=`Loading ${tab.ticker} around ${tab.date}…`;
+  if(tab.key===anychartActiveKey)$('#anychart_status').textContent=tab.status;
+  try{
+    const query=new URLSearchParams({ticker:tab.ticker,date:tab.date,seed_date:tab.date,days:'11',tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1',source:'polygon'});
+    const response=await fetch('/api/chart-context?'+query.toString()),data=await gapDeepDiveJson(response);if(requestId!==tab.requestId)return;
+    if(!data.bars?.t?.length)throw new Error(`No candles were returned for ${tab.ticker} on ${tab.date}.`);
+    tab.chart={ticker:tab.ticker,date:tab.date,bars:data.bars,after_hours:true};tab.state={bars:data.bars,dates:data.dates||[],days:11,loadedDays:(data.dates||[]).length,timeframe,contextLoaded:true,panOffset:0,daily:!!data.daily};tab.canvas._gapDeepDiveState=tab.state;
+    tab.canvas._marketEvents=await loadChartMarketEvents(tab.ticker,tab.state.dates);if(requestId!==tab.requestId)return;
+    tab.status=`${tab.ticker} · ${tab.date} · ${tab.state.dates.length} trading sessions loaded (up to 5 before and after)`;
+    if(tab.key===anychartActiveKey){$('#anychart_status').textContent=tab.status;drawGapDeepDiveCanvas(tab.canvas,tab.chart,timeframe,Math.max(560,Math.floor(innerHeight*.76)));}
+  }catch(error){if(requestId===tab.requestId){tab.status=`Could not load chart: ${error.message}`;if(tab.key===anychartActiveKey)$('#anychart_status').textContent=tab.status;}}
+}
+$('#nav_anychart_btn').onclick=showAnychart;$('#anychart_back_btn').onclick=()=>switchMainView('intraday');
+$('#anychart_search_form').addEventListener('submit',async event=>{
+  event.preventDefault();const ticker=$('#anychart_ticker').value.trim().toUpperCase(),date=$('#anychart_date').value;
+  if(!/^[A-Z.\-]{1,10}$/.test(ticker)||!date){$('#anychart_status').textContent='Enter a valid ticker and date.';return;}
+  const key=`${ticker}|${date}`,existing=anychartTabs.get(key);if(existing){activateAnychartTab(key);await loadAnychartTab(existing,$('#anychart_tf').value);return;}
+  const panel=document.createElement('section');panel.style.cssText='display:none;background:#07090c;border:1px solid #26313b;border-radius:6px;padding:10px;min-height:72vh';
+  const featurePrefix=`anychart_${++anychartTabSequence}`,toolbar=document.createElement('header');toolbar.style.cssText='display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 2px 10px';
+  toolbar.innerHTML=`<button id="${featurePrefix}_avwap" type="button" title="Select two points to draw anchored VWAP">AVWAP · Select A → B</button><button id="${featurePrefix}_clear_avwap" type="button">Clear AVWAP</button><button id="${featurePrefix}_measure" type="button" title="Measure between chart points">Measure range</button><button id="${featurePrefix}_pan" type="button" title="Drag to pan the chart">Pan</button><button id="${featurePrefix}_delete_measure" type="button">Delete range</button><button id="${featurePrefix}_clear_measures" type="button">Clear ranges</button><button id="${featurePrefix}_zoom_out" type="button" title="Zoom out">−</button><button id="${featurePrefix}_zoom_in" type="button" title="Zoom in">+</button><button id="${featurePrefix}_zoom_reset" type="button">Reset</button><button id="${featurePrefix}_copy" type="button">Copy PNG</button><span id="${featurePrefix}_quote_line" style="margin-left:auto;color:#e8edf3;font:12px Consolas,monospace">Hover a candle · price and volume</span>`;
+  panel.appendChild(toolbar);
+  const plot=document.createElement('div');plot.style.cssText='position:relative;min-height:560px';const canvas=document.createElement('canvas');canvas.dataset.anychart='1';canvas.dataset.featurePrefix=featurePrefix;canvas.style.cssText='display:block;width:100%;height:70vh;min-height:560px;touch-action:none';plot.appendChild(canvas);
+  const overlay=document.createElement('canvas');overlay.id=`${featurePrefix}_overlay`;overlay.style.cssText='position:absolute;inset:0;width:100%;height:100%;pointer-events:none';plot.appendChild(overlay);
+  for(const [id,css] of [[`${featurePrefix}_crosshair_v`,'position:absolute;top:0;width:0;border-left:1px dashed rgba(220,232,244,.75);pointer-events:none'],[`${featurePrefix}_crosshair_h`,'position:absolute;left:0;height:0;border-top:1px dashed rgba(220,232,244,.75);pointer-events:none'],[`${featurePrefix}_measure_box`,'position:absolute;right:12px;top:12px;z-index:5;max-width:300px;padding:8px 10px;background:rgba(6,13,21,.96);border:1px solid #62c8ff;border-radius:4px;color:#edf6ff;font:13px/1.55 Consolas,monospace;white-space:pre-wrap;pointer-events:none']]){const el=document.createElement('div');el.id=id;el.hidden=true;el.style.cssText=css;plot.appendChild(el);}
+  panel.appendChild(plot);const nav=document.createElement('div');nav.style.cssText='height:88px;margin-top:5px;border:1px solid #242b33;background:#090c10;display:flex;flex-direction:column';const hover=document.createElement('div');hover.dataset.anychartHover='1';hover.style.cssText='min-height:24px;padding:4px 8px;color:#9ba6b0;font:11px/16px Consolas,monospace';hover.textContent='Hover a candle to see its time';nav.appendChild(hover);const navCanvas=document.createElement('canvas');navCanvas.id=`${featurePrefix}_navigator`;navCanvas.style.cssText='display:block;width:100%;height:60px;flex:1;min-height:0;touch-action:none;cursor:grab';nav.appendChild(navCanvas);panel.appendChild(nav);const status=document.createElement('footer');status.id=`${featurePrefix}_status`;status.style.cssText='padding:8px 4px;color:#aab4bf;font-size:12px';status.textContent='VWAP and EMA5 Ext are controlled above. Drag across the chart to zoom.';panel.appendChild(status);$('#anychart_panels').appendChild(panel);
+  const tab={key,ticker,date,timeframe:$('#anychart_tf').value,panel,canvas,featurePrefix,chart:null,state:null,status:'Starting chart load…',requestId:0};anychartTabs.set(key,tab);activateAnychartTab(key);await loadAnychartTab(tab,tab.timeframe);
+});
+$('#anychart_tf').onchange=()=>{const tab=anychartTabs.get(anychartActiveKey);if(tab)loadAnychartTab(tab,$('#anychart_tf').value);};
+for(const id of ['anychart_bz','anychart_vwap','anychart_ema5ext','anychart_ema5ext_val'])$('#'+id).onchange=()=>{const tab=anychartTabs.get(anychartActiveKey);if(tab?.chart)drawGapDeepDiveCanvas(tab.canvas,tab.chart,tab.timeframe,Math.max(560,Math.floor(innerHeight*.76)));};
+const anychartToday=new Date();anychartToday.setMinutes(anychartToday.getMinutes()-anychartToday.getTimezoneOffset());$('#anychart_date').value=anychartToday.toISOString().slice(0,10);
+let anychartResizeFrame=0;window.addEventListener('resize',()=>{if(anychartResizeFrame)return;anychartResizeFrame=requestAnimationFrame(()=>{anychartResizeFrame=0;const tab=anychartTabs.get(anychartActiveKey);if($('#anychart_view').style.display!=='none'&&tab?.chart)drawGapDeepDiveCanvas(tab.canvas,tab.chart,tab.timeframe,Math.max(560,Math.floor(innerHeight*.76)));});},{passive:true});
 $('#nav_gap_deepdive_btn').onclick=()=>{
   if(location.pathname==='/gap-deepdive')location.assign('/');
   else window.open('/gap-deepdive','_blank','noopener');
@@ -2787,23 +2858,24 @@ async function loadGapDeepDiveFloat(item,jobId){
 }
 function drawGapDeepDiveCanvas(cv,baseChart,timeframe,targetH){
   const state=cv._gapDeepDiveState,chart=state?.bars?{...baseChart,bars:state.bars,after_hours:true}:baseChart;
-  const isModal=cv.id==='gap_chart_modal_canvas',settings=state?.chartSettings||{};
+  const isModal=cv.id==='gap_chart_modal_canvas',isAnychart=cv.dataset.anychart==='1',settings=state?.chartSettings||{};
+  cv._chart=chart;cv._timeframe=timeframe;
   cv._eventTicker=baseChart.ticker||gapDeepDiveCurrent?.item?.ticker||'';
-  cv._renderDpr=isModal?3:2;
-  const globalBz=$('#gap_deepdive_bz')?.checked;
-  const globalVwap=$('#gap_deepdive_vwap')?.checked;
-  const globalEma5Ext=$('#gap_deepdive_ema5ext')?.checked;
-  const globalEma5Val=Number($('#gap_deepdive_ema5ext_val')?.value);
+  cv._renderDpr=isModal||cv.dataset.anychart==='1'?3:2;
+  const globalBz=$(isAnychart?'#anychart_bz':'#gap_deepdive_bz')?.checked;
+  const globalVwap=$(isAnychart?'#anychart_vwap':'#gap_deepdive_vwap')?.checked;
+  const globalEma5Ext=$(isAnychart?'#anychart_ema5ext':'#gap_deepdive_ema5ext')?.checked;
+  const globalEma5Val=Number($(isAnychart?'#anychart_ema5ext_val':'#gap_deepdive_ema5ext_val')?.value);
   cv._showVWAP=isModal?$('#gap_chart_vwap').checked:(globalVwap!==undefined?globalVwap:(settings.vwap!==false));
   cv._showEMA5Ext=isModal?$('#gap_chart_ema5ext').checked:(globalEma5Ext!==undefined?globalEma5Ext:(settings.ema5ext!==false));
   cv._ema5ExtThreshold=isModal?(Number($('#gap_chart_ema5ext_val')?.value)||Number(localStorage.getItem('gap_ema5ext_threshold'))||30):(Number.isFinite(globalEma5Val)&&globalEma5Val>0?globalEma5Val:(settings.ema5ext_threshold||Number(localStorage.getItem('gap_ema5ext_threshold'))||30));
   cv._onZoomOutMore=isModal?requiredSessions=>loadGapDeepDiveMore(cv,requiredSessions):null;
   if(state){cv._anchorDate=baseChart.date;if(!isModal||!cv._modalPanInitialized){cv._panOffset=state.panOffset||0;if(isModal)cv._modalPanInitialized=true;}if(isModal)state.panOffset=cv._panOffset||0;cv._onPanChange=value=>{state.panOffset=value;};cv._onPanEdge=side=>loadGapDeepDiveAdjacent(cv,baseChart,side);}
-  if(isModal){
-    cv._hoverTimeReadout=$('#gap_chart_hover_time');cv._quoteLine=$('#gap_chart_quote_line');
+  if(isModal||isAnychart){
+    const ui=isModal?chartFeatureUi('gap_chart'):chartFeatureUi(cv.dataset.featurePrefix);
+    cv._hoverTimeReadout=isModal?$('#gap_chart_hover_time'):ui.navigator?.parentElement?.querySelector('[data-anychart-hover]');cv._quoteLine=isModal?$('#gap_chart_quote_line'):ui.quoteLine;
     cv._floatShares=gapDeepDiveCurrent?.float_shares??baseChart.float_shares??null;
     cv._rangeMeasures||=[];cv._rangeZoom||=1;
-    const ui=chartFeatureUi('gap_chart');
     bindUnifiedChartFeatures(cv,ui,()=>{
       if(!cv._gapDeepDiveState)return;
       cv._gapDeepDiveState.panOffset=cv._panOffset||0;
@@ -2811,7 +2883,7 @@ function drawGapDeepDiveCanvas(cv,baseChart,timeframe,targetH){
       cv._gapDeepDiveState.avwapAnchors=cv._avwapAnchors;
       cv._gapDeepDiveState.rangeMeasures=cv._rangeMeasures||[];
       cv._gapDeepDiveState.selectedRangeId=cv._selectedRangeId;
-    },()=>renderGapDeepDiveModal());
+    },()=>{if(isAnychart){const tab=anychartTabs.get(anychartActiveKey);if(tab?.chart)drawGapDeepDiveCanvas(cv,tab.chart,tab.timeframe,Math.max(560,Math.floor(innerHeight*.76)));}else renderGapDeepDiveModal();});
   }
   const showBz=isModal?$('#gap_chart_bz').checked:(globalBz!==undefined?globalBz:(settings.bz!==false));
   cv._rangeZoom=isModal?(cv._rangeZoom||1):(settings.rangeZoom||1);
@@ -2821,8 +2893,8 @@ function drawGapDeepDiveCanvas(cv,baseChart,timeframe,targetH){
 async function loadGapDeepDiveAdjacent(cv,baseChart,side){
   const state=cv._gapDeepDiveState;if(!state||state.loading)return;
   const dates=state.dates||[],anchor=dates.length?dates[side>0?dates.length-1:0]:baseChart.date;
-  const item=gapDeepDiveCurrent?.item||{ticker:baseChart.ticker};
-  const timeframe=cv.id==='gap_chart_modal_canvas'?$('#gap_chart_tf').value:$('#gap_deepdive_tf').value||'2m';
+  const item=cv.dataset?.anychart==='1'?{ticker:baseChart.ticker,date:baseChart.date}:(gapDeepDiveCurrent?.item||{ticker:baseChart.ticker});
+  const timeframe=cv.dataset?.anychart==='1'?$('#anychart_tf').value:(cv.id==='gap_chart_modal_canvas'?$('#gap_chart_tf').value:$('#gap_deepdive_tf').value||'2m');
   const maxSessions=timeframe==='1d'?550:400;state.days=Math.min(maxSessions,(Number(state.days)||5)+20);state.daysSelected=true;state.loading=true;const requestId=(state.contextRequestId||0)+1;state.contextRequestId=requestId;
   // The initial five-session window may use the bundled Deepdive bars. Any
   // extension is fetched from Polygon so panning can always move beyond it.
@@ -2831,12 +2903,13 @@ async function loadGapDeepDiveAdjacent(cv,baseChart,side){
     const response=await fetch('/api/chart-context?'+query.toString()),data=await gapDeepDiveJson(response);
     if(requestId!==state.contextRequestId)return;
     state.bars=data.bars;state.dates=data.dates||[];state.timeframe=timeframe;state.contextLoaded=true;state.loadedDays=state.dates.length;state.days=Math.max(state.days,state.loadedDays);state.contextCache=state.contextCache||{};state.contextCache[timeframe]={bars:state.bars,dates:state.dates,days:state.days,daily:!!data.daily};const anchorIndex=state.dates.indexOf(baseChart.date);if(timeframe==='1d'){const span=state.bars.t.length,viewSpan=span/Math.max(1,cv._rangeZoom||1),panLimit=Math.max(0,span-viewSpan)/2;state.panOffset=side>0?panLimit:-panLimit;}else state.panOffset=anchorIndex<0?0:(side>0?(state.dates.length-anchorIndex-1)*960:-anchorIndex*960);
-    $('#gap_deepdive_status').textContent=timeframe==='1d'?`Loaded ${state.dates.length} daily candles for ${item.ticker}.`:`Loaded ${state.dates.length} sessions for ${item.ticker}.`;
-  }catch(error){if(requestId===state.contextRequestId)$('#gap_deepdive_status').textContent=`Could not load adjacent candles: ${error.message}`;}
+    const statusText=timeframe==='1d'?`Loaded ${state.dates.length} daily candles for ${item.ticker}.`:`Loaded ${state.dates.length} sessions for ${item.ticker}.`;if(cv.dataset?.anychart==='1')$('#anychart_status').textContent=statusText;else $('#gap_deepdive_status').textContent=statusText;
+  }catch(error){if(requestId===state.contextRequestId){if(cv.dataset?.anychart==='1')$('#anychart_status').textContent=`Could not load adjacent candles: ${error.message}`;else $('#gap_deepdive_status').textContent=`Could not load adjacent candles: ${error.message}`;}}
   finally{if(requestId===state.contextRequestId)state.loading=false;}
   const key=cv.dataset?.key;
   if(key){const gridCv=[...$('#gap_deepdive_grid').querySelectorAll('canvas[data-key]')].find(node=>node.dataset.key===key);if(gridCv&&gridCv!==cv){gridCv._gapDeepDiveState=state;const chart=gapDeepDiveCharts.get(key);if(chart)drawGapDeepDiveCanvas(gridCv,chart,$('#gap_deepdive_tf').value||'2m',540);}}
-  if(gapDeepDiveCurrent)renderGapDeepDiveModal();
+  if(cv.dataset?.anychart==='1'){const tab=anychartTabs.get(anychartActiveKey);if(tab?.chart)drawGapDeepDiveCanvas(cv,tab.chart,timeframe,Math.max(560,Math.floor(innerHeight*.76)));}
+  else if(gapDeepDiveCurrent)renderGapDeepDiveModal();
   else if(key){const chart=gapDeepDiveCharts.get(key);if(chart)drawGapDeepDiveCanvas(cv,chart,$('#gap_deepdive_tf').value||'2m',540);}
 }
 function renderGapDeepDiveModal(){
@@ -3632,10 +3705,12 @@ function switchMainView(mode){
   const tabBar = $('#tab_bar');
   const multiView = $('#multiday_view');
   const deepView = $('#gap_deepdive_view');
+  const anychartView = $('#anychart_view');
   const iframe = $('#runner_iframe');
   
   if(mode === 'multiday'){
     if(deepView) deepView.style.display='none';
+    if(anychartView) anychartView.style.display='none';
     if(intraBtn){ intraBtn.style.background = 'transparent'; intraBtn.style.color = '#29a8ff'; }
     if(multiBtn){ multiBtn.style.background = '#00c9a7'; multiBtn.style.color = '#000'; }
     if(tabsView) tabsView.style.display = 'none';
@@ -3652,6 +3727,7 @@ function switchMainView(mode){
     }
   } else {
     if(deepView) deepView.style.display='none';
+    if(anychartView) anychartView.style.display='none';
     if(intraBtn){ intraBtn.style.background = '#29a8ff'; intraBtn.style.color = '#000'; }
     if(multiBtn){ multiBtn.style.background = 'transparent'; multiBtn.style.color = '#00c9a7'; }
     if(tabsView) tabsView.style.display = 'block';
