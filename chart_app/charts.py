@@ -50,6 +50,8 @@ _RECENT_FILINGS_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix=
 _RECENT_FILINGS_LOCK = threading.RLock()
 _RECENT_FILINGS_PENDING = {}
 _RECENT_FILINGS_ERRORS = {}
+_CATEGORIZED_FILINGS_ARCHIVE_LOCK = threading.RLock()
+_CATEGORIZED_FILINGS_ARCHIVES = {}
 _GAP_DEEPDIVE_DAILY_LOCK = threading.Lock()
 _GAP_DEEPDIVE_DAILY_PENDING = {}
 _GAP_CHART_CHUNK_LOCK = threading.Lock()
@@ -1036,6 +1038,211 @@ def recent_filings_feed():
     except Exception as exc:
         app.logger.exception('Recent SEC filings feed failed')
         return jsonify({'error':f'Recent filings unavailable: {type(exc).__name__}'}),502
+
+
+_FILING_CATEGORY_ORDER = ["Financials", "News", "Prospectuses and Registrations", "Proxies", "Ownership", "Other"]
+_FILING_FORM_CATEGORIES = {
+    "Financials": {"10-K", "10-K/A", "10-KT", "10-Q", "10-Q/A", "20-F", "20-F/A", "40-F", "NT 10-K", "NT 10-Q"},
+    "News": {"8-K", "8-K/A", "6-K"},
+    "Prospectuses and Registrations": {"S-1", "S-1/A", "S-3", "S-3/A", "S-3ASR", "S-4", "S-4/A", "S-8", "F-1", "F-1/A", "F-3", "F-3/A", "FWP", "POS AM", "RW", "424H"},
+    "Proxies": {"DEF 14A", "PRE 14A", "DEFA14A", "DEFM14A", "PREM14A", "DEFC14A", "DEF 14C", "PRE 14C", "PX14A6G"},
+    "Ownership": {"3", "4", "5", "144", "SC 13D", "SC 13D/A", "SC 13G", "SC 13G/A", "SCHEDULE 13D", "SCHEDULE 13D/A", "SCHEDULE 13G", "SCHEDULE 13G/A"},
+}
+_FILING_8K_ITEM_LABELS = {
+    "1.01": "Material agreement", "2.02": "Earnings results",
+    "3.01": "Nasdaq delisting or compliance notice", "3.02": "Unregistered equity sale",
+    "5.02": "Officer or director change", "5.03": "Charter amendment",
+    "5.07": "Shareholder vote results", "8.01": "Other event",
+}
+_FILING_FORM_DESCRIPTIONS = {
+    "10-K": "Annual report", "10-K/A": "Annual report amendment", "10-Q": "Quarterly report",
+    "10-Q/A": "Quarterly report amendment", "20-F": "Foreign issuer annual report",
+    "40-F": "Canadian issuer annual report", "8-K": "Current report", "8-K/A": "Current report amendment",
+    "6-K": "Foreign issuer report", "S-1": "Registration statement", "S-3": "Shelf registration",
+    "F-1": "Foreign issuer registration statement", "F-3": "Foreign issuer shelf registration",
+    "FWP": "Free writing prospectus", "DEF 14A": "Definitive proxy statement",
+    "PRE 14A": "Preliminary proxy statement", "4": "Insider transaction report",
+    "SC 13D": "Beneficial ownership report", "SC 13G": "Beneficial ownership report",
+}
+
+
+def _filing_category(form):
+    normalized = str(form or "").strip().upper()
+    for category, forms in _FILING_FORM_CATEGORIES.items():
+        if normalized in forms:
+            return category
+    if normalized.startswith("424B"):
+        return "Prospectuses and Registrations"
+    return "Other"
+
+
+def _filing_rows_from_submission(recent, cik, ticker, company):
+    grouped = {category: [] for category in _FILING_CATEGORY_ORDER}
+    forms_by_category = {category: set() for category in _FILING_CATEGORY_ORDER}
+    forms = recent.get("form") or []
+    def value(key, index):
+        values = recent.get(key) or []
+        return values[index] if index < len(values) else ""
+    for index, raw_form in enumerate(forms):
+        form = str(raw_form or "").strip()
+        if not form:
+            continue
+        category = _filing_category(form)
+        filed = str(value("filingDate", index) or "")
+        accession = str(value("accessionNumber", index) or "")
+        accession_path = accession.replace("-", "")
+        primary_document = str(value("primaryDocument", index) or "")
+        primary_description = " ".join(str(value("primaryDocDescription", index) or "").split())
+        raw_items = str(value("items", index) or "")
+        item_codes = re.findall(r"\d{1,2}\.\d{2}", raw_items)
+        item_labels = [_FILING_8K_ITEM_LABELS[code] for code in item_codes if code in _FILING_8K_ITEM_LABELS]
+        generic_descriptions = {form.upper(), "CURRENT REPORT", "FOREIGN ISSUER REPORT", "ANNUAL REPORT", "QUARTERLY REPORT"}
+        if form.upper().startswith("8-K") and item_labels:
+            description = " · ".join(dict.fromkeys(item_labels))
+        elif not primary_description or primary_description.upper() in generic_descriptions:
+            description = _FILING_FORM_DESCRIPTIONS.get(form.upper(), primary_description or form)
+        else:
+            description = primary_description
+        if accession_path and primary_document:
+            url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_path}/{quote(primary_document, safe='.-_')}"
+        elif accession_path:
+            url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_path}/{accession}-index.html"
+        else:
+            url = "https://www.sec.gov/edgar/search/"
+        dilution_signal = (form.upper().startswith("424B") or form.upper() in {"S-1", "S-1/A", "S-3", "S-3/A", "F-1", "F-1/A", "F-3", "F-3/A", "FWP"}
+                           or (form.upper().startswith("8-K") and any(code in {"1.01", "3.02"} for code in item_codes)))
+        row = {"ticker": ticker, "company": company, "form": form, "date": filed,
+               "period": str(value("reportDate", index) or ""), "desc": description,
+               "items": raw_items, "url": url, "accession": accession, "cik": str(int(cik)),
+               "dilution_signal": dilution_signal}
+        grouped[category].append(row)
+        forms_by_category[category].add(form)
+    for category in _FILING_CATEGORY_ORDER:
+        grouped[category].sort(key=lambda item: item.get("date", ""), reverse=True)
+    return grouped, forms_by_category
+
+
+def _categorized_submissions(ticker):
+    from chart_app.keyword_compare import _keyword_sec_get, _keyword_ticker_map, _keyword_ticker_matches
+    ticker_map = _keyword_ticker_map()
+    issuer = next(((cik, info) for cik, info in ticker_map.items()
+                   if _keyword_ticker_matches(info, ticker)), (None, None))
+    if not issuer[0]:
+        ticker_map = _keyword_ticker_map(force_refresh=True)
+        issuer = next(((cik, info) for cik, info in ticker_map.items()
+                       if _keyword_ticker_matches(info, ticker)), (None, None))
+    cik, company = issuer
+    if not cik:
+        return None, None, None
+    cache_key = f"sec_categorized_submissions_v1_{cik}"
+    data = cget(cache_key, 12 * 3600)
+    if data is None:
+        response = _keyword_sec_get(f"https://data.sec.gov/submissions/CIK{cik}.json", timeout=20)
+        response.raise_for_status()
+        data = response.json()
+        cput(cache_key, data)
+    return str(cik), company, data
+
+
+def _categorized_archive_rows(cik, company, ticker, files, category, target_count, exact_date=None):
+    from chart_app.keyword_compare import _keyword_sec_get
+    state_key = f"sec_categorized_archive_v1_{cik}"
+    with _CATEGORIZED_FILINGS_ARCHIVE_LOCK:
+        state = _CATEGORIZED_FILINGS_ARCHIVES.get(cik)
+        if state is None:
+            state = cget(state_key, 7 * 86400) or {"next_file": 0, "rows": {name: [] for name in _FILING_CATEGORY_ORDER}, "exhausted": False}
+            _CATEGORIZED_FILINGS_ARCHIVES[cik] = state
+        older_rows = state["rows"].setdefault(category, [])
+        while len([row for row in older_rows if not exact_date or row.get("date") == exact_date]) < target_count and state["next_file"] < len(files):
+            file_info = files[state["next_file"]]
+            filename = str(file_info.get("name") or "")
+            state["next_file"] += 1
+            if exact_date:
+                date_from, date_to = str(file_info.get("filingFrom") or ""), str(file_info.get("filingTo") or "")
+                if date_from and date_to and not date_from <= exact_date <= date_to:
+                    continue
+            if not re.fullmatch(r"[A-Za-z0-9._-]+\.json", filename):
+                continue
+            page_key = f"sec_categorized_archive_page_v1_{cik}_{filename}"
+            page_data = cget(page_key, 30 * 86400)
+            if page_data is None:
+                response = _keyword_sec_get(f"https://data.sec.gov/submissions/{filename}", timeout=20)
+                response.raise_for_status()
+                page_data = response.json()
+                cput(page_key, page_data)
+            older_grouped, _forms = _filing_rows_from_submission(page_data.get("filings", {}).get("recent", {}), cik, ticker, company.get("name", ""))
+            for name, rows in older_grouped.items():
+                state["rows"].setdefault(name, []).extend(rows)
+            older_rows = state["rows"].setdefault(category, [])
+        state["exhausted"] = state["next_file"] >= len(files)
+        cput(state_key, state)
+        return [row for row in older_rows if not exact_date or row.get("date") == exact_date], not state["exhausted"]
+
+
+@app.route('/api/filings/<ticker>')
+def categorized_filings(ticker):
+    user = (request.args.get('user') or '').strip().lower()
+    token = (request.args.get('token') or '').strip()
+    if user not in _auth.ALLOWED_USERS or not _db_validate_session(user, token):
+        return jsonify({'error': 'Unauthorized'}), 401
+    ticker = str(ticker or '').strip().upper()
+    if not re.fullmatch(r'[A-Z.\-]{1,10}', ticker):
+        return jsonify({'error': 'Invalid ticker'}), 400
+    exact_date = (request.args.get('date') or '').strip()
+    if exact_date:
+        try:
+            exact_date = dt.date.fromisoformat(exact_date).isoformat()
+        except ValueError:
+            return jsonify({'error': 'Invalid filing date'}), 400
+    try:
+        cik, company, data = _categorized_submissions(ticker)
+        if not cik:
+            return jsonify({'error': f'No SEC CIK was found for {ticker}.'}), 404
+        recent = ((data.get('filings') or {}).get('recent') or {})
+        recent_grouped, recent_forms = _filing_rows_from_submission(recent, cik, ticker, company.get('name', ''))
+        older_files = ((data.get('filings') or {}).get('files') or [])
+        requested_category = (request.args.get('category') or '').strip()
+        if requested_category:
+            if requested_category not in _FILING_CATEGORY_ORDER:
+                return jsonify({'error': 'Invalid filing category'}), 400
+            try:
+                offset = max(0, int(request.args.get('offset') or 0))
+                limit = max(1, min(20, int(request.args.get('limit') or 7)))
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Invalid filing page'}), 400
+            rows = recent_grouped[requested_category]
+            if exact_date:
+                rows = [row for row in rows if row.get('date') == exact_date]
+            page = rows[offset:offset + limit]
+            older_has_more = bool(older_files)
+            older_rows = []
+            if offset + limit > len(rows) and older_files:
+                target_older_count = max(0, offset + limit - len(rows))
+                older_rows, older_has_more = _categorized_archive_rows(
+                    cik, company, ticker, older_files, requested_category, target_older_count, exact_date)
+                older_offset = max(0, offset - len(rows))
+                page.extend(older_rows[older_offset:older_offset + max(0, limit - len(page))])
+            known_total = len(rows) + len(older_rows)
+            has_more = offset + len(page) < known_total or older_has_more
+            forms = sorted({row['form'] for row in rows} |
+                           {row['form'] for row in older_rows if not exact_date or row.get('date') == exact_date})
+            return jsonify({'ticker': ticker, 'category': requested_category, 'date': exact_date,
+                            'rows': page, 'total': known_total, 'forms': forms, 'has_more': has_more,
+                            'archive_available': bool(older_files)})
+        categories = {}
+        for category in _FILING_CATEGORY_ORDER:
+            rows = recent_grouped[category]
+            if exact_date:
+                rows = [row for row in rows if row.get('date') == exact_date]
+            categories[category] = {'total': len(rows), 'rows': rows[:7],
+                                    'forms': sorted({row['form'] for row in rows}),
+                                    'has_more': len(rows) > 7 or bool(older_files),
+                                    'archive_available': bool(older_files)}
+        return jsonify({'ticker': ticker, 'company': company.get('name', ''), 'cik': cik,
+                        'date': exact_date, 'categories': categories})
+    except Exception as exc:
+        app.logger.exception('Categorized SEC filings failed for %s', ticker)
+        return jsonify({'error': f'Categorized SEC filings unavailable: {type(exc).__name__}'}), 502
 
 @app.route('/api/sec-filing-explanation', methods=['POST'])
 def sec_filing_explanation():
