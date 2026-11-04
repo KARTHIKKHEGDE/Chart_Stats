@@ -1472,13 +1472,16 @@ function renderFilingExplanation(data){
   const status=$('#filing_explanation_status'),content=$('#filing_explanation_content'),title=$('#filing_explanation_title');
   title.textContent=data.title||'SEC filing';
   const e=data.explanation||{};
+  const linkedSeen=new Set(),linkedDocuments=[];
+  [...(data.linked_documents||[]),...(data.related_filings||[])].forEach(item=>{const keys=[item.url,item.explain_url].filter(Boolean).map(String);if(!keys.some(key=>linkedSeen.has(key))){keys.forEach(key=>linkedSeen.add(key));linkedDocuments.push(item);}});
+  const linkedFilesSection=`<section class="filingExplainSection"><h3>Files linked to this filing</h3>${linkedDocuments.length?`<div class="filingExplainLinks">${linkedDocuments.map(item=>`<div class="filingExplainRelatedRow"><button class="filingExplainLink" type="button" data-related-url="${esc(item.explain_url||item.url)}" data-related-title="${esc(item.title||item.filename||'Linked SEC document')}" data-related-ticker="${esc(item.ticker||data.ticker||'')}">${item.ticker?`<strong>${esc(item.ticker)}</strong>`:''}${item.form?`<small>${esc(item.form)}</small>`:''}<span>${esc(item.title||item.filename||'Linked SEC document')}</span>${item.relation?`<span class="filingExplainRelation">(${esc(item.relation)})</span>`:''}${item.company?`<small>${esc(item.company)}</small>`:''}</button><a class="recent-filing-open" href="${esc(item.url||item.explain_url)}" target="_blank" rel="noopener noreferrer">Open ↗</a></div>`).join('')}</div>`:'<p>No other SEC documents are linked from this filing.</p>'}</section>`;
   content.innerHTML=`<div class="filingExplainMeta">${esc(data.ticker||'')} ${data.form?`· ${esc(data.form)}`:''} ${data.filed_at?`· filed ${esc(formatDateMDY(data.filed_at))}`:''} · explained by ${esc(data.provider||'AI')}</div>
     <section class="filingExplainSection"><h3>In simple terms</h3><p>${esc(e.summary||'No summary was returned.')}</p></section>
     ${e.key_points?.length?`<section class="filingExplainSection"><h3>Main points</h3><ul>${e.key_points.map(point=>`<li>${esc(point)}</li>`).join('')}</ul></section>`:''}
     ${e.why_it_matters?`<section class="filingExplainSection"><h3>Why it matters</h3><p>${esc(e.why_it_matters)}</p></section>`:''}
     ${e.caveats?`<section class="filingExplainSection"><h3>What is unclear</h3><p>${esc(e.caveats)}</p></section>`:''}
     <section class="filingExplainSection"><a class="recent-filing-open" href="${esc(data.url||'#')}" target="_blank" rel="noopener noreferrer">Open the original SEC filing ↗</a></section>
-    ${data.related_filings?.length?`<section class="filingExplainSection"><h3>SEC filings linked in this document</h3><div class="filingExplainLinks">${data.related_filings.map(item=>`<div class="filingExplainRelatedRow"><button class="filingExplainLink" type="button" data-related-url="${esc(item.explain_url||item.url)}" data-related-title="${esc(item.title)}" data-related-ticker="${esc(item.ticker||'')}">${item.ticker?`<strong>${esc(item.ticker)}</strong>`:''}${item.form?`<small>${esc(item.form)}</small>`:''}<span>${esc(item.title)}</span>${item.relation?`<span class="filingExplainRelation">(${esc(item.relation)})</span>`:''}${item.company?`<small>${esc(item.company)}</small>`:''}</button><a class="recent-filing-open" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open ↗</a></div>`).join('')}</div></section>`:''}`;
+    ${linkedFilesSection}`;
   status.textContent='';content.hidden=false;
 }
 function renderDilutionHistory(data){

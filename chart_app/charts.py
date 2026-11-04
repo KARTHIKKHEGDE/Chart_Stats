@@ -1347,19 +1347,40 @@ def sec_filing_explanation():
         filing_text, anchors = _filing_document_text(document_url)
         if len(filing_text) < 80:
             return jsonify({'error': 'The filing text could not be read from SEC EDGAR.'}), 502
+        if source_item:
+            parent_url = source_item.get('document_url') or ''
+            parent_parts = _sec_archive_url_parts(parent_url)
+            if (parent_parts and parent_parts['accession_path'] == parts['accession_path']
+                    and parent_url.rstrip('/') != document_url.rstrip('/')):
+                try:
+                    _parent_text, parent_anchors = _filing_document_text(parent_url)
+                    anchors = anchors + parent_anchors
+                except Exception:
+                    app.logger.info('Could not load the parent SEC filing links for %s', accession)
         related = []
         same_accession_documents = []
+        linked_documents = []
+        linked_document_keys = set()
         related_keys = set()
         for anchor in anchors:
             link_url = urljoin(document_url, anchor.get('href') or '')
             linked = _sec_archive_url_parts(link_url)
             if not linked:
                 continue
+            filename = linked.get('filename', '').rsplit('/', 1)[-1]
+            extension = Path(filename).suffix.lower()
+            is_current_document = (linked['accession_path'] == parts['accession_path'] and
+                                   filename.casefold() == (parts.get('filename') or '').rsplit('/', 1)[-1].casefold())
+            if (filename and not is_current_document and extension in {'.htm', '.html', '.xhtml', '.txt', '.pdf', '.xml', '.rtf',
+                                           '.doc', '.docx', '.xls', '.xlsx', '.csv'}
+                    and link_url not in linked_document_keys):
+                linked_document_keys.add(link_url)
+                linked_documents.append({'title': anchor.get('text') or filename, 'url': link_url,
+                                         'explain_url': link_url, 'filename': filename,
+                                         'accession_path': linked['accession_path'], 'cik': linked['cik']})
             if linked['accession_path'] == parts['accession_path']:
-                filename = linked.get('filename', '').rsplit('/', 1)[-1]
-                label = f"{anchor.get('text') or ''} {filename}"
-                if (filename and filename.casefold() != (parts.get('filename') or '').rsplit('/', 1)[-1].casefold()
-                        and re.search(r'(?:ex[-_]?\d{1,2}(?:[._-]\d+)?|exhibit\s*\d|press\s+release|earnings\s+release|financial\s+results)', label, re.I)):
+                if filename and not is_current_document and extension in {
+                        '.htm', '.html', '.xhtml', '.txt', '.pdf', '.xml', '.rtf', '.doc', '.docx', '.xls', '.xlsx', '.csv'}:
                     same_accession_documents.append({'title': anchor.get('text') or filename,
                                                      'url': link_url, 'filename': filename})
                 continue
@@ -1370,8 +1391,6 @@ def sec_filing_explanation():
             related.append({'ticker': '', 'title': anchor.get('text') or 'Linked SEC filing',
                             'url': link_url, 'explain_url': link_url, 'cik': linked['cik'],
                             'accession_path': linked['accession_path']})
-            if len(related) >= 10:
-                break
         if related:
             try:
                 from chart_app.keyword_compare import _keyword_ticker_map
@@ -1389,6 +1408,22 @@ def sec_filing_explanation():
                             item['filing_date'] = linked_record.get('filing_date') or ''
                             item['url'] = linked_record.get('url') or item['url']
                             item['explain_url'] = linked_record.get('document_url') or item['explain_url']
+            except Exception:
+                pass
+        if linked_documents:
+            try:
+                from chart_app.keyword_compare import _keyword_ticker_map
+                ticker_by_cik = {str(int(raw_cik)): info for raw_cik, info in _keyword_ticker_map().items()}
+                records_by_accession = {str(item.get('accession') or '').replace('-', ''): item
+                                        for item in _gap_deepdive_sec_filings(ticker)} if ticker else {}
+                for item in linked_documents:
+                    company = ticker_by_cik.get(item['cik']) or {}
+                    item['ticker'] = str(company.get('ticker') or ticker or '')
+                    item['company'] = str(company.get('name') or '')
+                    record = records_by_accession.get(item['accession_path'])
+                    if record:
+                        item['form'] = str(record.get('form') or '')
+                        item['filing_date'] = str(record.get('filing_date') or '')
             except Exception:
                 pass
 
@@ -1571,9 +1606,9 @@ def sec_filing_explanation():
         result = {'ticker': ticker, 'title': exact_title or 'SEC filing',
                   'form': source_item.get('form', '') if source_item else '',
                   'filed_at': source_item.get('filing_date', '') if source_item else '',
-                  'url': source_item.get('url', document_url) if source_item else document_url,
+                  'url': document_url,
                   'explanation': _parse_filing_summary(answer), 'provider': provider,
-                  'related_filings': related}
+                  'related_filings': related, 'linked_documents': linked_documents}
         cput(cache_key, result)
         return jsonify(result)
     except RuntimeError as exc:
