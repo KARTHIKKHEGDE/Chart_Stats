@@ -270,14 +270,16 @@ def _run_scanner_cycle():
                 item = f.result()
                 if item:
                     results.append(item)
-
-        # Attach latest news headline for each matching ticker
-        for item in results:
-            try:
-                news_items = _get_scanner_news(item["ticker"], limit=1)
-                item["latest_news"] = news_items[0]["title"] if news_items else ""
-            except Exception:
-                item["latest_news"] = ""
+                    # Show qualifying tickers as soon as their price data is ready;
+                    # headline lookups run separately and cannot delay the scan.
+                    partial = sorted(results, key=lambda x: (
+                        0 if x["status"] == "green" else 1,
+                        -x["current_pct"] if x["status"] == "green" else -x["pm_spike_pct"],
+                        -x["dollar_volume"],
+                    ))
+                    with _scanner_cache_lock:
+                        _scanner_cache.update(at=time.time(), rows=list(partial),
+                                              session_date=session_date, scanning=True, error="")
 
         # Sort: Green first (descending by current_pct), then Yellow (descending by pm_spike_pct)
         results.sort(
@@ -303,6 +305,9 @@ def _run_scanner_cycle():
         green_c = sum(1 for r in results if r["status"] == "green")
         yellow_c = sum(1 for r in results if r["status"] == "yellow")
         _scanner_log(f"Scan completed in {time.time()-t0:.2f}s: {len(results)} matches ({green_c} green, {yellow_c} yellow)")
+        # Enrich results asynchronously so slow news providers never block prices.
+        for item in results:
+            _scanner_details_pool.submit(_attach_scanner_news, item["ticker"])
 
     except Exception as exc:
         _scanner_log(f"Scan error: {exc}")
@@ -406,6 +411,19 @@ def _get_scanner_news(ticker, limit=2):
     return fetched[:limit]
 
 
+def _attach_scanner_news(ticker):
+    try:
+        news_items = _get_scanner_news(ticker, limit=1)
+        headline = news_items[0]["title"] if news_items else ""
+    except Exception:
+        headline = ""
+    with _scanner_cache_lock:
+        for row in _scanner_cache.get("rows", []):
+            if row.get("ticker") == ticker:
+                row["latest_news"] = headline
+                break
+
+
 @app.route("/api/scanner-news-more")
 def scanner_news_more_api():
     username = (request.args.get("user") or "").strip().lower()
@@ -434,16 +452,17 @@ def scanner_market_scan():
     now = time.time()
     force = request.args.get("force") == "1"
 
+    # Trigger at most one scan if the cache is stale or the user forced refresh.
     with _scanner_cache_lock:
         cache_age = now - _scanner_cache["at"]
+        if (force or cache_age >= _SCANNER_RESCAN_SECONDS) and not _scanner_cache.get("scanning", False):
+            _scanner_cache["scanning"] = True
+            _scanner_scan_pool.submit(_run_scanner_cycle)
         is_scanning = _scanner_cache.get("scanning", False)
         cached_rows = list(_scanner_cache["rows"])
         updated_at = _scanner_cache["at"]
         err = _scanner_cache.get("error", "")
-
-    # Trigger scan if cache is stale or user forced refresh
-    if force or (cache_age >= _SCANNER_RESCAN_SECONDS and not is_scanning):
-        _scanner_scan_pool.submit(_run_scanner_cycle)
+        candidates_count = _scanner_cache.get("candidates_count", 0)
 
     green_count = sum(1 for r in cached_rows if r.get("status") == "green")
     yellow_count = sum(1 for r in cached_rows if r.get("status") == "yellow")
@@ -455,6 +474,7 @@ def scanner_market_scan():
         "yellow_count": yellow_count,
         "updated": updated_at,
         "scanning": is_scanning,
+        "candidates_count": candidates_count,
         "rescan_seconds": _SCANNER_RESCAN_SECONDS,
         "session_date": _scanner_session_date(),
         "error": err,

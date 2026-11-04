@@ -3606,7 +3606,7 @@ function startScannerPolling(){
   scannerTimer = setInterval(()=>{
     const panelOpen = $('#scanner_modal').style.display !== 'none';
     if(panelOpen || scannerAlarmEnabled) refreshScanner();
-  }, 30000);
+  }, 15000);
   if(scannerAlarmEnabled) refreshScanner();
 }
 
@@ -3824,18 +3824,18 @@ function loadScannerVoices(){
   if(preferredVoice && scannerAlarmEnabled) playNextScannerAnnouncement();
 }
 
-let scannerCountdownSec = 60;
+let scannerCountdownSec = 15;
 let scannerCountdownTimer = null;
 
 function startScannerCountdown(){
   if(scannerCountdownTimer) clearInterval(scannerCountdownTimer);
-  scannerCountdownSec = 60;
+  scannerCountdownSec = 15;
   scannerCountdownTimer = setInterval(()=>{
     scannerCountdownSec--;
     const el = $('#scanner_countdown');
     if(el) el.textContent = scannerCountdownSec + 's';
     if(scannerCountdownSec <= 0){
-      scannerCountdownSec = 60;
+      scannerCountdownSec = 15;
       refreshScanner();
     }
   }, 1000);
@@ -3947,7 +3947,8 @@ async function refreshScanner(force=false){
 
     const stamp = new Date((data.updated || Date.now()/1000)*1000).toLocaleTimeString();
     if(status){
-      status.innerHTML = `<span><b>${tickers.length}</b> qualifying stock${tickers.length===1?'':'s'} found (${greenCount} green, ${yellowCount} yellow) · Last updated at <b>${stamp}</b></span>`;
+      const progress = data.scanning ? ` · Scanning ${Number(data.candidates_count||0).toLocaleString()} tickers; results appear as they finish` : '';
+      status.innerHTML = `<span><b>${tickers.length}</b> qualifying stock${tickers.length===1?'':'s'} found (${greenCount} green, ${yellowCount} yellow) · Last updated at <b>${stamp}</b>${progress}</span>`;
     }
     startScannerCountdown();
   } catch(e){
