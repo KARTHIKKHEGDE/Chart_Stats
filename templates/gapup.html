@@ -339,6 +339,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
           <span>Auto-refresh:</span>
           <span id="scanner_countdown" style="color:#00e676;font-weight:bold;min-width:24px">60s</span>
         </div>
+        <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:#cbd6df;cursor:pointer" title="Speak the latest headline after each ticker announcement"><input id="scanner_news_read" type="checkbox" style="accent-color:#00e676"> Read latest news</label>
         <button id="scanner_refresh_btn" style="height:32px;font-size:12px;padding:0 12px;background:#042114;border:1px solid #00e676;color:#00e676;cursor:pointer;font-weight:bold;border-radius:4px;display:flex;align-items:center;gap:5px">↻ Refresh Now</button>
         <button id="scanner_close_btn" style="height:32px;font-size:12px;padding:0 12px;background:#141a21;border:1px solid #334455;color:#aaa;cursor:pointer;border-radius:4px" onclick="closeScanner()">✕ Close</button>
       </div>
@@ -3587,7 +3588,9 @@ let scannerTimer = null;
 let scannerBusy = false;
 let scannerAlertSession = '';
 let scannerSeenApproaches = new Set();
-const scannerSettingsDefaults = {version:4,voice_enabled:false,voice_uri:'',approach_pct:2,vwap_enabled:true};
+let scannerAnnouncementSession = '';
+let scannerTickerAnnouncements = {};
+const scannerSettingsDefaults = {version:5,voice_enabled:false,approach_pct:2,vwap_enabled:true,news_enabled:false};
 let scannerSettings = {...scannerSettingsDefaults};
 let scannerSettingsUser = '';
 let scannerSettingsLoadPromise = null;
@@ -3611,11 +3614,11 @@ function migrateScannerSettings(settings){
   const source = settings && typeof settings === 'object' ? settings : {};
   const migrated = {...scannerSettingsDefaults, ...source};
   if(Number(source.version || 0) < 4) migrated.voice_enabled = false;
+  if(Number(source.version || 0) < 5) migrated.news_enabled = false;
   delete migrated.bone_2m_enabled;
   delete migrated.bone_5m_enabled;
   delete migrated.voice_volume;
-  delete migrated.news_enabled;
-  migrated.version = 4;
+  migrated.version = 5;
   return migrated;
 }
 
@@ -3623,16 +3626,15 @@ function applyScannerSettings(settings){
   scannerSettings = migrateScannerSettings(settings);
   scannerAlarmEnabled = !!scannerSettings.voice_enabled;
   $('#scanner_alarm').checked = scannerAlarmEnabled;
+  $('#scanner_news_read').checked = !!scannerSettings.news_enabled;
   $('#scanner_vwap_alert').checked = !!scannerSettings.vwap_enabled;
-  const voice = scannerVoices[0];
-  if(voice) scannerSettings.voice_uri = voice.voiceURI;
 }
 
 function readScannerSettingsControls(){
   return {
-    version: 4,
+    version: 5,
     voice_enabled: $('#scanner_alarm').checked,
-    voice_uri: scannerVoices[0]?.voiceURI || scannerSettings.voice_uri || '',
+    news_enabled: $('#scanner_news_read').checked,
     approach_pct: scannerSettings.approach_pct || 2,
     vwap_enabled: $('#scanner_vwap_alert').checked
   };
@@ -3734,6 +3736,10 @@ function announceScannerTicker(ticker, extra=''){
 
 function playNextScannerAnnouncement(){
   if(scannerSpeechActive || !scannerSpeechQueue.length || !scannerAlarmEnabled) return;
+  if(!scannerVoices[0]){
+    $('#scanner_status').textContent = 'Waiting for a supported female English voice in this browser.';
+    return;
+  }
   const item = scannerSpeechQueue.shift();
   scannerSpeechActive = true;
   let voiceDone = false;
@@ -3753,14 +3759,7 @@ function playNextScannerAnnouncement(){
     utterance.rate = 1.0;
     utterance.pitch = 1.08;
     utterance.volume = 1;
-    const feminineVoice = scannerVoices[0];
-    const voice = feminineVoice;
-    if(!voice){
-      scannerSpeechActive = false;
-      $('#scanner_status').textContent = 'No supported female voice is available in this browser.';
-      onDone();
-      return;
-    }
+    const voice = scannerVoices[0];
     utterance.voice = voice;
     utterance.lang = voice.lang;
     utterance.onend = complete;
@@ -3794,16 +3793,35 @@ function saveScannerApproach(id){
   } catch(e){}
 }
 
+function checkScannerTickerAnnouncements(tickers, sessionDate){
+  if(!scannerAlarmEnabled || !sessionDate) return;
+  const storageKey = 'gap_scanner_spoken_' + currentUser + '_' + sessionDate;
+  if(scannerAnnouncementSession !== sessionDate){
+    scannerAnnouncementSession = sessionDate;
+    try { scannerTickerAnnouncements = JSON.parse(localStorage.getItem(storageKey) || '{}') || {}; }
+    catch(e){ scannerTickerAnnouncements = {}; }
+  }
+  const now = Date.now();
+  for(const row of tickers){
+    const ticker = String(row.ticker || '').toUpperCase();
+    if(!ticker) continue;
+    const last = Number(scannerTickerAnnouncements[ticker] || 0);
+    if(last && now - last < 5 * 60 * 1000) continue;
+    const headline = scannerSettings.news_enabled ? String(row.latest_news || '').trim() : '';
+    announceScannerTicker(ticker, headline ? 'Latest news. ' + headline : '');
+    scannerTickerAnnouncements[ticker] = now;
+  }
+  try { localStorage.setItem(storageKey, JSON.stringify(scannerTickerAnnouncements)); } catch(e){}
+}
+
 function loadScannerVoices(){
   if(!('speechSynthesis' in window)) return;
-  const savedVoice = scannerSettings.voice_uri || '';
   const availableVoices = window.speechSynthesis.getVoices();
   const femaleVoiceNames = /\b(aria|ava|amy|emma|jenny|june|karen|kimberly|moira|natasha|olivia|salli|samantha|sara|serena|sophie|susan|tessa|victoria|zira)\b|female/i;
   const femaleVoices = availableVoices.filter(voice => /^en([_-]|$)/i.test(voice.lang) && femaleVoiceNames.test(voice.name));
-  const preferredVoice = femaleVoices.find(voice=>voice.voiceURI===savedVoice) ||
-    femaleVoices.sort((a,b)=>a.name.localeCompare(b.name))[0];
+  const preferredVoice = femaleVoices.sort((a,b)=>a.name.localeCompare(b.name))[0];
   scannerVoices = preferredVoice ? [preferredVoice] : [];
-  if(preferredVoice) scannerSettings.voice_uri = preferredVoice.voiceURI;
+  if(preferredVoice && scannerAlarmEnabled) playNextScannerAnnouncement();
 }
 
 let scannerCountdownSec = 60;
@@ -3834,6 +3852,7 @@ async function refreshScanner(force=false){
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Scanner request failed');
     const tickers = data.tickers || [];
+    checkScannerTickerAnnouncements(tickers, data.session_date);
     const body = $('#scanner_rows');
     
     // Update badge counters
@@ -3962,6 +3981,7 @@ if($('#scanner_alarm')) $('#scanner_alarm').onchange = e=>{
   }
 };
 if($('#scanner_vwap_alert')) $('#scanner_vwap_alert').onchange = saveScannerSettings;
+if($('#scanner_news_read')) $('#scanner_news_read').onchange = saveScannerSettings;
 loadScannerVoices();
 if('speechSynthesis' in window) window.speechSynthesis.onvoiceschanged = loadScannerVoices;
 if($('#multiday_stats_btn')) $('#multiday_stats_btn').onclick = () => {

@@ -271,6 +271,14 @@ def _run_scanner_cycle():
                 if item:
                     results.append(item)
 
+        # Attach latest news headline for each matching ticker
+        for item in results:
+            try:
+                news_items = _get_scanner_news(item["ticker"], limit=1)
+                item["latest_news"] = news_items[0]["title"] if news_items else ""
+            except Exception:
+                item["latest_news"] = ""
+
         # Sort: Green first (descending by current_pct), then Yellow (descending by pm_spike_pct)
         results.sort(
             key=lambda x: (
