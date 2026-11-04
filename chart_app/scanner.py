@@ -318,7 +318,7 @@ def _run_scanner_cycle():
         yellow_c = sum(1 for r in results if r["status"] == "yellow")
         _scanner_log(f"Scan completed in {time.time()-t0:.2f}s: {len(results)} matches ({green_c} green, {yellow_c} yellow)")
         # Enrich results asynchronously so slow news providers never block prices.
-        for item in results[:12]:
+        for item in results[:8]:
             with _scanner_details_lock:
                 if item["ticker"] in _scanner_details_inflight:continue
                 _scanner_details_inflight.add(item["ticker"])
@@ -353,7 +353,7 @@ _scanner_worker_thread.start()
 _scanner_details = {}
 _scanner_details_lock = threading.RLock()
 _scanner_details_inflight = set()
-_scanner_details_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="scanner-details")
+_scanner_details_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="scanner-details")
 
 
 def _normalize_yahoo_news(article, kind):

@@ -435,24 +435,33 @@ def run_job(job, t, refresh):
         _security_res = [None]
         _news_res   = [None]
         _err        = [None]
+        core_lock=threading.Lock();core_done=set()
+        def core_finished(label):
+            with core_lock:
+                core_done.add(label);finished=len(core_done)
+                job.update(stage='core',progress_pct=4+finished*2,
+                           msg=f'Live data loading · {finished}/3 core sources ready ({label})…')
 
         def _get_live():
             try:
-                _live_res[0] = live_snapshot(t)
+                _live_res[0] = live_snapshot(t,fast=True,include_profile=False)
             except Exception as ex:
                 _err[0] = ex
+            finally:core_finished('Yahoo live candles')
 
         def _get_daily():
             try:
                 _daily_res[0] = load_daily(t, refresh)
             except Exception as ex:
                 _err[0] = ex
+            finally:core_finished('daily price history')
 
         def _get_splits():
             try:
                 _splits_res[0] = load_splits(t)
             except Exception:
                 _splits_res[0] = []
+            finally:core_finished('split history')
 
         def _get_type():
             try:
@@ -545,6 +554,25 @@ def run_job(job, t, refresh):
         else:
             live["market_cap_source"] = "Unavailable"
         daily  = [r for r in _daily_res[0] if r["date"] < str(live["date"])]
+        if daily:
+            # Reuse the report's Polygon daily response instead of making a
+            # second annual Yahoo daily-history request on the critical path.
+            live['hist']=daily
+            live['pc']=float(daily[-1].get('c') or live.get('pc') or 0)
+            live['avg20']=float(np.mean([row.get('v',0) for row in daily[-20:]]))
+
+        # This report section needs one extra 15-minute request. Start it while
+        # the historical event candles are loading so it doesn't add a serial
+        # network wait at the end of the report.
+        hod_times_res=[None]
+        hod_times_thread=None
+        if daily:
+            def _get_recent_hod_times():
+                try:hod_times_res[0]=recent_hod_times(t,daily)
+                except Exception:hod_times_res[0]={"date_from":None,"date_to":None,"rows":[]}
+            hod_times_thread=threading.Thread(target=_get_recent_hod_times,daemon=True,
+                                              name=f"hod-times-{t}")
+            hod_times_thread.start()
 
         fl_now = live["float"] or live["so"]
         ratio  = None
@@ -556,36 +584,59 @@ def run_job(job, t, refresh):
                    msg="Core market data is in. Finding historical gap-up and premarket-spike sessions…")
         idxs = detect_events(daily, splits, live["date"])
 
+        # Persist computed event summaries separately from raw candles. A repeat
+        # analysis can reuse the full metrics/chart payload without refetching or
+        # recomputing each historical session. Changes in prices, SEC shares,
+        # splits, or current float context invalidate the cache automatically.
+        event_fingerprint=hashlib.sha256(json.dumps(
+            {"daily":daily,"sec":ctx["sec"],"splits":ctx["splits"],
+             "float":ctx["float"],"ratio":ctx["ratio"]},
+            sort_keys=True,separators=(",",":"),default=str).encode("utf-8")).hexdigest()[:16]
+        results={}
+        pending_idxs=[]
+        for i in idxs:
+            event_key=f"{t}_{daily[i]['date']}_gap_event_v1"
+            cached_event=cget(event_key,30*86400)
+            if isinstance(cached_event,dict) and cached_event.get("fingerprint")==event_fingerprint and "event" in cached_event:
+                results[i]=cached_event["event"]
+            else:
+                pending_idxs.append(i)
+        event_cache_hits=len(results)
+
         # ------------------------------------------------------------------ STAGE 2 + 3
         # Fetch and analyze each event as soon as its minute bars are available.
         # This overlaps CPU work with provider/network latency instead of waiting
         # for every historical session to finish downloading first.
         n_keys=max(1,len(_key_pool))
         n_events=len(idxs)
-        results={}
 
         def _analyze(i):
-            return i, analyze_event(t, i, daily, ctx)
+            event=clean(analyze_event(t,i,daily,ctx))
+            cput(f"{t}_{daily[i]['date']}_gap_event_v1",
+                 {"fingerprint":event_fingerprint,"event":event})
+            return i,event
 
-        if n_events:
-            fetch_args=[(t,i,daily) for i in idxs]
+        if pending_idxs:
+            fetch_args=[(t,i,daily) for i in pending_idxs]
             # Keep provider concurrency bounded: spawning one worker per
             # event/key can saturate connection pools and trigger rate limits.
-            fetch_workers=min(n_keys,n_events,10)
-            analyze_workers=min(4,n_events)
-            cached_sessions=sum(cget(f"{t}_{daily[i]['date']}_1m_polygon_v1") is not None for i in idxs)
-            uncached_sessions=max(0,n_events-cached_sessions)
+            # A single report benefits from more parallel historical fetches;
+            # concurrency remains bounded by available Polygon keys and events.
+            fetch_workers=min(n_keys,len(pending_idxs),20)
+            analyze_workers=min(8,len(pending_idxs))
+            cached_sessions=sum(cget(f"{t}_{daily[i]['date']}_1m_polygon_v1") is not None for i in pending_idxs)
+            uncached_sessions=max(0,len(pending_idxs)-cached_sessions)
             effective_rpm=max(0.1,float(POLY_RPM))*max(1,fetch_workers)
             initial_eta=int(uncached_sessions*60/effective_rpm + max(5,n_events*.2))
-            job.update(stage="loading_history",progress_pct=16,progress_done=0,progress_total=n_events,
-                       cached_done=0,uncached_total=uncached_sessions,uncached_done=0,
+            job.update(stage="loading_history",progress_pct=16+int(56*event_cache_hits/max(1,n_events)),progress_done=event_cache_hits,progress_total=n_events,
+                       cached_done=event_cache_hits,uncached_total=uncached_sessions,uncached_done=0,
                        fetch_workers=fetch_workers,estimate_seconds=initial_eta,eta_seconds=initial_eta,
-                       msg=f"Found {n_events} historical sessions · loading minute candles with {fetch_workers} rate-limited worker(s)…")
+                       msg=f"Found {n_events} historical sessions · reusing {event_cache_hits} complete analyses · loading the remaining candles with {fetch_workers} worker(s)…")
             with ThreadPoolExecutor(max_workers=fetch_workers,thread_name_prefix="gap-minute-fetch") as fetch_pool:
                 with ThreadPoolExecutor(max_workers=analyze_workers,thread_name_prefix="gap-event-analysis") as analyze_pool:
                     fetch_futures={fetch_pool.submit(_prefetch_minute,arg):arg for arg in fetch_args}
                     analyze_futures={}
-                    completed=0;cached_done=0
+                    completed=event_cache_hits;cached_done=event_cache_hits
                     for future in as_completed(fetch_futures):
                         idx_i,day,ok,was_cached=future.result();completed+=1;cached_done+=int(was_cached)
                         analyze_futures[analyze_pool.submit(_analyze,idx_i)]=idx_i
@@ -597,9 +648,9 @@ def run_job(job, t, refresh):
                     # Analyze as soon as each session's bars are fetched. The
                     # old code waited for every analysis at the end, hiding
                     # progress and delaying report readiness behind stragglers.
-                    analyzed=0
+                    analyzed=event_cache_hits
                     job.update(stage="analyzing",progress_pct=74,
-                               msg=f"Candles loaded · calculating historical patterns across {n_events} sessions in parallel…")
+                               msg=f"Candles loaded · calculating patterns for {n_events-event_cache_hits} uncached sessions…")
                     for future in as_completed(analyze_futures):
                         idx_i,event=future.result()
                         results[idx_i]=event
@@ -609,8 +660,10 @@ def run_job(job, t, refresh):
                                    eta_seconds=max(2,int((n_events-analyzed)*.15+2)),
                                    msg=f"Analyzing historical patterns · {analyzed}/{n_events} sessions complete…")
         else:
-            job.update(stage="building_report",progress_pct=78,progress_done=0,progress_total=0,
-                       eta_seconds=5,msg="No matching historical spike sessions; assembling the live report…")
+            job.update(stage="building_report",progress_pct=92 if event_cache_hits else 78,
+                       progress_done=event_cache_hits,progress_total=n_events,
+                       eta_seconds=2,msg=(f"Reused all {event_cache_hits} cached historical analyses; assembling the live report…"
+                                          if event_cache_hits else "No matching historical spike sessions; assembling the live report…"))
 
         events, skipped = [], 0
         for i in idxs:
@@ -621,6 +674,8 @@ def run_job(job, t, refresh):
                 skipped += 1
 
         # ------------------------------------------------------------------ report
+        if hod_times_thread is not None:
+            hod_times_thread.join()
         job.update(stage="building_report",progress_pct=97,eta_seconds=3,
                    msg="Historical analysis is complete · building the report and chart data…")
         lm    = metrics(live["df"], live["pc"], False)

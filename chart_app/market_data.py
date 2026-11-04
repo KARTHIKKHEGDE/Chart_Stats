@@ -371,61 +371,61 @@ def _alpaca_live_df(t):
     return None
 
 
-def live_snapshot(t):
+def live_snapshot(t, fast=False, include_profile=True):
     tk = yf.Ticker(t.replace(".", "-"))
-    # Fetch intraday (1d) and daily (1y) in parallel — cuts sequential wait in half
-    with ThreadPoolExecutor(max_workers=2) as yf_pool:
-        f_intraday = yf_pool.submit(_yahoo_call,lambda: tk.history(period="1d", interval="1m", prepost=True, auto_adjust=False))
-        f_daily    = yf_pool.submit(_yahoo_call,lambda: tk.history(period="1y", interval="1d", auto_adjust=False))
-        df  = f_intraday.result()
-        dly = f_daily.result()
-    if df is None or df.empty:
-        # Fallback for weekend / early Monday premarket — get last few trading days
-        df = _yahoo_call(lambda:tk.history(period="5d", interval="1m", prepost=True, auto_adjust=False))
+    if fast:
+        # Keep the blocking live request small. The report already loads Polygon
+        # daily history for prior closes and historical session analysis.
+        df=_yahoo_call(lambda:tk.history(period="1d",interval="1m",prepost=True,auto_adjust=False))
+        dly=None
+    else:
+        with ThreadPoolExecutor(max_workers=2) as yf_pool:
+            f_intraday = yf_pool.submit(_yahoo_call,lambda: tk.history(period="1d", interval="1m", prepost=True, auto_adjust=False))
+            f_daily    = yf_pool.submit(_yahoo_call,lambda: tk.history(period="1y", interval="1d", auto_adjust=False))
+            df  = f_intraday.result()
+            dly = f_daily.result()
+        if df is None or df.empty:
+            df = _yahoo_call(lambda:tk.history(period="5d", interval="1m", prepost=True, auto_adjust=False))
     if df is None or df.empty:
         raise RuntimeError(f"No Yahoo intraday data for {t}")
-    dly = dly.dropna()
+    if dly is not None:dly=dly.dropna()
     df.index = df.index.tz_convert(ET)
     df = df.rename(columns={"Open": "o", "High": "h", "Low": "l", "Close": "c", "Volume": "v"})
     df = df[["o", "h", "l", "c", "v"]].dropna().astype(float)
     day = df.index[-1].date()
     d = df[df.index.date == day]
-    prev = dly[dly.index.date < day]
-    if prev.empty:
-        raise RuntimeError("Could not determine previous close from Yahoo")
-    hist = [{"date": str(ix.date()), "o": float(r.Open), "h": float(r.High), "l": float(r.Low),
-             "c": float(r.Close), "v": float(r.Volume)} for ix, r in prev.iterrows()]
-    try:
-        info = _yahoo_call(lambda:tk.info) or {}
-    except Exception:
-        info = {}
+    if fast:
+        hist=[]
+    else:
+        prev = dly[dly.index.date < day]
+        if prev.empty:raise RuntimeError("Could not determine previous close from Yahoo")
+        hist = [{"date": str(ix.date()), "o": float(r.Open), "h": float(r.High), "l": float(r.Low),
+                 "c": float(r.Close), "v": float(r.Volume)} for ix, r in prev.iterrows()]
+    if not hist and not fast:raise RuntimeError("Could not determine previous close from recent Yahoo candles")
+    info={}
+    if include_profile:
+        try:info=_yahoo_call(lambda:tk.info) or {}
+        except Exception:pass
 
     # Prefer 100% exact real-time tick volume from Alpaca SIP feed if configured in .env
-    alp_df = _alpaca_live_df(t)
+    alp_df = None if fast else _alpaca_live_df(t)
     if alp_df is not None and not alp_df.empty:
         d = alp_df
         session_vol = float(d["v"].sum())
     else:
         # Fallback to Yahoo Finance total volume
-        session_vol = None
-        fast = getattr(tk, "fast_info", None)
-        for v_cand in [
-            info.get("volume"),
-            info.get("regularMarketVolume"),
-            getattr(fast, "last_volume", None) if fast else None,
-            getattr(fast, "day_volume", None) if fast else None,
-            info.get("dayVolume")
-        ]:
-            if v_cand is not None:
-                try:
-                    fv = float(v_cand)
-                    if fv > 0:
-                        session_vol = fv
-                        break
-                except Exception:
-                    pass
-
-        if not session_vol:
+        session_vol=float(d["v"].sum()) if fast and not d.empty else None
+        if not fast:
+            fast_info = _yahoo_call(lambda:getattr(tk,"fast_info",None))
+            for v_cand in [info.get("volume"),info.get("regularMarketVolume"),
+                           getattr(fast_info,"last_volume",None) if fast_info else None,
+                           getattr(fast_info,"day_volume",None) if fast_info else None,info.get("dayVolume")]:
+                if v_cand is not None:
+                    try:
+                        fv=float(v_cand)
+                        if fv>0:session_vol=fv;break
+                    except Exception:pass
+        if not session_vol and not fast:
             try:
                 today_dly = dly[dly.index.date == day]
                 if not today_dly.empty and float(today_dly["Volume"].iloc[-1]) > 0:
@@ -434,8 +434,8 @@ def live_snapshot(t):
                 pass
 
     volume_source = "Alpaca SIP" if alp_df is not None and not alp_df.empty else "Yahoo 1-minute volume"
-    return {"date": day, "df": d, "pc": hist[-1]["c"], "hist": hist,
-            "avg20": float(np.mean([r["v"] for r in hist[-20:]])), "cur": float(d["c"].iloc[-1]),
+    return {"date": day, "df": d, "pc": hist[-1]["c"] if hist else 0, "hist": hist,
+            "avg20": float(np.mean([r["v"] for r in hist[-20:]])) if hist else 0, "cur": float(d["c"].iloc[-1]),
             "float": info.get("floatShares"), "so": info.get("sharesOutstanding"),
             "session_vol": session_vol, "volume_source": volume_source,
             "sector": info.get("industry") or info.get("sector") or "—", "mcap": info.get("marketCap"),
