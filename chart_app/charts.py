@@ -1870,15 +1870,48 @@ def sec_dilution_history():
         required_fields=('summary','current_status','active_atms','active_warrants','active_shelves',
                          'convertibles','ceo_ownership','active_participants','major_warrant_holders',
                          'other_overhang','today_math','risk_signals','history')
-        missing_fields=[field for field in required_fields if field not in analysis]
         expected_types={'active_atms':list,'active_warrants':list,'active_shelves':list,'convertibles':list,
                         'ceo_ownership':dict,'active_participants':list,'major_warrant_holders':list,
                         'other_overhang':list,'today_math':dict,'risk_signals':dict,'history':list}
-        missing_fields.extend(field for field,expected in expected_types.items()
-                              if field in analysis and not isinstance(analysis[field],expected))
-        if missing_fields or not str(analysis.get('summary') or '').strip() or not str(analysis.get('current_status') or '').strip():
-            app.logger.warning('SEC dilution review %s returned incomplete structured output; missing fields: %s',
-                               ticker,', '.join(missing_fields) or 'summary/current_status')
+        def incomplete_fields(value):
+            missing=[field for field in required_fields if field not in value]
+            missing.extend(field for field,expected in expected_types.items()
+                           if field in value and not isinstance(value[field],expected))
+            for field in ('summary','current_status'):
+                if not str(value.get(field) or '').strip() and field not in missing:
+                    missing.append(field)
+            return list(dict.fromkeys(missing))
+
+        missing_fields=incomplete_fields(analysis)
+        if missing_fields:
+            app.logger.warning('SEC dilution review %s returned incomplete structured output from %s '
+                               '(response length %d); missing or invalid fields: %s',
+                               ticker,provider,len(answer),', '.join(missing_fields))
+            # Large issuers can exhaust the first response budget. Ask for only
+            # the missing sections, using the same filing evidence and rules,
+            # then merge them without inventing empty instrument arrays.
+            repair_prompt=(prompt+
+                '\n\nYour previous response was incomplete. Return ONLY a JSON object containing these fields: '+
+                ', '.join(missing_fields)+
+                '. Follow the original evidence, point-in-time, source-ID, and output-type requirements exactly. '
+                'Do not return any other fields. Use an empty array only when the filings support no confirmed items; '
+                'use not confirmed when evidence is incomplete.')
+            try:
+                repair_answer,repair_provider=_call_filing_ai(repair_prompt,max_tokens=6000)
+                repair_analysis=_parse_ai_json_object(repair_answer)
+                for field in missing_fields:
+                    if field in repair_analysis:
+                        analysis[field]=repair_analysis[field]
+                missing_fields=incomplete_fields(analysis)
+                app.logger.info('SEC dilution review %s structured-output retry from %s returned %d characters; '
+                                'remaining missing or invalid fields: %s',
+                                ticker,repair_provider,len(repair_answer),', '.join(missing_fields) or 'none')
+            except Exception as exc:
+                app.logger.warning('SEC dilution review %s structured-output retry failed (%s)',
+                                   ticker,type(exc).__name__)
+        if missing_fields:
+            app.logger.warning('SEC dilution review %s could not produce a complete structured report; '
+                               'remaining fields: %s',ticker,', '.join(missing_fields))
             return jsonify({'error':'The SEC filings were read, but the AI could not produce a complete dilution report. '
                                     'No empty instrument lists were saved as a result. Please retry the analysis.'}),502
         source_ids={item['id'] for item in sources}
