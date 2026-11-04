@@ -322,7 +322,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
         <span style="font-size:22px">⚡</span>
         <div>
           <div style="font-size:16px;font-weight:900;color:#00e676;letter-spacing:0.4px">Premarket Spike Scanner</div>
-          <div style="font-size:11px;color:#7e95a7">Filters: Premarket Spike ≥50% · Premarket Dollar Volume ≥$5,000,000 · Refreshed Every Minute</div>
+          <div style="font-size:11px;color:#7e95a7">Filters: Premarket Spike ≥50% · Premarket Dollar Volume ≥$5,000,000 · Auto-scans every minute</div>
         </div>
       </div>
 
@@ -337,7 +337,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
         </div>
         <div style="display:flex;align-items:center;gap:5px;font-size:12px;color:#8ba2b5;background:#060a0f;padding:4px 8px;border-radius:4px;border:1px solid #1f2e3d">
           <span>Auto-refresh:</span>
-          <span id="scanner_countdown" style="color:#00e676;font-weight:bold;min-width:24px">60s</span>
+          <span id="scanner_countdown" style="color:#00e676;font-weight:bold;min-width:24px">15s</span>
         </div>
         <label style="display:inline-flex;align-items:center;gap:7px;white-space:nowrap;background:#060a0f;border:1px solid #1f2e3d;border-radius:4px;padding:6px 9px;font-size:12px;color:#cbd6df;cursor:pointer" title="Speak the latest headline after each ticker announcement"><input id="scanner_news_read" type="checkbox" style="appearance:auto;-webkit-appearance:checkbox;width:14px;min-width:14px;height:14px;min-height:14px;margin:0;padding:0;flex:none;accent-color:#00e676"> Read latest news</label>
         <button id="scanner_refresh_btn" style="height:32px;font-size:12px;padding:0 12px;background:#042114;border:1px solid #00e676;color:#00e676;cursor:pointer;font-weight:bold;border-radius:4px;display:flex;align-items:center;gap:5px">↻ Refresh Now</button>
@@ -3602,12 +3602,13 @@ let scannerSpeechActive = false;
 let scannerSpeechTimer = null;
 
 function startScannerPolling(){
-  if(scannerTimer) return;
-  scannerTimer = setInterval(()=>{
-    const panelOpen = $('#scanner_modal').style.display !== 'none';
-    if(panelOpen || scannerAlarmEnabled) refreshScanner();
-  }, 15000);
-  if(scannerAlarmEnabled) refreshScanner();
+  if(!scannerTimer){
+    scannerTimer = setInterval(()=>{
+      if(currentUser && sessionToken) refreshScanner();
+    }, 15000);
+  }
+  // Keep the live scanner cache warm even when its panel is closed.
+  refreshScanner();
 }
 
 function migrateScannerSettings(settings){
