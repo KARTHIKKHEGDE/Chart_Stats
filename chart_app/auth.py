@@ -2,17 +2,21 @@
 from chart_app.application import (
     IST,
     JOBS,
+    JOB_LOCK,
+    REPORT_JOB_POOL,
+    REPORT_JOB_SLOTS,
+    _run_report_job_limited,
     SUPABASE_KEY,
     SUPABASE_URL,
     app,
     dt,
+    time,
     hashlib,
     jsonify,
     os,
     re,
     request,
     requests,
-    run_job,
     secrets,
     threading,
     uuid,
@@ -22,6 +26,77 @@ ALLOWED_USERS = {"karthik", "locke", "gunshow"}
 
 
 ADMIN_USERS = {"karthik", "locke"}
+
+_ACTIVITY_ACTIONS = {"login", "page_view", "ui_click", "ui_change", "form_submit",
+                     "ticker_search", "keyword_search", "anychart_search", "chart_interaction"}
+
+
+def _clean_activity_text(value, limit=120):
+    value = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or ""))
+    return re.sub(r"\s+", " ", value).strip()[:limit]
+
+
+def _write_user_activity(user, action, page="", label="", details=None):
+    """Persist a small, allowlisted activity record using the server-side key."""
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if not (user and action in _ACTIVITY_ACTIONS and sub_url and sub_key):
+        return
+    payload = {
+        "user_name": str(user).strip().lower()[:32],
+        "action": action,
+        "page": _clean_activity_text(page, 180),
+        "label": _clean_activity_text(label, 120),
+        "details": details if isinstance(details, dict) else {},
+    }
+    try:
+        response = requests.post(f"{sub_url}/rest/v1/user_activity", json=payload,
+                                 headers=_supabase_headers(), timeout=4)
+        if response.status_code not in (200, 201, 204):
+            app.logger.warning("User activity log unavailable (HTTP %s)", response.status_code)
+    except Exception:
+        app.logger.exception("Could not record user activity")
+
+
+def record_activity_async(user, action, page="", label="", details=None):
+    if action not in _ACTIVITY_ACTIONS:
+        return
+    threading.Thread(target=_write_user_activity,
+                     args=(user, action, page, label, details), daemon=True).start()
+
+
+@app.route("/api/activity", methods=["POST"])
+def record_user_activity():
+    data = request.get_json(silent=True) or {}
+    user = (data.get("user") or "").strip().lower()
+    token = (data.get("token") or "").strip()
+    action = (data.get("action") or "").strip()
+    if user not in ALLOWED_USERS or not token or not _db_validate_session(user, token):
+        return jsonify({"error": "Unauthorized"}), 401
+    if action not in _ACTIVITY_ACTIONS - {"login"}:
+        return jsonify({"error": "Unsupported activity event"}), 400
+    page = _clean_activity_text(data.get("page"), 180)
+    label = _clean_activity_text(data.get("label"), 120)
+    details = data.get("details") if isinstance(data.get("details"), dict) else {}
+    # Store only the identifiers needed to understand chart/search navigation.
+    safe_details = {}
+    ticker = str(details.get("ticker") or "").strip().upper()
+    if re.fullmatch(r"[A-Z.\-]{1,10}", ticker):
+        safe_details["ticker"] = ticker
+    date = str(details.get("date") or "").strip()
+    try:
+        dt.date.fromisoformat(date)
+        safe_details["date"] = date
+    except ValueError:
+        pass
+    for key in ("control", "form", "interval", "selection", "destination"):
+        value = _clean_activity_text(details.get(key), 80)
+        if value:
+            safe_details[key] = value
+    if type(details.get("checked")) is bool:
+        safe_details["checked"] = details["checked"]
+    record_activity_async(user, action, page, label, safe_details)
+    return jsonify({"ok": True}), 202
 
 
 def _supabase_headers(prefer="return=minimal"):
@@ -246,6 +321,8 @@ def log_keyword_search(user, keyword, start_date, end_date, forms):
     try:
         requests.post(f"{sub_url}/rest/v1/keyword_searches", json=payload,
                       headers=_supabase_headers(), timeout=5)
+        record_activity_async(user, "keyword_search", "/keyword-search", "SEC keyword search",
+                              {"control": "Keyword search"})
     except Exception:
         app.logger.exception("Could not record keyword search activity")
 
@@ -284,6 +361,7 @@ def auth_set_password():
     
     token = _db_set_password(u, pwd)
     is_exempt = bool(user.get("can_rename")) or (u in {"karthik", "locke"})
+    record_activity_async(u, "login", request.path, "Account setup / sign in")
     return jsonify({
         "ok": True,
         "username": u,
@@ -300,6 +378,8 @@ def auth_login():
     pwd = (data.get("password") or "").strip()
     force = bool(data.get("force_logout") or data.get("force"))
     res, status_code = _db_login(u, pwd, force_logout=force)
+    if status_code == 200 and res.get("session_token"):
+        record_activity_async(u, "login", request.path, "Sign in")
     return jsonify(res), status_code
 
 
@@ -343,9 +423,25 @@ def start():
     if not re.fullmatch(r"[A-Z.\-]{1,10}", t):
         return jsonify({"error": "Invalid ticker"}), 400
     threading.Thread(target=log_search, args=(u, t), daemon=True).start()
+    record_activity_async(u, "ticker_search", "/", "Get notes", {"ticker": t})
+    if not REPORT_JOB_SLOTS.acquire(blocking=False):
+        return jsonify({"error":"The server is processing two ticker reports right now. Please retry in a moment."}),503
     jid = uuid.uuid4().hex[:10]
-    JOBS[jid] = {"status": "running", "msg": "Starting…"}
-    threading.Thread(target=run_job, args=(JOBS[jid], t, request.args.get("refresh") == "1"), daemon=True).start()
+    with JOB_LOCK:
+        expired=[key for key,value in JOBS.items() if value.get('status') in {'done','error'} and time.time()-value.get('finished_at',0)>900]
+        for key in expired:JOBS.pop(key,None)
+        if len(JOBS)>=8:
+            completed=sorted(((value.get('finished_at',0),key) for key,value in JOBS.items() if value.get('status') in {'done','error'}))
+            for _,key in completed[:max(0,len(JOBS)-5)]:JOBS.pop(key,None)
+        JOBS[jid] = {"status": "running", "stage": "queued", "progress_pct": 2,
+                     "msg": "Queued · preparing parallel live-data requests…","created_at":time.time()}
+        job=JOBS[jid]
+    try:
+        REPORT_JOB_POOL.submit(_run_report_job_limited,job,t,request.args.get("refresh") == "1")
+    except Exception:
+        REPORT_JOB_SLOTS.release()
+        with JOB_LOCK:JOBS.pop(jid,None)
+        return jsonify({"error":"Could not queue the ticker report. Please retry."}),503
     return jsonify({"job": jid})
 
 

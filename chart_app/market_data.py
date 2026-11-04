@@ -3,6 +3,7 @@ import json
 import gzip
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from chart_app.yahoo_limiter import YAHOO_REQUEST_SEMAPHORE
 from pathlib import Path
 
 import chart_app.application as app
@@ -37,6 +38,11 @@ _DEEPDIVE_NEIGHBOR_CANDLE_CACHE_MAX = 6
 _DAILY_CANDLE_REFRESH_LOCK = threading.Lock()
 _DAILY_CANDLE_REFRESH_PENDING = set()
 _DAILY_CANDLE_REFRESH_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="daily-candle-refresh")
+
+
+def _yahoo_call(function):
+    with YAHOO_REQUEST_SEMAPHORE:
+        return function()
 
 
 def _deepdive_candle_rows(ticker, day):
@@ -99,6 +105,8 @@ def _refresh_daily_candle_cache(ticker):
 def _schedule_daily_candle_refresh(ticker):
     with _DAILY_CANDLE_REFRESH_LOCK:
         if ticker in _DAILY_CANDLE_REFRESH_PENDING:
+            return
+        if len(_DAILY_CANDLE_REFRESH_PENDING)>=32:
             return
         _DAILY_CANDLE_REFRESH_PENDING.add(ticker)
     try:
@@ -367,13 +375,13 @@ def live_snapshot(t):
     tk = yf.Ticker(t.replace(".", "-"))
     # Fetch intraday (1d) and daily (1y) in parallel — cuts sequential wait in half
     with ThreadPoolExecutor(max_workers=2) as yf_pool:
-        f_intraday = yf_pool.submit(lambda: tk.history(period="1d", interval="1m", prepost=True, auto_adjust=False))
-        f_daily    = yf_pool.submit(lambda: tk.history(period="1y", interval="1d", auto_adjust=False))
+        f_intraday = yf_pool.submit(_yahoo_call,lambda: tk.history(period="1d", interval="1m", prepost=True, auto_adjust=False))
+        f_daily    = yf_pool.submit(_yahoo_call,lambda: tk.history(period="1y", interval="1d", auto_adjust=False))
         df  = f_intraday.result()
         dly = f_daily.result()
     if df is None or df.empty:
         # Fallback for weekend / early Monday premarket — get last few trading days
-        df = tk.history(period="5d", interval="1m", prepost=True, auto_adjust=False)
+        df = _yahoo_call(lambda:tk.history(period="5d", interval="1m", prepost=True, auto_adjust=False))
     if df is None or df.empty:
         raise RuntimeError(f"No Yahoo intraday data for {t}")
     dly = dly.dropna()
@@ -388,7 +396,7 @@ def live_snapshot(t):
     hist = [{"date": str(ix.date()), "o": float(r.Open), "h": float(r.High), "l": float(r.Low),
              "c": float(r.Close), "v": float(r.Volume)} for ix, r in prev.iterrows()]
     try:
-        info = tk.info or {}
+        info = _yahoo_call(lambda:tk.info) or {}
     except Exception:
         info = {}
 
@@ -438,8 +446,8 @@ def yahoo_recent_live_bars(ticker, minutes=20):
     """Return Yahoo 1-minute bars for the recent live window, when available."""
     try:
         import yfinance as yf
-        frame=yf.Ticker(str(ticker).upper().replace('.', '-')).history(
-            period='1d',interval='1m',prepost=True,auto_adjust=False,actions=False)
+        frame=_yahoo_call(lambda:yf.Ticker(str(ticker).upper().replace('.', '-')).history(
+            period='1d',interval='1m',prepost=True,auto_adjust=False,actions=False))
         if frame is None or frame.empty:
             return None
         if frame.index.tz is None:

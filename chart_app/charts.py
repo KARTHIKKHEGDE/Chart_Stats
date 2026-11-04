@@ -11,6 +11,7 @@ from chart_app.application import (
     cput,
     dt,
     IST,
+    ET,
     jsonify,
     load_daily,
     metrics,
@@ -34,11 +35,14 @@ import requests
 from pathlib import Path
 from html.parser import HTMLParser
 from urllib.parse import quote, urljoin, urlparse
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from flask import g
+from chart_app.yahoo_limiter import YAHOO_REQUEST_SEMAPHORE
 
 GAP_DEEPDIVE_TICKERS = list(dict.fromkeys("VIOT PPBT FAMI BIAF GELS RDAC GYGY WETO CLGN RDHL WHLR QNRX LGPS VNRX PPCB CELU BRNX SXTC VRAX SKK BIVI TNON CDTG ZSTK YJ EJH SGLY ONFO CIGL YMT DKI HKIT HUIZ GAUZ CELZ CLRO YXT ZYBT HYFM FCUV FFAI EDBL CJMB AKAN INLF GVH DXST EHGO ZBAO YMAT GMM YRD DXF CDT APWC IHT ICCM CIIT BEEM CRE CAST AIDX BYAH DSY BQ CHNR CCTG CGTL AZI CHAI BATL DAIC ANY BAOS BOXL BYSI CHOW DOGZ FRGT FXHO HCTI INM ITOC IVF JZXN KUST KXIN LGHL LICN LNAI LRHC LXEH MBRX MIMI MLEC MTEN NAII NCRA NEXR NIXX NUWE NVVE NXTS ODYS OFAL OMH OPTX ORIS PAVS PCLA PCSA PN PWCM RGNT RLYB RMAX RMSG RUBI RYOJ SAFX SBFM SDOT SFHG SILO SKYQ SLGB SLND SOAR SOBR SSM STG TDIC TRNR TURB TWG UK UPC VEEE VIVK VIVS".split()))
 GAP_DEEPDIVE_JOBS = {}
+_GAP_DEEPDIVE_SCAN_LOCK = threading.Lock()
+_GAP_DEEPDIVE_ACTIVE_JOB = None
 GAP_DEEPDIVE_LOCK = threading.Lock()
 _GAP_DEEPDIVE_MANIFESTS = {}
 _FILING_AI_LOCK = threading.Lock()
@@ -46,6 +50,8 @@ _FILING_AI_KEY_POS = {"groq": 0, "gemini": 0}
 _SEC_DILUTION_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix='sec-dilution')
 _SEC_DILUTION_DATA_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix='sec-dilution-data')
 _SEC_DILUTION_JOB_LOCK = threading.Lock()
+_GAP_CHART_PACK_POOL = ThreadPoolExecutor(max_workers=4,thread_name_prefix='gap-chart-pack')
+_GAP_CHART_PACK_REQUESTS = threading.BoundedSemaphore(3)
 _RECENT_FILINGS_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix='sec-recent-filings')
 _RECENT_FILINGS_LOCK = threading.RLock()
 _RECENT_FILINGS_PENDING = {}
@@ -399,8 +405,9 @@ def _gap_deepdive_yahoo_news(ticker):
     unique = {}
     for query in (ticker, f"{ticker} press release"):
         try:
-            search = yf.Search(query=query, news_count=100, max_results=1, include_cb=False,
-                               enable_fuzzy_query=False, timeout=12, raise_errors=False)
+            with YAHOO_REQUEST_SEMAPHORE:
+                search = yf.Search(query=query, news_count=100, max_results=1, include_cb=False,
+                                   enable_fuzzy_query=False, timeout=12, raise_errors=False)
             for article in (search.news or []):
                 item = _normalize_yahoo_news(article, "Yahoo Finance news")
                 if not item or not item.get("url"):
@@ -663,7 +670,7 @@ def _run_gap_deepdive(job_id):
     try:
         job.update(status='running', message=f'Scanning {len(GAP_DEEPDIVE_TICKERS)} tickers for {year}…', done=0, total=len(GAP_DEEPDIVE_TICKERS), min_pm_gap_pct=70)
         cput(f"gap_deepdive_job_{job_id}", job)
-        with ThreadPoolExecutor(max_workers=min(12, max(1, len(GAP_DEEPDIVE_TICKERS)))) as pool:
+        with ThreadPoolExecutor(max_workers=min(8, max(1, len(GAP_DEEPDIVE_TICKERS)))) as pool:
             futures = {pool.submit(scan_ticker, ticker): ticker for ticker in GAP_DEEPDIVE_TICKERS}
             for future in as_completed(futures):
                 ticker = futures[future]
@@ -676,9 +683,16 @@ def _run_gap_deepdive(job_id):
         job.update(status='complete', message=f"Complete · {len(found)} qualifying sessions", results=clean(found), errors=errors[:20])
         cput(f"gap_deepdive_job_{job_id}", job)
         cput(f"gap_deepdive_latest_{year}", {'job':job_id,'scanned_on':dt.date.today().isoformat(),'min_pm_gap_pct':70,**job})
+        GAP_DEEPDIVE_JOBS.pop(job_id,None)
+        found.clear();errors.clear()
     except Exception as exc:
         job.update(status='error', message=f"{type(exc).__name__}: {exc}")
         cput(f"gap_deepdive_job_{job_id}", job)
+        GAP_DEEPDIVE_JOBS.pop(job_id,None)
+    finally:
+        global _GAP_DEEPDIVE_ACTIVE_JOB
+        with _GAP_DEEPDIVE_SCAN_LOCK:
+            if _GAP_DEEPDIVE_ACTIVE_JOB==job_id:_GAP_DEEPDIVE_ACTIVE_JOB=None
 
 
 @app.route('/api/gap-deepdive/start', methods=['POST'])
@@ -693,13 +707,18 @@ def gap_deepdive_start():
             return jsonify({'job':latest['job'],'cached':True})
         latest=_saved_gap_deepdive_manifest(year)
         if latest:
-            cput(f"gap_deepdive_job_{latest['job']}", latest)
-            cput(f"gap_deepdive_latest_{year}", latest)
             return jsonify({'job':latest['job'],'cached':True})
-        job_id=uuid.uuid4().hex
-        GAP_DEEPDIVE_JOBS[job_id]={'status':'queued','message':'Queued historical scan…','done':0,'total':len(GAP_DEEPDIVE_TICKERS),'results':[]}
-        cput(f"gap_deepdive_job_{job_id}", GAP_DEEPDIVE_JOBS[job_id])
-        threading.Thread(target=_run_gap_deepdive,args=(job_id,),daemon=True).start()
+        global _GAP_DEEPDIVE_ACTIVE_JOB
+        with _GAP_DEEPDIVE_SCAN_LOCK:
+            if _GAP_DEEPDIVE_ACTIVE_JOB:
+                active=GAP_DEEPDIVE_JOBS.get(_GAP_DEEPDIVE_ACTIVE_JOB) or cget(f"gap_deepdive_job_{_GAP_DEEPDIVE_ACTIVE_JOB}")
+                if active and active.get('status') in {'queued','running'}:
+                    return jsonify({'job':_GAP_DEEPDIVE_ACTIVE_JOB,'active':True})
+            job_id=uuid.uuid4().hex
+            _GAP_DEEPDIVE_ACTIVE_JOB=job_id
+            GAP_DEEPDIVE_JOBS[job_id]={'status':'queued','message':'Queued historical scan…','done':0,'total':len(GAP_DEEPDIVE_TICKERS),'results':[]}
+            cput(f"gap_deepdive_job_{job_id}", GAP_DEEPDIVE_JOBS[job_id])
+            threading.Thread(target=_run_gap_deepdive,args=(job_id,),daemon=True).start()
         return jsonify({'job':job_id})
     except Exception as exc:
         app.logger.exception('Could not start Gap Up Deepdive scan')
@@ -785,7 +804,7 @@ def gap_deepdive_charts(job_id):
         if manifest and manifest.get('job')==job_id: job=manifest
     if not job or job.get('status')!='complete': return jsonify({'error':'Scan is not complete or has expired.'}),404
     requested=(request.get_json(silent=True) or {}).get('charts') or []
-    if not isinstance(requested,list) or not requested or len(requested)>64: return jsonify({'error':'Request between 1 and 64 charts.'}),400
+    if not isinstance(requested,list) or not requested or len(requested)>16: return jsonify({'error':'Request between 1 and 16 charts.'}),400
     results={};errors={};valid=[]
     for entry in requested:
         if not isinstance(entry,dict): continue
@@ -796,16 +815,20 @@ def gap_deepdive_charts(job_id):
         scan_item=next((item for item in job.get('results',[]) if item.get('ticker')==ticker and item.get('date')==day),None)
         if scan_item is None: errors[key]='Session is not part of this scan';continue
         valid.append((key,ticker,day,scan_item))
-    # Candle reads are disk cached; run independent chart packing tasks
-    # concurrently to reduce time-to-first-render for a viewport batch.
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    with ThreadPoolExecutor(max_workers=min(8, max(1,len(valid)))) as pool:
-        futures={pool.submit(_gap_deepdive_chart_payload,ticker,day,item):key for key,ticker,day,item in valid}
+    if not _GAP_CHART_PACK_REQUESTS.acquire(blocking=False):
+        return jsonify({'error':'Chart rendering is busy; retry this small batch shortly.'}),503
+    try:
+        # A single process-wide pool prevents each HTTP request from creating
+        # another large set of candle-frame workers.
+        futures={_GAP_CHART_PACK_POOL.submit(_gap_deepdive_chart_payload,ticker,day,item):key
+                 for key,ticker,day,item in valid}
         for future in as_completed(futures):
             key=futures[future]
             try: results[key]=future.result()
             except Exception as exc: errors[key]=f'{type(exc).__name__}: {exc}'
-    return jsonify({'charts':results,'errors':errors})
+        return jsonify({'charts':results,'errors':errors})
+    finally:
+        _GAP_CHART_PACK_REQUESTS.release()
 
 
 @app.route('/api/gap-deepdive/<job_id>/float')
@@ -2724,6 +2747,35 @@ def _gap_chart_context_minute_chunk(ticker, first, last):
             _GAP_CHART_CHUNK_PENDING.pop(cache_key,None)
 
 
+def _yahoo_chart_today_rows(ticker):
+    """Fetch Yahoo Finance's current ET-session 1-minute candles for Anychart."""
+    symbol=ticker.replace('.', '-')
+    url=f'https://query1.finance.yahoo.com/v8/finance/chart/{quote(symbol, safe="-^=")}'
+    with YAHOO_REQUEST_SEMAPHORE:
+        response=requests.get(url,params={'range':'1d','interval':'1m','includePrePost':'true'},
+                              headers={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36',
+                                       'Accept':'application/json'},timeout=8)
+    response.raise_for_status()
+    payload=response.json()
+    result=((payload.get('chart') or {}).get('result') or [None])[0]
+    if not result:
+        error=(payload.get('chart') or {}).get('error') or {}
+        raise RuntimeError(error.get('description') or 'Yahoo Finance returned no chart data')
+    quote_data=((result.get('indicators') or {}).get('quote') or [{}])[0]
+    timestamps=result.get('timestamp') or []
+    fields={name:quote_data.get(name) or [] for name in ('open','high','low','close','volume')}
+    today=dt.datetime.now(ET).date()
+    rows=[]
+    for index,stamp in enumerate(timestamps):
+        moment=dt.datetime.fromtimestamp(int(stamp),ET)
+        if moment.date()!=today:continue
+        values={key:(items[index] if index<len(items) else None) for key,items in fields.items()}
+        if any(values[key] is None for key in ('open','high','low','close')):continue
+        rows.append({'t':int(stamp)*1000,'o':values['open'],'h':values['high'],'l':values['low'],
+                     'c':values['close'],'v':values['volume'] or 0})
+    return rows
+
+
 @app.route('/api/chart-context/prefetch')
 def chart_context_prefetch():
     """Warm the selected session and up to two neighboring sessions per interval."""
@@ -2774,17 +2826,19 @@ def chart_context():
     except ValueError: count=5
     if user not in _auth.ALLOWED_USERS or (not getattr(g,'gap_chart_context_session_validated',False) and not _db_validate_session(user,token)): return jsonify({"error":"Unauthorized"}),401
     if not re.fullmatch(r"[A-Z.\-]{1,10}",ticker): return jsonify({"error":"Invalid ticker"}),400
-    if source not in ("polygon","deepdive"): return jsonify({"error":"Invalid chart data source"}),400
+    if source not in ("polygon","deepdive","anychart"): return jsonify({"error":"Invalid chart data source"}),400
     try: dt.date.fromisoformat(day)
     except ValueError: return jsonify({"error":"Invalid session date"}),400
     try: dt.date.fromisoformat(seed_date)
     except ValueError: return jsonify({"error":"Invalid seed session date"}),400
     if tf not in ("1m","2m","3m","5m","15m","30m","1h","1d"): return jsonify({"error":"Invalid timeframe"}),400
-    count=max(1,min(550 if tf=='1d' else 400,count))
+    count=max(1,min(550 if tf=='1d' else 90,count))
     # Source is part of the cache key: Polygon-only Gap-Up bars must never be
     # served from Deepdive's optional event-neighbor JSON seed.
     context_key=f'gap_chart_context_v5_{source}_{ticker}_{day}_{seed_date}_{tf}_{count}_{int(include_after_hours)}'
-    context_ttl=(30 if day==dt.date.today().isoformat() else
+    today_et=dt.datetime.now(ET).date().isoformat()
+    is_live_anychart=source=='anychart' and day==today_et and tf!='1d'
+    context_ttl=(15 if source=='anychart' and day==today_et else 30 if day==today_et else
                  30*86400 if tf=='1d' else 3600)
     cached_context=cget(context_key,context_ttl)
     if cached_context is not None: return jsonify(cached_context)
@@ -2795,6 +2849,9 @@ def chart_context():
             # an empty chart for an otherwise valid historical session.
             daily=_gap_deepdive_daily_history(ticker,force=True)
             idx=next((i for i,r in enumerate(daily) if r["date"]==day),None)
+        if idx is None and source=='anychart' and day==today_et:
+            daily.append({'date':day,'o':0,'h':0,'l':0,'c':0,'v':0,'vw':0})
+            idx=len(daily)-1
         if idx is None: return jsonify({"error":f"No daily data for {day}"}),404
         # Keep the requested number of sessions even when the anchor is the
         # newest (or oldest) available session.
@@ -2811,7 +2868,27 @@ def chart_context():
             }
         if tf=="1d":
             bars={"t":list(range(len(rows))),"d":[r["date"] for r in rows],"o":[r["o"] for r in rows],"h":[r["h"] for r in rows],"l":[r["l"] for r in rows],"c":[r["c"] for r in rows],"v":[r["v"] for r in rows],"vw":[None]*len(rows),"timeframe":"1d"}
-            result={"bars":bars,"dates":[r["date"] for r in rows],"daily":True,"metrics":daily_metrics}
+            live_error=None
+            if source=='anychart' and day==today_et:
+                try:
+                    live_rows=_yahoo_chart_today_rows(ticker)
+                    if live_rows:
+                        live=poly_frame(live_rows)
+                        rows[-1]=latest=dict(rows[-1])
+                        latest.update({'o':float(live['o'].iloc[0]),'h':float(live['h'].max()),'l':float(live['l'].min()),
+                                       'c':float(live['c'].iloc[-1]),'v':float(live['v'].sum())})
+                        bars={"t":list(range(len(rows))),"d":[r["date"] for r in rows],"o":[r["o"] for r in rows],"h":[r["h"] for r in rows],"l":[r["l"] for r in rows],"c":[r["c"] for r in rows],"v":[r["v"] for r in rows],"vw":[None]*len(rows),"timeframe":"1d"}
+                        result={"bars":bars,"dates":[r["date"] for r in rows],"daily":True,"metrics":daily_metrics,"source":"yahoo_finance"}
+                        cput(context_key,result);return jsonify(result)
+                    live_error='Yahoo Finance returned no current candles for today’s ET session.'
+                except Exception as exc:
+                    live_error=f'{type(exc).__name__}: {exc}'
+                    app.logger.warning('Yahoo live daily chart failed for %s: %s',ticker,exc)
+            if source=='anychart' and day==today_et and live_error:
+                rows=[row for row in rows if row['date']!=day]
+                bars={"t":list(range(len(rows))),"d":[r["date"] for r in rows],"o":[r["o"] for r in rows],"h":[r["h"] for r in rows],"l":[r["l"] for r in rows],"c":[r["c"] for r in rows],"v":[r["v"] for r in rows],"vw":[None]*len(rows),"timeframe":"1d"}
+            result={"bars":bars,"dates":[r["date"] for r in rows],"daily":True,"metrics":daily_metrics,
+                    "source":"polygon","live_source_error":live_error}
             cput(context_key,result)
             return jsonify(result)
         # Only Deepdive may use bundled intraday JSON, and only for the event
@@ -2831,61 +2908,87 @@ def chart_context():
                         seeded_frame=poly_frame(raw)
                         if not seeded_frame.empty:
                             seed_frames[row['date']]=seeded_frame
-        polygon_dates=[row['date'] for row in rows if row['date'] not in seed_frames]
-        polygon_day_frames={}
-        uncached_dates=[]
-        for date in polygon_dates:
-            cached_rows=cget(f'{ticker}_{date}_1m_polygon_v1') if date<dt.date.today().isoformat() else None
-            if cached_rows is None:
-                uncached_dates.append(date)
-            else:
-                polygon_day_frames[date]=poly_frame(cached_rows) if cached_rows else pd.DataFrame()
+        yahoo_today_frame=pd.DataFrame()
+        yahoo_today_error=None
+        if is_live_anychart:
+            try:
+                live_rows=_yahoo_chart_today_rows(ticker)
+                if live_rows:yahoo_today_frame=poly_frame(live_rows)
+                else:yahoo_today_error='Yahoo Finance returned no current candles for today’s ET session.'
+            except Exception as exc:
+                yahoo_today_error=f'{type(exc).__name__}: {exc}'
+                app.logger.warning('Yahoo live chart failed for %s: %s',ticker,exc)
+        chart_dates=[row['date'] for row in rows]
+        packed_by_date={};uncached_dates=[]
+        def pack_day(date,dayframe):
+            if dayframe is None or dayframe.empty:return
+            prepared_key=f'gap_chart_session_v3_{source}_{ticker}_{date}_{tf}_{int(include_after_hours)}'
+            packed=cget(prepared_key,30 if date>=today_et else 30*86400)
+            if packed is None:
+                one_minute=bars2(dayframe,include_after_hours=include_after_hours)
+                packed=_aggregate_gap_context_bars(one_minute,tf) if one_minute else None
+                if packed:cput(prepared_key,packed)
+            if packed:packed_by_date[date]=packed
+        for date in chart_dates:
+            prepared_key=f'gap_chart_session_v3_{source}_{ticker}_{date}_{tf}_{int(include_after_hours)}'
+            packed=cget(prepared_key,30 if date>=today_et else 30*86400)
+            if packed is not None:
+                packed_by_date[date]=packed;continue
+            if is_live_anychart and date==day and not yahoo_today_frame.empty:
+                pack_day(date,yahoo_today_frame);continue
+            if date in seed_frames:
+                pack_day(date,seed_frames.pop(date));continue
+            cached_rows=cget(f'{ticker}_{date}_1m_polygon_v1') if date<today_et else None
+            if cached_rows is not None:
+                pack_day(date,poly_frame(cached_rows) if cached_rows else pd.DataFrame());continue
+            uncached_dates.append(date)
         chunk_ranges={}
         if 0<len(uncached_dates)<=5:
             # The initial +/-2-session window fits in one small Polygon request.
             first,last=uncached_dates[0],uncached_dates[-1]
-            chunk_ranges[first]=(first,last)
+            chunk_ranges[first]=((first,last),list(uncached_dates))
         else:
             # Wider zoom-out ranges are split by week to keep each response small.
             for date in uncached_dates:
                 session=dt.date.fromisoformat(date)
                 first=session-dt.timedelta(days=session.weekday())
                 last=first+dt.timedelta(days=4)
-                chunk_ranges[first.isoformat()]=(first.isoformat(),last.isoformat())
-        chunks=list(chunk_ranges.values())
+                key=first.isoformat()
+                if key not in chunk_ranges:chunk_ranges[key]=((key,last.isoformat()),[])
+                chunk_ranges[key][1].append(date)
+        chunks=list(chunk_ranges.items())
         from concurrent.futures import ThreadPoolExecutor
         def read_chunk(bounds):
             first,last=bounds
             raw=_gap_chart_context_minute_chunk(ticker,first,last)
             return poly_frame(raw) if raw else pd.DataFrame()
-        with ThreadPoolExecutor(max_workers=min(8,max(1,len(chunks)))) as pool:
-            fetched_frames=list(pool.map(read_chunk,chunks)) if chunks else []
-        fetched_frames=[part for part in fetched_frames if not part.empty]
-        polygon_frame=pd.concat(fetched_frames).sort_index() if fetched_frames else pd.DataFrame()
-        chunks=[]
-        for date in [r["date"] for r in rows]:
-            if date in seed_frames:
-                dayframe=seed_frames[date]
-            elif date in polygon_day_frames:
-                dayframe=polygon_day_frames[date]
-            elif not polygon_frame.empty:
-                dayframe=polygon_frame[polygon_frame.index.date==dt.date.fromisoformat(date)]
-            else:
-                continue
-            prepared_key=f'gap_chart_session_v3_{source}_{ticker}_{date}_{tf}_{int(include_after_hours)}'
-            prepared_ttl=30 if date>=dt.date.today().isoformat() else 30*86400
-            packed=cget(prepared_key,prepared_ttl)
-            if packed is None:
-                one_minute=bars2(dayframe,include_after_hours=include_after_hours)
-                packed=_aggregate_gap_context_bars(one_minute,tf) if one_minute else None
-                if packed: cput(prepared_key,packed)
+        with ThreadPoolExecutor(max_workers=min(4,max(1,len(chunks)))) as pool:
+            for offset in range(0,len(chunks),4):
+                batch=chunks[offset:offset+4]
+                futures={pool.submit(read_chunk,bounds):dates for _,(bounds,dates) in batch}
+                for future in as_completed(futures):
+                    frame=future.result();dates=futures.pop(future)
+                    if not frame.empty:
+                        for date in dates:
+                            dayframe=frame[frame.index.date==dt.date.fromisoformat(date)]
+                            pack_day(date,dayframe)
+                        dayframe=None
+                    del frame
+        packed_parts=[]
+        for date in chart_dates:
+            packed=packed_by_date.get(date)
             if packed:
-                packed["d"]=[date]*len(packed["t"]); chunks.append(packed)
-        if not chunks: return jsonify({"error":"No intraday bars are available for this range"}),404
-        fields=tuple(dict.fromkeys(field for part in chunks for field in part if field!='timeframe'))
-        bars={field:sum((part.get(field,[]) for part in chunks),[]) for field in fields}
+                packed['d']=[date]*len(packed['t']);packed_parts.append(packed)
+        if not packed_parts: return jsonify({"error":"No intraday bars are available for this range"}),404
+        fields=tuple(dict.fromkeys(field for part in packed_parts for field in part if field!='timeframe'))
+        bars={field:[] for field in fields}
+        for part in packed_parts:
+            for field in fields:bars[field].extend(part.get(field,[]))
         bars['timeframe']=tf
-        result={"bars":bars,"dates":[p["d"][0] for p in chunks],"daily":False,"metrics":daily_metrics,"after_hours":include_after_hours}
+        del packed_parts,packed_by_date,seed_frames,yahoo_today_frame
+        used_yahoo=bool(is_live_anychart and not yahoo_today_frame.empty)
+        result={"bars":bars,"dates":[p["d"][0] for p in packed_parts],"daily":False,"metrics":daily_metrics,"after_hours":include_after_hours,
+                "source":"yahoo_finance" if used_yahoo else "polygon","live_source_error":yahoo_today_error}
         cput(context_key,result)
         return jsonify(result)
     except Exception as exc: return jsonify({"error":f"{type(exc).__name__}: {exc}"}),502

@@ -8,6 +8,14 @@
 *{box-sizing:border-box}
 body{margin:0;background:#000;color:var(--w);font:15px/1.45 Consolas,"SF Mono","Roboto Mono",Menlo,monospace}
 .bar{display:flex;gap:12px;padding:20px 34px;flex-wrap:wrap;align-items:center}
+.analysis-progress{margin:0 0 16px;padding:15px 17px;border:1px solid #263a49;border-left:3px solid #29a8ff;border-radius:5px;background:linear-gradient(110deg,#09111a,#080a0d 70%);color:#dce9f4}
+.analysis-progress-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:9px}.analysis-progress-spinner{width:13px;height:13px;border:2px solid #24455e;border-top-color:#62c8ff;border-radius:50%;animation:analysis-spin .8s linear infinite;flex:0 0 auto}
+.analysis-progress-title{font-size:14px;font-weight:bold;color:#8fd8ff}.analysis-progress-elapsed{margin-left:auto;color:#91a2b2;font-size:11px}.analysis-progress-message{color:#d5dee8;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.analysis-progress-track{height:7px;margin:11px 0 8px;overflow:hidden;border-radius:8px;background:#19232c}.analysis-progress-fill{height:100%;width:3%;border-radius:8px;background:linear-gradient(90deg,#1685d1,#53d7ff);box-shadow:0 0 10px rgba(67,183,255,.4);transition:width .45s ease}
+.analysis-progress-meta{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:#8fa0af;font-size:11px}.analysis-progress-hint{margin-top:8px;color:#687d8e;font-size:10px}.analysis-progress.refresh{margin:0 0 14px;padding:10px 12px}
+@keyframes analysis-spin{to{transform:rotate(360deg)}}
+@media(min-width:1500px){.bar{flex-wrap:nowrap;gap:6px;padding:14px 16px}.bar>#t{width:clamp(170px,15vw,230px);flex:0 1 auto}.bar>#go,.bar>#rf{height:42px;padding:0 10px;font-size:15px;white-space:nowrap}.bar>div{gap:6px!important;font-size:11px!important;white-space:nowrap}.bar>div>button{padding:0 8px!important;font-size:11px!important;white-space:nowrap}}
+@media(max-width:1499px){.bar{padding:14px 22px;gap:9px}.bar>div{width:100%;justify-content:center;margin-left:0!important;flex-wrap:wrap;row-gap:8px}}
 input{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:20px;padding:0 14px;height:48px;width:300px}
 button{background:#0d0d0d;border:1px solid var(--line);color:#fff;font:inherit;font-size:18px;padding:0 16px;height:48px;cursor:pointer}
 button:hover{background:#1a1a1a}
@@ -191,6 +199,9 @@ canvas{display:block;width:100%}
 @media(max-width:900px){.gap-session-grid{grid-template-columns:1fr}}
 body.deepdive-page .bar{padding:12px 24px}
 body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#rf,body.deepdive-page #scanner_open_btn,body.deepdive-page #nav_multiday_btn,body.deepdive-page #nav_keyword_btn,body.deepdive-page #nav_anychart_btn{display:none!important}
+body.anychart-page .bar{padding:12px 24px;flex-wrap:nowrap}
+body.anychart-page .bar>#t,body.anychart-page .bar>#go,body.anychart-page .bar>#rf,body.anychart-page #scanner_open_btn,body.anychart-page #nav_multiday_btn,body.anychart-page #nav_keyword_btn,body.anychart-page #nav_gap_deepdive_btn{display:none!important}
+body.anychart-page #tabs_view,body.anychart-page #tab_bar,body.anychart-page #multiday_view,body.anychart-page #gap_deepdive_view{display:none!important}
 #ag_tip{position:fixed;z-index:2147483647;background:#111;border:1px solid #444;color:#e0e0e0;font-size:12px;padding:7px 11px;border-radius:4px;max-width:300px;line-height:1.5;pointer-events:none;opacity:0;transition:opacity 0.15s;box-shadow:0 4px 16px rgba(0,0,0,0.7);white-space:pre-wrap;display:block}
 #ag_tip.visible{opacity:1}
 [data-tip]{cursor:help}
@@ -424,7 +435,7 @@ body.deepdive-page .bar>#t,body.deepdive-page .bar>#go,body.deepdive-page .bar>#
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:16px;border-bottom:1px solid #333;padding-bottom:16px">
     <div>
       <div class="big" style="color:#29a8ff;font-size:20px">Admin Panel</div>
-      <div style="color:#8a8a8a;font-size:13px;margin-top:4px">Search history audit &amp; user access management</div>
+      <div style="color:#8a8a8a;font-size:13px;margin-top:4px">Search and account activity audit &amp; user access management</div>
     </div>
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <div style="display:flex;align-items:center;gap:8px">
@@ -769,6 +780,12 @@ function _showApp(){
   $('#admin_view').style.display='none';
   $('#app_main').style.display='block';
   $('#u_name').textContent=currentUser.toUpperCase();
+  if(location.pathname==='/anychart'){
+    document.body.classList.add('anychart-page');
+    $('#nav_anychart_btn').textContent='← Main terminal';
+    $('#nav_anychart_btn').title='Return to the main terminal';
+    setTimeout(showAnychart,0);
+  }
   if(location.pathname==='/gap-deepdive'){
     document.body.classList.add('deepdive-page');
     $('#nav_gap_deepdive_btn').textContent='← Main terminal';
@@ -787,8 +804,8 @@ function _showApp(){
   loadAppUiVisibility();
   if(appUiVisibilityTimer) clearInterval(appUiVisibilityTimer);
   appUiVisibilityTimer = setInterval(loadAppUiVisibility, 30000);
-  $('#t').focus();
-  loadScannerSettings().then(()=>startScannerPolling());
+  if(location.pathname!=='/anychart')$('#t').focus();
+  if(location.pathname!=='/anychart')loadScannerSettings().then(()=>startScannerPolling());
   // Periodically verify session (every 90s) for non-exempt users
   if(!_canRename && !PWD_USERS.includes(cur)){
     _startSessionPoll();
@@ -1041,7 +1058,7 @@ function getDilutionHistory(ticker,asOfDate='',onProgress=null){
       publishDilutionProgress(key,job.progress);
       if(job.status==='complete'){dilutionReportCache.set(key,job.result);return job.result;}
       if(job.status==='error')throw new Error(job.error||'Could not analyze dilution history.');
-      pollDelay=pollDelay?Math.min(1600,Math.round(pollDelay*1.5)):350;
+      pollDelay=pollDelay?Math.min(5000,Math.round(pollDelay*1.5)):2000;
     }
     throw new Error('Dilution analysis is still running in the background. Reopen this report shortly.');
   })().catch(error=>{dilutionReportJobs.delete(key);throw error;});
@@ -1660,6 +1677,7 @@ function switchTab(t){
 function closeTab(t){
   if(!openTabs[t]) return;
   if(openTabs[t].timer) clearTimeout(openTabs[t].timer);
+  if(openTabs[t].progressTimer) clearInterval(openTabs[t].progressTimer);
   if(openTabs[t].container) openTabs[t].container.remove();
   tickerChatHistories.delete(t);
   delete openTabs[t];
@@ -1680,6 +1698,43 @@ function closeTab(t){
   syncTickerChatWidget();
 }
 
+function formatAnalysisDuration(seconds){
+  const value=Math.max(0,Math.ceil(Number(seconds)||0));
+  if(value<60)return `${value}s`;
+  const minutes=Math.floor(value/60),remaining=value%60;
+  return remaining<10?`${minutes}m`:`${minutes}m ${remaining}s`;
+}
+function updateAnalysisProgress(tab,status=tab.analysisStatus){
+  if(!tab?.container||!status)return;
+  let panel=tab.container.querySelector('.analysis-progress');
+  if(!panel){
+    panel=document.createElement('section');panel.className='analysis-progress';panel.setAttribute('role','status');panel.setAttribute('aria-live','polite');
+    panel.innerHTML='<div class="analysis-progress-head"><span class="analysis-progress-spinner" aria-hidden="true"></span><strong class="analysis-progress-title">Preparing analysis</strong><span class="analysis-progress-elapsed"></span></div><div class="analysis-progress-message"></div><div class="analysis-progress-track"><div class="analysis-progress-fill"></div></div><div class="analysis-progress-meta"><span class="analysis-progress-count"></span><span class="analysis-progress-eta"></span></div><div class="analysis-progress-hint">You can switch ticker tabs while this continues. ETA adjusts as cached candles and provider speed become clear.</div>';
+    tab.container.insertBefore(panel,tab.container.firstChild);
+  }
+  if(tab.result)panel.classList.add('refresh');
+  const stage=status.stage||'queued',labels={queued:'Starting',core:'Live market data',finding_sessions:'Historical scan',loading_history:'Loading historical candles',analyzing:'Pattern analysis',building_report:'Preparing report',complete:'Complete',error:'Stopped'};
+  panel.querySelector('.analysis-progress-title').textContent=`${labels[stage]||'Working'} · ${tab.ticker}`;
+  panel.querySelector('.analysis-progress-message').textContent=status.msg||'Working on the ticker analysis…';
+  const elapsed=Math.max(0,Math.floor((Date.now()-(tab.analysisStartedAt||Date.now()))/1000));
+  panel.querySelector('.analysis-progress-elapsed').textContent=`Elapsed ${formatAnalysisDuration(elapsed)}`;
+  let done=Number(status.progress_done)||0,total=Number(status.progress_total)||0;
+  if(stage==='analyzing'){done=Number(status.analysis_done)||0;total=Number(status.analysis_total)||total;}
+  const pct=Math.max(3,Math.min(100,Number(status.progress_pct)||3));
+  const count=total?`${done.toLocaleString()} / ${total.toLocaleString()} historical sessions${Number.isFinite(Number(status.cached_done))?` · ${Number(status.cached_done)} cached`:''}`:stage==='finding_sessions'?'Scanning daily history…':stage==='building_report'?'Finalizing live report and charts…':'Waiting for the first progress update…';
+  panel.querySelector('.analysis-progress-count').textContent=`${count} · ${Math.round(pct)}%`;
+  let etaText=elapsed<=90?'Initial estimate · ~30–90s; refining as historical sessions are found':'Taking longer than the initial estimate · provider response is slow, but this request is still active';
+  if(Number.isFinite(Number(status.eta_seconds))&&status.eta_seconds!==null){
+    const next=Number(status.eta_seconds),now=Date.now();
+    if(tab.etaStage!==stage||tab.etaUpdatedValue==null||Math.abs(next-tab.etaUpdatedValue)>=Math.max(3,tab.etaUpdatedValue*.12)){
+      tab.etaTargetAt=now+next*1000;tab.etaUpdatedValue=next;tab.etaStage=stage;
+    }
+    const remaining=Math.max(0,Math.ceil((tab.etaTargetAt-now)/1000));
+    etaText=stage==='loading_history'?`Estimated wait · ~${formatAnalysisDuration(remaining)} · ${status.uncached_total||0} cold-history sessions; cache hits finish sooner`:stage==='analyzing'?`Estimated wait · ~${formatAnalysisDuration(remaining)}`:remaining<=3?'Estimated wait · finishing up':`Estimated wait · ~${formatAnalysisDuration(remaining)}`;
+  }
+  panel.querySelector('.analysis-progress-eta').textContent=etaText;
+  panel.querySelector('.analysis-progress-fill').style.width=`${pct}%`;
+}
 async function run(refresh){
   $('#gap_deepdive_view').style.display='none';
   if(!checkAuth()) return;
@@ -1708,21 +1763,17 @@ async function run(refresh){
 
   const tab = openTabs[t];
   tab.isRunning = true;
+  tab.analysisStartedAt=Date.now();tab.analysisStatus={stage:'queued',progress_pct:2,msg:refresh?'Refresh queued · preparing parallel live-data requests…':`Starting the ${t} analysis…`};
+  if(tab.progressTimer)clearInterval(tab.progressTimer);
+  tab.progressTimer=setInterval(()=>updateAnalysisProgress(tab),1000);
   switchTab(t);
+  if(!tab.result)tab.container.innerHTML='';
 
   const statusMsg = refresh 
     ? "Refreshing today's live stats (Volume, Float Rotation, Price, Gap)..." 
     : 'Starting analysis for ' + t + '…';
 
-  if(!tab.result){
-    tab.container.innerHTML = `<span class="d">${statusMsg}</span>`;
-  } else {
-    const banner = tab.container.querySelector('.refresh_banner');
-    if(banner){
-      banner.style.display = 'block';
-      banner.textContent = statusMsg;
-    }
-  }
+  tab.analysisStatus.msg=statusMsg;updateAnalysisProgress(tab);
 
   if(tab.timer) clearTimeout(tab.timer);
 
@@ -1730,25 +1781,25 @@ async function run(refresh){
     const r = await fetch('/api/start?ticker=' + encodeURIComponent(t) + '&user=' + encodeURIComponent(currentUser) + '&token=' + encodeURIComponent(sessionToken) + (refresh ? '&refresh=1' : ''));
     const j = await responseJson(r,'Analysis request');
     if(j.error){
+      if(tab.progressTimer)clearInterval(tab.progressTimer);tab.progressTimer=null;
       tab.isRunning = false;
       renderTabBar();
       tab.container.innerHTML = `<span class="r">${esc(j.error)}</span>`;
       return;
     }
 
-    let pollDelay=250;
+    let pollDelay=1500;
     const poll = async () => {
       try {
         const s = await responseJson(await fetch('/api/job/' + j.job),'Analysis status');
+        tab.analysisStatus=s;tab.pollErrors=0;updateAnalysisProgress(tab,s);
         if(s.status === 'running'){
-          if(!tab.result){
-            tab.container.innerHTML = `<span class="d">${esc(s.msg)}</span>`;
-          }
           tab.timer=setTimeout(poll,pollDelay);
-          pollDelay=Math.min(1200,Math.round(pollDelay*1.5));
+          pollDelay=Math.min(4000,Math.round(pollDelay*1.5));
           return;
         }
         clearTimeout(tab.timer);
+        if(tab.progressTimer)clearInterval(tab.progressTimer);tab.progressTimer=null;
         tab.isRunning = false;
         renderTabBar();
         if(s.status === 'error'){
@@ -1757,18 +1808,19 @@ async function run(refresh){
         }
         renderTab(tab, s.result, refresh);
       } catch(e){
-        clearTimeout(tab.timer);
-        tab.isRunning = false;
-        renderTabBar();
-        tab.container.innerHTML = `<span class="r">Could not load report: ${esc(e?.message || e)}</span>`;
+        tab.pollErrors=(tab.pollErrors||0)+1;
+        if(tab.pollErrors<5){tab.analysisStatus={...tab.analysisStatus,msg:`Connection hiccup · retrying status check (${tab.pollErrors}/4)…`};updateAnalysisProgress(tab);tab.timer=setTimeout(poll,Math.min(5000,1000*tab.pollErrors));return;}
+        clearTimeout(tab.timer);if(tab.progressTimer)clearInterval(tab.progressTimer);tab.progressTimer=null;
+        tab.isRunning = false;renderTabBar();tab.analysisStatus={stage:'error',msg:`Could not load report: ${e?.message||e}`};updateAnalysisProgress(tab);tab.container.querySelector('.analysis-progress-message').style.color='#ff7777';
       }
     };
 
     poll();
   } catch(e) {
+    if(tab.progressTimer)clearInterval(tab.progressTimer);tab.progressTimer=null;
     tab.isRunning = false;
     renderTabBar();
-    tab.container.innerHTML = `<span class="r">Network error: ${esc(e)}</span>`;
+    tab.analysisStatus={stage:'error',msg:`Network error: ${e?.message||e}`};updateAnalysisProgress(tab);tab.container.querySelector('.analysis-progress-message').style.color='#ff7777';
   }
 }
 
@@ -2640,6 +2692,7 @@ async function gapDeepDiveJson(response){
 const anychartTabs=new Map();let anychartActiveKey='',anychartTabSequence=0;
 function showAnychart(){
   $('#tabs_view').style.display='none';$('#tab_bar').style.display='none';$('#multiday_view').style.display='none';$('#gap_deepdive_view').style.display='none';$('#anychart_view').style.display='block';
+  if(location.pathname==='/anychart')window.UserActivity?.record('page_view','Anychart');
   if(anychartActiveKey)activateAnychartTab(anychartActiveKey);
 }
 function renderAnychartTabs(){
@@ -2666,19 +2719,20 @@ async function loadAnychartTab(tab,timeframe=tab.timeframe){
   const requestId=(tab.requestId||0)+1;if(tab.chart&&tab.timeframe!==timeframe){tab.canvas._avwapAnchors=null;tab.canvas._rangeMeasures=[];tab.canvas._selectedRangeId=null;tab.canvas._volumeProfileRange=null;}tab.requestId=requestId;tab.timeframe=timeframe;tab.status=`Loading ${tab.ticker} around ${tab.date}…`;
   if(tab.key===anychartActiveKey)$('#anychart_status').textContent=tab.status;
   try{
-    const query=new URLSearchParams({ticker:tab.ticker,date:tab.date,seed_date:tab.date,days:'11',tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1',source:'polygon'});
+    const query=new URLSearchParams({ticker:tab.ticker,date:tab.date,seed_date:tab.date,days:'11',tf:timeframe,user:currentUser||'',token:sessionToken||'',postmarket:'1',source:'anychart'});
     const response=await fetch('/api/chart-context?'+query.toString()),data=await gapDeepDiveJson(response);if(requestId!==tab.requestId)return;
     if(!data.bars?.t?.length)throw new Error(`No candles were returned for ${tab.ticker} on ${tab.date}.`);
     tab.chart={ticker:tab.ticker,date:tab.date,bars:data.bars,after_hours:true};tab.state={bars:data.bars,dates:data.dates||[],days:11,loadedDays:(data.dates||[]).length,timeframe,contextLoaded:true,panOffset:0,daily:!!data.daily};tab.canvas._gapDeepDiveState=tab.state;
     tab.canvas._marketEvents=await loadChartMarketEvents(tab.ticker,tab.state.dates);if(requestId!==tab.requestId)return;
-    tab.status=`${tab.ticker} · ${tab.date} · ${tab.state.dates.length} trading sessions loaded (up to 5 before and after)`;
+    tab.status=`${tab.ticker} · ${tab.date} · ${tab.state.dates.length} trading sessions loaded (up to 5 before and after)${data.source==='yahoo_finance'?' · today’s candles from Yahoo Finance live data':data.live_source_error?` · Yahoo unavailable; Polygon fallback used (${data.live_source_error})`:''}`;
     if(tab.key===anychartActiveKey){$('#anychart_status').textContent=tab.status;drawGapDeepDiveCanvas(tab.canvas,tab.chart,timeframe,Math.max(560,Math.floor(innerHeight*.76)));}
   }catch(error){if(requestId===tab.requestId){tab.status=`Could not load chart: ${error.message}`;if(tab.key===anychartActiveKey)$('#anychart_status').textContent=tab.status;}}
 }
-$('#nav_anychart_btn').onclick=showAnychart;$('#anychart_back_btn').onclick=()=>switchMainView('intraday');
+$('#nav_anychart_btn').onclick=()=>{location.assign(location.pathname==='/anychart'?'/':'/anychart');};$('#anychart_back_btn').onclick=()=>location.assign('/');
 $('#anychart_search_form').addEventListener('submit',async event=>{
   event.preventDefault();const ticker=$('#anychart_ticker').value.trim().toUpperCase(),date=$('#anychart_date').value;
   if(!/^[A-Z.\-]{1,10}$/.test(ticker)||!date){$('#anychart_status').textContent='Enter a valid ticker and date.';return;}
+  window.UserActivity?.record('anychart_search','Anychart chart search',{ticker,date});
   const key=`${ticker}|${date}`,existing=anychartTabs.get(key);if(existing){activateAnychartTab(key);await loadAnychartTab(existing,$('#anychart_tf').value);return;}
   const panel=document.createElement('section');panel.style.cssText='display:none;background:#07090c;border:1px solid #26313b;border-radius:6px;padding:10px;min-height:72vh';
   const featurePrefix=`anychart_${++anychartTabSequence}`,toolbar=document.createElement('header');toolbar.style.cssText='display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 2px 10px';
@@ -2692,13 +2746,14 @@ $('#anychart_search_form').addEventListener('submit',async event=>{
 });
 $('#anychart_tf').onchange=()=>{const tab=anychartTabs.get(anychartActiveKey);if(tab)loadAnychartTab(tab,$('#anychart_tf').value);};
 for(const id of ['anychart_bz','anychart_vwap','anychart_ema5ext','anychart_ema5ext_val'])$('#'+id).onchange=()=>{const tab=anychartTabs.get(anychartActiveKey);if(tab?.chart)drawGapDeepDiveCanvas(tab.canvas,tab.chart,tab.timeframe,Math.max(560,Math.floor(innerHeight*.76)));};
-const anychartToday=new Date();anychartToday.setMinutes(anychartToday.getMinutes()-anychartToday.getTimezoneOffset());$('#anychart_date').value=anychartToday.toISOString().slice(0,10);
+$('#anychart_date').value=new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 let anychartResizeFrame=0;window.addEventListener('resize',()=>{if(anychartResizeFrame)return;anychartResizeFrame=requestAnimationFrame(()=>{anychartResizeFrame=0;const tab=anychartTabs.get(anychartActiveKey);if($('#anychart_view').style.display!=='none'&&tab?.chart)drawGapDeepDiveCanvas(tab.canvas,tab.chart,tab.timeframe,Math.max(560,Math.floor(innerHeight*.76)));});},{passive:true});
 $('#nav_gap_deepdive_btn').onclick=()=>{
   if(location.pathname==='/gap-deepdive')location.assign('/');
   else window.open('/gap-deepdive','_blank','noopener');
 };
 const gapDeepDiveCharts=new Map(),gapDeepDiveChartPending=new Map(),gapDeepDiveFloats=new Map();
+function cacheGapDeepDiveChart(key,chart){gapDeepDiveCharts.delete(key);gapDeepDiveCharts.set(key,chart);while(gapDeepDiveCharts.size>32)gapDeepDiveCharts.delete(gapDeepDiveCharts.keys().next().value);}
 const gapDeepDivePlayers=new Map();
 const gapDeepDiveEventDays=new Map(),gapDeepDiveEventPending=new Map(),gapDeepDiveEventPreviousDays=new Map();
 const chartMarketEvents=new Map();
@@ -2760,18 +2815,18 @@ async function gapDeepDiveBrowserCachePut(key,chart){
 }
 function flushGapDeepDiveChartQueue(){
   if(gapDeepDiveChartBatchTimer){clearTimeout(gapDeepDiveChartBatchTimer);gapDeepDiveChartBatchTimer=null;}
-  while(gapDeepDiveChartQueue.length&&gapDeepDiveChartActiveBatches<4){
-    const batch=gapDeepDiveChartQueue.splice(0,8);if(!batch.length)break;gapDeepDiveChartActiveBatches++;
+  while(gapDeepDiveChartQueue.length&&gapDeepDiveChartActiveBatches<1){
+    const batch=gapDeepDiveChartQueue.splice(0,4);if(!batch.length)break;gapDeepDiveChartActiveBatches++;
     const url='/api/gap-deepdive/'+encodeURIComponent(batch[0].jobId)+'/charts?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken);
     fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({charts:batch.map(x=>({ticker:x.item.ticker,date:x.item.date}))})})
-      .then(gapDeepDiveJson).then(data=>batch.forEach(entry=>{const key=gapDeepDiveKey(entry.item),chart=data.charts?.[key];if(chart){chart.ticker=entry.item.ticker;gapDeepDiveCharts.set(key,chart);gapDeepDiveBrowserCachePut(key,chart);entry.resolve(chart);}else entry.reject(new Error(data.errors?.[key]||'Chart data was not returned'));}))
+      .then(gapDeepDiveJson).then(data=>batch.forEach(entry=>{const key=gapDeepDiveKey(entry.item),chart=data.charts?.[key];if(chart){chart.ticker=entry.item.ticker;cacheGapDeepDiveChart(key,chart);gapDeepDiveBrowserCachePut(key,chart);entry.resolve(chart);}else entry.reject(new Error(data.errors?.[key]||'Chart data was not returned'));}))
       .catch(error=>batch.forEach(entry=>entry.reject(error)))
       .finally(()=>{batch.forEach(entry=>gapDeepDiveChartPending.delete(gapDeepDiveKey(entry.item)));gapDeepDiveChartActiveBatches--;if(gapDeepDiveChartQueue.length)flushGapDeepDiveChartQueue();});
   }
 }
 function loadGapDeepDiveChart(item,jobId){
   const key=gapDeepDiveKey(item);if(gapDeepDiveCharts.has(key))return Promise.resolve(gapDeepDiveCharts.get(key));if(gapDeepDiveChartPending.has(key))return gapDeepDiveChartPending.get(key);
-  const pending=gapDeepDiveBrowserCacheGet(key).then(cached=>{if(cached){cached.ticker=item.ticker;gapDeepDiveCharts.set(key,cached);return cached;}return new Promise((resolve,reject)=>{gapDeepDiveChartQueue.push({item,jobId,resolve,reject});if(!gapDeepDiveChartBatchTimer)gapDeepDiveChartBatchTimer=setTimeout(flushGapDeepDiveChartQueue,10);});});
+  const pending=gapDeepDiveBrowserCacheGet(key).then(cached=>{if(cached){cached.ticker=item.ticker;cacheGapDeepDiveChart(key,cached);return cached;}return new Promise((resolve,reject)=>{gapDeepDiveChartQueue.push({item,jobId,resolve,reject});if(!gapDeepDiveChartBatchTimer)gapDeepDiveChartBatchTimer=setTimeout(flushGapDeepDiveChartQueue,10);});});
   gapDeepDiveChartPending.set(key,pending);pending.then(()=>gapDeepDiveChartPending.delete(key),()=>gapDeepDiveChartPending.delete(key));return pending;
 }
 async function loadGapDeepDivePlayer(item,jobId){
@@ -3191,7 +3246,7 @@ function drawGapDeepDivePattern(pattern){
   const pct=(pattern.count/pattern.total*100).toFixed(1);title.textContent=`Most common pattern · ${pattern.name}`;status.textContent=`${pattern.count} of ${pattern.total} sessions (${pct}%) · average of matching normalized candles · VWAP in white`;
 }
 function gapDeepDiveCommonPattern(items,jobId,runId){
-  const section=$('#gap_common_pattern'),status=$('#gap_common_pattern_status');section.hidden=false;section.dataset.loaded='';const observer=new IntersectionObserver(entries=>{if(!entries.some(e=>e.isIntersecting))return;observer.disconnect();let done=0,failed=0,next=0;const charts=new Array(items.length);status.textContent=`Loading ${items.length} session charts for pattern analysis…`;const worker=async()=>{while(next<items.length){const i=next++,item=items[i];try{charts[i]=await loadGapDeepDiveChart(item,jobId);}catch{failed++;charts[i]=null;}finally{done++;if(done%8===0||done===items.length)status.textContent=`Analyzing chart cache · ${done}/${items.length} loaded${failed?` · ${failed} unavailable`:''}…`;}}};Promise.all(Array.from({length:Math.min(24,items.length)},worker)).then(()=>{if(runId!==gapDeepDiveRequest)return;const samples=charts.map((chart,i)=>gapDeepDivePatternSample(items[i],chart)).filter(Boolean);if(!samples.length){status.textContent='No regular-session candles were available to analyze.';return;}
+  const section=$('#gap_common_pattern'),status=$('#gap_common_pattern_status');section.hidden=false;section.dataset.loaded='';const observer=new IntersectionObserver(entries=>{if(!entries.some(e=>e.isIntersecting))return;observer.disconnect();let done=0,failed=0,next=0;const samples=[];status.textContent=`Loading ${items.length} session charts for pattern analysis…`;const worker=async()=>{while(next<items.length){const i=next++,item=items[i],key=gapDeepDiveKey(item);try{const chart=await loadGapDeepDiveChart(item,jobId),sample=gapDeepDivePatternSample(item,chart);if(sample)samples.push(sample);gapDeepDiveCharts.delete(key);}catch{failed++;}finally{done++;if(done%8===0||done===items.length)status.textContent=`Analyzing chart cache · ${done}/${items.length} processed${failed?` · ${failed} unavailable`:''}…`;}}};Promise.all(Array.from({length:Math.min(4,items.length)},worker)).then(()=>{if(runId!==gapDeepDiveRequest)return;if(!samples.length){status.textContent='No regular-session candles were available to analyze.';return;}
     const k=Math.min(5,Math.max(1,Math.round(Math.sqrt(samples.length/12)))),centers=Array.from({length:k},(_,i)=>samples[Math.round(i*(samples.length-1)/Math.max(1,k-1))].features.slice()),labels=new Array(samples.length).fill(0);let clusterCounts=Array(k).fill(0);for(let round=0;round<12;round++){for(let i=0;i<samples.length;i++){let best=0,bestDist=Infinity;for(let c=0;c<k;c++){let d=0;for(let j=0;j<20;j++){const delta=samples[i].features[j]-centers[c][j];d+=delta*delta;}if(d<bestDist){bestDist=d;best=c;}}labels[i]=best;}const sums=Array.from({length:k},()=>Array(20).fill(0));clusterCounts=Array(k).fill(0);for(let i=0;i<samples.length;i++){clusterCounts[labels[i]]++;for(let j=0;j<20;j++)sums[labels[i]][j]+=samples[i].features[j];}for(let c=0;c<k;c++)if(clusterCounts[c])centers[c]=sums[c].map(v=>v/clusterCounts[c]);}
     const chosen=clusterCounts.indexOf(Math.max(...clusterCounts)),members=samples.filter((_,i)=>labels[i]===chosen),bars=Array.from({length:20},(_,j)=>{const q={o:0,h:0,l:0,c:0,vw:0};for(const sample of members){const s=sample.buckets[j];q.o+=s.o;q.h+=s.h;q.l+=s.l;q.c+=s.c;q.vw+=s.vw;}for(const key of ['o','h','l','c','vw'])q[key]/=members.length;return q;});const pattern={bars,count:members.length,total:samples.length,name:gapDeepDivePatternType(bars)};section.dataset.loaded='1';canvasPattern=pattern;drawGapDeepDivePattern(pattern);
   });},{rootMargin:'300px 0px'});observer.observe(section);
@@ -3203,7 +3258,7 @@ async function loadGapDeepDive(){
   const task=(async()=>{
   try{
     const start=await fetch('/api/gap-deepdive/start?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken),{method:'POST'}),started=await gapDeepDiveJson(start);let result;
-    while(runId===gapDeepDiveRequest){const response=await fetch('/api/gap-deepdive/'+encodeURIComponent(started.job)+'?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken));result=await gapDeepDiveJson(response);status.textContent=result.message||'Scanning…';if(result.status==='complete'||result.status==='error')break;await new Promise(resolve=>setTimeout(resolve,2000));}
+    let pollDelay=3000;while(runId===gapDeepDiveRequest){const response=await fetch('/api/gap-deepdive/'+encodeURIComponent(started.job)+'?user='+encodeURIComponent(currentUser)+'&token='+encodeURIComponent(sessionToken));result=await gapDeepDiveJson(response);status.textContent=result.message||'Scanning…';if(result.status==='complete'||result.status==='error')break;await new Promise(resolve=>setTimeout(resolve,pollDelay));pollDelay=Math.min(8000,Math.round(pollDelay*1.4));}
     if(runId!==gapDeepDiveRequest)return;if(result.status==='error')throw new Error(result.message);const items=result.results||[];if(!items.length){status.textContent=(result.message||'Complete')+' · No qualifying sessions found.';gapDeepDiveLoaded=true;return;}
     status.textContent=`Saved scan as of ${formatDateMDY(result.scanned_on||'latest saved date')} · ${new Set(items.map(item=>String(item.ticker||'').toUpperCase())).size} tickers · ${items.length} qualifying sessions at ≥70% PM high · click a chart to expand.`+(result.errors?.length?` · Could not load full daily history for ${result.errors.length} ticker(s).`:'');
     gapDeepDiveItems=items;gapDeepDiveJobId=started.job;gapDeepDiveStatusBase=status.textContent;
@@ -3283,6 +3338,7 @@ function openPwdModal(){
 }
 
 let adminRows = [];
+let adminKnownUsers = [];
 let activeViewMode = 'user';
 let tickerFilterQuery = '';
 
@@ -3322,9 +3378,27 @@ window.openUserPopup = function(u){
       '</tbody></table></div>';
   }
 
+  contentHtml += '<section id="up_activity_section" style="margin-top:20px"><h3 style="margin:0 0 8px;color:#8fd8ff;font-size:14px">Account activity</h3><div id="up_activity_state" style="color:#8a8a8a;font-size:12px">Loading recent page visits and actions…</div><div id="up_activity_rows"></div></section>';
   $('#up_content').innerHTML = contentHtml;
   $('#user_popup').style.display = 'flex';
+  loadAdminUserActivity(uname.toLowerCase());
 };
+
+async function loadAdminUserActivity(target){
+  const state=$('#up_activity_state'),root=$('#up_activity_rows');if(!state||!root)return;
+  try{
+    const query=new URLSearchParams({user:currentUser,pwd:adminPwd});
+    const response=await fetch(`/api/admin/users/${encodeURIComponent(target)}/activity?${query}`),data=await response.json();
+    if($('#up_name').textContent.toLowerCase()!==target)return;
+    if(!response.ok)throw new Error(data.error||'Activity history unavailable');
+    const rows=data.activity||[];state.textContent=rows.length?`${rows.length} recent activity events · newest first`:'No activity events recorded yet.';
+    if(!rows.length)return;
+    root.innerHTML='<div class="scroll" style="max-height:340px;background:#050505;border:1px solid #222;border-radius:3px;padding:0 6px"><table style="margin:0;min-width:700px"><thead><tr><th style="padding-left:8px">Time</th><th>Action</th><th>Page</th><th>Details</th></tr></thead><tbody>'+rows.map(row=>{
+      const time=row.created_at?new Date(row.created_at).toLocaleString():'',details=typeof row.details==='string'?row.details:JSON.stringify(row.details||{});
+      return `<tr><td class="w" style="padding-left:8px">${esc(time)}</td><td class="c">${esc(row.label||row.action)}</td><td class="d">${esc(row.page||'')}</td><td class="d">${esc(details==='{}'?'':details)}</td></tr>`;
+    }).join('')+'</tbody></table></div>';
+  }catch(error){if($('#up_name').textContent.toLowerCase()===target)state.textContent=`Activity history unavailable: ${error.message}`;}
+}
 
 window.closeUserPopup = function(){
   $('#user_popup').style.display = 'none';
@@ -3334,14 +3408,11 @@ function renderAdminView(){
   const container = $('#admin_list');
   if(!container) return;
 
-  if(!adminRows.length){
-    container.innerHTML = '<div class="panel" style="padding:24px;text-align:center"><span class="d">No searches recorded yet. Search any ticker in the terminal to see it logged here!</span></div>';
-    return;
-  }
+  if(activeViewMode!=='user'&&!adminRows.length){container.innerHTML='<div class="panel" style="padding:24px;text-align:center"><span class="d">No searches recorded yet.</span></div>';return;}
 
   if(activeViewMode === 'user'){
     // Collect all users from data (not just the fixed 3)
-    const allUsersSet = new Set(['KARTHIK', 'LOCKE', 'GUNSHOW']);
+    const allUsersSet = new Set(['KARTHIK', 'LOCKE', 'GUNSHOW', ...adminKnownUsers.map(u=>String(u).toUpperCase())]);
     const counts = {};
     const uniqueSymbols = {};
     const lastSeen = {};
@@ -3358,7 +3429,7 @@ function renderAdminView(){
     // Build header with search
     let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">` +
       `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">` +
-      `<div style="font-size:13px;color:#8a8a8a">Click a user to view their search history:</div>` +
+      `<div style="font-size:13px;color:#8a8a8a">Click a user to view their searches and account activity:</div>` +
       `<input id="user_search_q" placeholder="Search user..." autocomplete="off" value="" style="height:32px;width:160px;font-size:13px;padding:0 10px;background:#000;border:1px solid #444;color:#fff;border-radius:3px">` +
       `</div>` +
       `<div style="font-size:12px;background:#141414;border:1px solid #333;padding:4px 10px;border-radius:3px;color:#29a8ff">Total searches logged: <b>${adminRows.length}</b></div>` +
@@ -3501,10 +3572,7 @@ async function loadAdminSearches(){
       return;
     }
     adminRows = data.searches || [];
-    if(data._warn && !adminRows.length){
-      $('#admin_list').innerHTML = `<div class="panel" style="padding:16px;color:#ffd23f;font-size:13px">⚠ Server warning: ${esc(data._warn)}</div>`;
-      return;
-    }
+    try{const usersResponse=await fetch('/api/admin/users?user='+encodeURIComponent(currentUser)+'&pwd='+encodeURIComponent(adminPwd)),usersData=await usersResponse.json();if(usersResponse.ok)adminKnownUsers=usersData.users||[];}catch{}
     renderAdminView();
     if(data._warn) $('#admin_list').insertAdjacentHTML('afterbegin', `<div class="panel" style="padding:12px 16px;color:#ffd23f;font-size:13px">⚠ ${esc(data._warn)}</div>`);
   } catch(e) {
@@ -3764,7 +3832,7 @@ function startScannerPolling(){
   if(!scannerTimer){
     scannerTimer = setInterval(()=>{
       if(currentUser && sessionToken) refreshScanner();
-    }, 15000);
+    }, 30000);
   }
   // Keep the live scanner cache warm even when its panel is closed.
   refreshScanner();
@@ -4177,4 +4245,4 @@ window.addEventListener('keydown', e => {
   }});
 
 initAuth();
-</script></body></html>
+</script><script src="/static/user_activity.js"></script></body></html>

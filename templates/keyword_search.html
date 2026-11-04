@@ -277,4 +277,4 @@ $('#compareDate').value=isoDate(now);$('#compareTicker').addEventListener('input
 $('#searchForm').onsubmit=e=>{e.preventDefault();search(true)};$('#moreBtn').onclick=()=>search(false);
 $('#clearBtn').onclick=()=>{searchGeneration++;eventScreenGeneration++;qualifiedTickers.clear();kwEventCache.clear();lastComparePayload=null;$('#compareResults').innerHTML='';rows=[];offset=0;total=0;$('#keyword').value='';$('#tableRoot').innerHTML='';$('#stocksRoot').innerHTML='';$('#resultSummary').innerHTML='';$('#moreBtn').style.display='none';$('#status').textContent='Search SEC filings from the last year. Events require session dollar volume above $50M and an event-day open of $10 or less; the gap-up filter is optional.';$('#startDate').value=isoDate(oneYear);$('#endDate').value=isoDate(now);$('#gapFilterEnabled').checked=false;$('#gapMinPct').value='10';$('#gapMinPct').disabled=true;updateCriteriaLabels()};
 $('#keyword').addEventListener('keydown',e=>{if(e.key==='Escape')$('#clearBtn').click()});
-</script></body></html>
+</script><script src="/static/user_activity.js"></script></body></html>

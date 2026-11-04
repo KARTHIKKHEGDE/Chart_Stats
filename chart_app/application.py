@@ -367,7 +367,10 @@ from chart_app.market_data import (
 
 # ----------------------------------------------------------------------------- job runner
 JOBS = {}
+JOB_LOCK = threading.RLock()
+REPORT_JOB_SLOTS = threading.BoundedSemaphore(2)
 from concurrent.futures import ThreadPoolExecutor, as_completed
+REPORT_JOB_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ticker-report")
 
 
 from chart_app.gap_analysis import (
@@ -408,18 +411,21 @@ def _prefetch_minute(args):
     """Worker: fetch (and cache) 1-min data for one event day. Returns (idx, day, ok)."""
     t, i, daily = args
     day = daily[i]["date"]
+    was_cached = False
     try:
+        was_cached = cget(f"{t}_{day}_1m_polygon_v1") is not None
         df = minute_df(t, day)   # cached in .gapcache; analyze_event will hit cache
-        return (i, day, df is not None and not df.empty)
+        return (i, day, df is not None and not df.empty, was_cached)
     except Exception:
-        return (i, day, False)
+        return (i, day, False, was_cached)
 
 
 def run_job(job, t, refresh):
     try:
         # ------------------------------------------------------------------ STAGE 1
         # Fetch everything that doesn't depend on each other concurrently.
-        job["msg"] = "Loading live data + history in parallel…"
+        job.update(stage="core", progress_pct=4,
+                   msg="Connecting to live quote, daily history, and reference data in parallel…")
 
         _live_res   = [None]
         _daily_res  = [None]
@@ -546,6 +552,8 @@ def run_job(job, t, refresh):
             ratio = min(1.0, max(0.02, live["float"] / live["so"]))
         ctx = {"sec": sec, "splits": splits, "float": fl_now, "ratio": ratio}
 
+        job.update(stage="finding_sessions", progress_pct=12,
+                   msg="Core market data is in. Finding historical gap-up and premarket-spike sessions…")
         idxs = detect_events(daily, splits, live["date"])
 
         # ------------------------------------------------------------------ STAGE 2 + 3
@@ -560,28 +568,49 @@ def run_job(job, t, refresh):
             return i, analyze_event(t, i, daily, ctx)
 
         if n_events:
-            job["msg"]=f"Loading and analyzing {n_events} historical sessions in parallel…"
             fetch_args=[(t,i,daily) for i in idxs]
             # Keep provider concurrency bounded: spawning one worker per
             # event/key can saturate connection pools and trigger rate limits.
-            fetch_workers=min(n_keys,n_events,12)
-            analyze_workers=min(8,n_events)
+            fetch_workers=min(n_keys,n_events,8)
+            analyze_workers=min(4,n_events)
+            cached_sessions=sum(cget(f"{t}_{daily[i]['date']}_1m_polygon_v1") is not None for i in idxs)
+            uncached_sessions=max(0,n_events-cached_sessions)
+            effective_rpm=max(0.1,float(POLY_RPM))*max(1,fetch_workers)
+            initial_eta=int(uncached_sessions*60/effective_rpm + max(5,n_events*.2))
+            job.update(stage="loading_history",progress_pct=16,progress_done=0,progress_total=n_events,
+                       cached_done=0,uncached_total=uncached_sessions,uncached_done=0,
+                       fetch_workers=fetch_workers,estimate_seconds=initial_eta,eta_seconds=initial_eta,
+                       msg=f"Found {n_events} historical sessions · loading minute candles with {fetch_workers} rate-limited worker(s)…")
             with ThreadPoolExecutor(max_workers=fetch_workers,thread_name_prefix="gap-minute-fetch") as fetch_pool:
                 with ThreadPoolExecutor(max_workers=analyze_workers,thread_name_prefix="gap-event-analysis") as analyze_pool:
                     fetch_futures={fetch_pool.submit(_prefetch_minute,arg):arg for arg in fetch_args}
                     analyze_futures={}
-                    completed=0
+                    completed=0;cached_done=0
                     for future in as_completed(fetch_futures):
-                        idx_i,day,ok=future.result();completed+=1
+                        idx_i,day,ok,was_cached=future.result();completed+=1;cached_done+=int(was_cached)
                         analyze_futures[analyze_pool.submit(_analyze,idx_i)]=idx_i
-                        job["msg"]=(f"Loaded {completed}/{n_events} historical sessions; analyzing in parallel… "
-                                    f"({day}{' · cached' if ok else ' · no minute bars'})")
+                        uncached_done=max(0,completed-cached_done)
+                        eta=int(max(0,uncached_sessions-uncached_done)*60/effective_rpm + max(3,(n_events-completed)*.2))
+                        job.update(progress_done=completed,cached_done=cached_done,uncached_done=uncached_done,
+                                   progress_pct=16+int(56*completed/max(1,n_events)),eta_seconds=eta,
+                                   msg=f"Historical minute candles · {completed}/{n_events} sessions fetched · {cached_done} from cache · analyzing as each arrives ({day}{' · cached' if was_cached else ' · no minute bars' if not ok else ''})")
                     # Analyze as soon as each session's bars are fetched. The
                     # old code waited for every analysis at the end, hiding
                     # progress and delaying report readiness behind stragglers.
+                    analyzed=0
+                    job.update(stage="analyzing",progress_pct=74,
+                               msg=f"Candles loaded · calculating historical patterns across {n_events} sessions in parallel…")
                     for future in as_completed(analyze_futures):
                         idx_i,event=future.result()
                         results[idx_i]=event
+                        analyzed+=1
+                        job.update(analysis_done=analyzed,analysis_total=n_events,
+                                   progress_pct=74+int(22*analyzed/max(1,n_events)),
+                                   eta_seconds=max(2,int((n_events-analyzed)*.15+2)),
+                                   msg=f"Analyzing historical patterns · {analyzed}/{n_events} sessions complete…")
+        else:
+            job.update(stage="building_report",progress_pct=78,progress_done=0,progress_total=0,
+                       eta_seconds=5,msg="No matching historical spike sessions; assembling the live report…")
 
         events, skipped = [], 0
         for i in idxs:
@@ -592,7 +621,8 @@ def run_job(job, t, refresh):
                 skipped += 1
 
         # ------------------------------------------------------------------ report
-        job["msg"] = "Building report and charts…"
+        job.update(stage="building_report",progress_pct=97,eta_seconds=3,
+                   msg="Historical analysis is complete · building the report and chart data…")
         lm    = metrics(live["df"], live["pc"], False)
         lctx  = ctx_feats(live["hist"], len(live["hist"]))
         lpath = path_full(live["df"], live["pc"], False)
@@ -711,9 +741,19 @@ def run_job(job, t, refresh):
             report["text"] += f"\n\nLatest Press Releases · Yahoo Finance\n{report['news_status']}"
         job["result"] = report
         job["status"] = "done"
+        job.update(stage="complete",progress_pct=100,eta_seconds=0,msg="Report ready.",finished_at=time.time())
     except Exception as ex:
         job["status"] = "error"
+        job["stage"] = "error"
         job["error"]  = f"{type(ex).__name__}: {ex}"
+        job["finished_at"] = time.time()
+
+
+def _run_report_job_limited(job, ticker, refresh):
+    try:
+        run_job(job, ticker, refresh)
+    finally:
+        REPORT_JOB_SLOTS.release()
 
 
 # ----------------------------------------------------------------------------- web
@@ -733,6 +773,15 @@ def gap_deepdive_page():
     """Open the historical gap-up deep dive as a standalone app page."""
     page = HTML.replace("<title>Gap-Up Fade Analyzer</title>",
                         "<title>Gap Up Deepdive · Historical Scanner</title>", 1)
+    page = page.replace("/favicon.svg?app=gapup", "/favicon.svg?app=deepdive", 1)
+    return Response(page, mimetype="text/html")
+
+
+@app.route("/anychart")
+def anychart_page():
+    """Open the general historical chart workspace as its own app page."""
+    page = HTML.replace("<title>Gap-Up Fade Analyzer</title>",
+                        "<title>Anychart · Historical Charts</title>", 1)
     page = page.replace("/favicon.svg?app=gapup", "/favicon.svg?app=deepdive", 1)
     return Response(page, mimetype="text/html")
 
@@ -848,6 +897,12 @@ def runner_analyze():
     if not _get_app_ui_visibility(username).get("runner_stats", True):
         return jsonify({"error": "Runner Stats access is disabled for this account."}), 403
     try:
+        from chart_app.auth import record_activity_async
+        record_activity_async(username, "ticker_search", "/runner", "Get stats",
+                              {"ticker": t})
+    except Exception:
+        app.logger.debug("Could not queue runner activity event", exc_info=True)
+    try:
         return jsonify(_rs.analyze(
             t,
             request.args.get("start") or None,
@@ -942,6 +997,7 @@ from chart_app import keyword_compare as _keyword_compare
 from chart_app.scanner import _get_scanner_news, _scanner_details
 
 _premarket_spike_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="premarket-spikes")
+_PREMARKET_SPIKE_SLOTS = threading.BoundedSemaphore(2)
 
 
 def _compute_premarket_spikes(ticker):
@@ -967,7 +1023,7 @@ def _compute_premarket_spikes(ticker):
         if day >= cutoff and row["date"] not in split_dates and prior_close > 0 and high / prior_close - 1 > 0.40:
             candidates.append(index)
     if candidates:
-        workers = min(len(_key_pool), max(4, len(candidates)))
+        workers = min(4, max(1,len(_key_pool)), max(1,len(candidates)))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             list(pool.map(_prefetch_minute, [(ticker, index, daily) for index in candidates]))
     found = []
@@ -1092,6 +1148,7 @@ def _run_premarket_spike_job(ticker):
             _premarket_spike_lock_path(ticker).unlink(missing_ok=True)
         except Exception:
             pass
+        _PREMARKET_SPIKE_SLOTS.release()
 
 
 @app.route("/api/premarket-spikes")
@@ -1143,12 +1200,17 @@ def premarket_spikes_api():
             return jsonify({"error": f"Could not coordinate premarket history loading: {exc}"}), 503
     except OSError as exc:
         return jsonify({"error": f"Could not start premarket history loading: {exc}"}), 503
+    if not _PREMARKET_SPIKE_SLOTS.acquire(blocking=False):
+        try:lock_path.unlink(missing_ok=True)
+        except Exception:pass
+        return jsonify({"error":"Premarket history workers are busy. Retry shortly."}),503
     try:
         with os.fdopen(lock_fd, "w", encoding="utf-8") as lock_file:
             lock_file.write(str(time.time()))
         cput(job_key, {"status": "running", "started_at": time.time()})
         _premarket_spike_pool.submit(_run_premarket_spike_job, ticker)
     except Exception as exc:
+        _PREMARKET_SPIKE_SLOTS.release()
         try:
             lock_path.unlink(missing_ok=True)
         except Exception:

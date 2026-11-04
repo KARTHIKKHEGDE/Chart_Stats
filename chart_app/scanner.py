@@ -20,6 +20,7 @@ from chart_app.application import (
     time,
     yf,
 )
+from chart_app.yahoo_limiter import YAHOO_REQUEST_SEMAPHORE
 
 _scanner_cache = {
     "at": 0.0,
@@ -92,7 +93,8 @@ def _get_scanner_candidate_symbols():
             yf.EquityQuery("eq", ["region", "us"]),
             yf.EquityQuery("gt", ["percentchange", 10]),
         ])
-        res_gainers = yf.screen(q_gainers, offset=0, size=250, sortField="percentchange", sortAsc=False)
+        with YAHOO_REQUEST_SEMAPHORE:
+            res_gainers = yf.screen(q_gainers, offset=0, size=250, sortField="percentchange", sortAsc=False)
         for quote in (res_gainers.get("quotes") or []):
             sym = quote.get("symbol")
             if sym and not sym.endswith((".WS", ".WT", ".RT", ".U")):
@@ -106,7 +108,8 @@ def _get_scanner_candidate_symbols():
             yf.EquityQuery("eq", ["region", "us"]),
             yf.EquityQuery("gt", ["dayvolume", 2_000_000]),
         ])
-        res_vol = yf.screen(q_volume, offset=0, size=150, sortField="dayvolume", sortAsc=False)
+        with YAHOO_REQUEST_SEMAPHORE:
+            res_vol = yf.screen(q_volume, offset=0, size=150, sortField="dayvolume", sortAsc=False)
         for quote in (res_vol.get("quotes") or []):
             sym = quote.get("symbol")
             if sym and not sym.endswith((".WS", ".WT", ".RT", ".U")):
@@ -130,7 +133,8 @@ def _scrape_yahoo_premarket_chart(ticker):
     clean_sym = ticker.replace(".", "-")
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{clean_sym}?range=2d&interval=1m&includePrePost=true"
     try:
-        resp = _http_session.get(url, timeout=5)
+        with YAHOO_REQUEST_SEMAPHORE:
+            resp = _http_session.get(url, timeout=5)
         if resp.status_code != 200:
             return None
         data = resp.json()
@@ -264,22 +268,19 @@ def _run_scanner_cycle():
 
         _scanner_log(f"Starting parallel Yahoo chart scan for {len(candidates)} candidates...")
         results = []
-        with ThreadPoolExecutor(max_workers=35, thread_name_prefix="yahoo-pm-chart") as pool:
-            futures = [pool.submit(_scrape_yahoo_premarket_chart, sym) for sym in candidates]
-            for f in as_completed(futures):
-                item = f.result()
-                if item:
-                    results.append(item)
-                    # Show qualifying tickers as soon as their price data is ready;
-                    # headline lookups run separately and cannot delay the scan.
-                    partial = sorted(results, key=lambda x: (
-                        0 if x["status"] == "green" else 1,
-                        -x["current_pct"] if x["status"] == "green" else -x["pm_spike_pct"],
-                        -x["dollar_volume"],
-                    ))
-                    with _scanner_cache_lock:
-                        _scanner_cache.update(at=time.time(), rows=list(partial),
-                                              session_date=session_date, scanning=True, error="")
+        with ThreadPoolExecutor(max_workers=12, thread_name_prefix="yahoo-pm-chart") as pool:
+            # Keep only a bounded set of futures; candidate universes can contain
+            # hundreds of symbols and eager submission retains every Future.
+            for offset in range(0,len(candidates),24):
+                futures=[pool.submit(_scrape_yahoo_premarket_chart,sym) for sym in candidates[offset:offset+24]]
+                for future in as_completed(futures):
+                    item=future.result()
+                    if item:
+                        results.append(item)
+                        partial=sorted(results,key=lambda x:(0 if x["status"]=="green" else 1,
+                            -x["current_pct"] if x["status"]=="green" else -x["pm_spike_pct"],-x["dollar_volume"]))
+                        with _scanner_cache_lock:
+                            _scanner_cache.update(at=time.time(),rows=list(partial),session_date=session_date,scanning=True,error="")
 
         # Sort: Green first (descending by current_pct), then Yellow (descending by pm_spike_pct)
         results.sort(
@@ -294,6 +295,8 @@ def _run_scanner_cycle():
         with _scanner_cache_lock:
             for r in results:
                 _scanner_tracked_symbols.add(r["ticker"])
+            if len(_scanner_tracked_symbols)>500:
+                _scanner_tracked_symbols=set(sorted(_scanner_tracked_symbols)[:500])
             _scanner_cache.update(
                 at=time.time(),
                 rows=results,
@@ -306,7 +309,10 @@ def _run_scanner_cycle():
         yellow_c = sum(1 for r in results if r["status"] == "yellow")
         _scanner_log(f"Scan completed in {time.time()-t0:.2f}s: {len(results)} matches ({green_c} green, {yellow_c} yellow)")
         # Enrich results asynchronously so slow news providers never block prices.
-        for item in results:
+        for item in results[:12]:
+            with _scanner_details_lock:
+                if item["ticker"] in _scanner_details_inflight:continue
+                _scanner_details_inflight.add(item["ticker"])
             _scanner_details_pool.submit(_attach_scanner_news, item["ticker"])
 
     except Exception as exc:
@@ -338,7 +344,7 @@ _scanner_worker_thread.start()
 _scanner_details = {}
 _scanner_details_lock = threading.RLock()
 _scanner_details_inflight = set()
-_scanner_details_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="scanner-details")
+_scanner_details_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="scanner-details")
 
 
 def _normalize_yahoo_news(article, kind):
@@ -370,7 +376,8 @@ def _fetch_yahoo_news(ticker, minimum_count=2):
     )
     for query in (ticker, f"{ticker} press release"):
         try:
-            search = yf.Search(query=query, news_count=20, enable_fuzzy_query=False, timeout=8)
+            with YAHOO_REQUEST_SEMAPHORE:
+                search = yf.Search(query=query, news_count=20, enable_fuzzy_query=False, timeout=8)
             for article in (search.news or []):
                 content = article.get("content") if isinstance(article.get("content"), dict) else {}
                 provider = content.get("provider") or article.get("publisher") or ""
@@ -408,6 +415,9 @@ def _get_scanner_news(ticker, limit=2):
         cached = _scanner_details.setdefault(ticker, {})
         cached.update(news=fetched, news_at=now,
                       news_status=("Latest press releases found on Yahoo Finance" if fetched else "No press releases found"))
+        if len(_scanner_details)>500:
+            oldest=sorted(_scanner_details,key=lambda key:_scanner_details[key].get('news_at',0))[:len(_scanner_details)-400]
+            for old_key in oldest:_scanner_details.pop(old_key,None)
     return fetched[:limit]
 
 
@@ -422,6 +432,8 @@ def _attach_scanner_news(ticker):
             if row.get("ticker") == ticker:
                 row["latest_news"] = headline
                 break
+    with _scanner_details_lock:
+        _scanner_details_inflight.discard(ticker)
 
 
 @app.route("/api/scanner-news-more")

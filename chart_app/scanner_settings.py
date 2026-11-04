@@ -1,6 +1,7 @@
 """Scanner Settings feature module."""
 from chart_app.application import (
     JOBS,
+    JOB_LOCK,
     Path,
     SUPABASE_KEY,
     SUPABASE_URL,
@@ -422,6 +423,36 @@ def admin_user_details(target):
                     "recent_searches": searches, "search_error": search_error})
 
 
+@app.route("/api/admin/users/<target>/activity")
+def admin_user_activity(target):
+    admin = (request.args.get("user") or "").strip().lower()
+    pwd = (request.args.get("pwd") or "").strip()
+    if admin not in _auth.ADMIN_USERS or pwd != "500":
+        return jsonify({"error": "Unauthorized"}), 401
+    target = (target or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9_]{2,32}", target):
+        return jsonify({"error": "Invalid username"}), 400
+    sub_url = (os.getenv("SUPABASE_URL") or SUPABASE_URL).rstrip("/")
+    sub_key = os.getenv("SUPABASE_KEY") or SUPABASE_KEY
+    if not (sub_url and sub_key):
+        return jsonify({"error": "Supabase is not configured on the server."}), 503
+    try:
+        endpoint = (f"{sub_url}/rest/v1/user_activity?user_name=eq.{quote(target, safe='')}"
+                    "&select=id,user_name,action,page,label,details,created_at"
+                    "&order=id.desc&limit=1000")
+        response = requests.get(endpoint, headers=_supabase_headers(), timeout=10)
+        if response.status_code != 200:
+            message = response.text[:240]
+            if response.status_code == 404 or "user_activity" in message.lower():
+                message = "Activity table is not installed. Apply supabase_user_activity.sql from the project."
+            return jsonify({"error": message}), 503
+        rows = response.json()
+        return jsonify({"activity": rows if isinstance(rows, list) else []})
+    except Exception as exc:
+        app.logger.exception("Could not load user activity for %s", target)
+        return jsonify({"error": f"Could not load user activity: {exc}"}), 503
+
+
 @app.route("/api/admin/users/add", methods=["POST"])
 def admin_add_user():
     u = (request.args.get("user") or request.form.get("user") or "").strip().lower()
@@ -470,4 +501,7 @@ def job(jid):
     j = JOBS.get(jid)
     if not j:
         return jsonify({"status": "error", "error": "Unknown job"}), 404
-    return jsonify(j)
+    response=jsonify(j)
+    if j.get('status') in {'done','error'}:
+        with JOB_LOCK:JOBS.pop(jid,None)
+    return response
