@@ -90,7 +90,7 @@ def _get_scanner_candidate_symbols():
     try:
         q_gainers = yf.EquityQuery("and", [
             yf.EquityQuery("eq", ["region", "us"]),
-            yf.EquityQuery("gt", ["percentchange", 15]),
+            yf.EquityQuery("gt", ["percentchange", 10]),
         ])
         res_gainers = yf.screen(q_gainers, offset=0, size=250, sortField="percentchange", sortAsc=False)
         for quote in (res_gainers.get("quotes") or []):
@@ -104,7 +104,7 @@ def _get_scanner_candidate_symbols():
     try:
         q_volume = yf.EquityQuery("and", [
             yf.EquityQuery("eq", ["region", "us"]),
-            yf.EquityQuery("gt", ["dayvolume", 3_000_000]),
+            yf.EquityQuery("gt", ["dayvolume", 2_000_000]),
         ])
         res_vol = yf.screen(q_volume, offset=0, size=150, sortField="dayvolume", sortAsc=False)
         for quote in (res_vol.get("quotes") or []):
@@ -125,6 +125,7 @@ def _get_scanner_candidate_symbols():
 def _scrape_yahoo_premarket_chart(ticker):
     """Scrape 1m premarket data using Yahoo's chart endpoint:
     https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=2d&interval=1m&includePrePost=true
+    Compares against yesterday's true regular session closing candle.
     """
     clean_sym = ticker.replace(".", "-")
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{clean_sym}?range=2d&interval=1m&includePrePost=true"
@@ -138,15 +139,23 @@ def _scrape_yahoo_premarket_chart(ticker):
             return None
         chart = result_list[0]
         meta = chart.get("meta") or {}
-        prev_close = meta.get("chartPreviousClose") or meta.get("previousClose")
-        if not prev_close or prev_close <= 0:
-            return None
 
-        cur_price = meta.get("regularMarketPrice") or meta.get("fulldayPrice")
-        
         pre = (meta.get("currentTradingPeriod") or {}).get("pre") or {}
         p_start = pre.get("start", 0)
         p_end = pre.get("end", 0)
+        reg = (meta.get("currentTradingPeriod") or {}).get("regular") or {}
+        r_start = reg.get("start", 0)
+        now_ts = time.time()
+
+        # Determine true yesterday close price:
+        # Before regular market opens (now_ts < r_start), Yahoo's meta.regularMarketPrice
+        # holds yesterday's official regular session closing candle!
+        # During/after regular market hours, meta.previousClose holds yesterday's close candle.
+        is_premarket_now = (now_ts < r_start) if r_start else True
+        if is_premarket_now and meta.get("regularMarketPrice"):
+            prev_close = float(meta["regularMarketPrice"])
+        else:
+            prev_close = float(meta.get("previousClose") or meta.get("chartPreviousClose") or 0.0)
 
         timestamps = chart.get("timestamp") or []
         quote = ((chart.get("indicators") or {}).get("quote") or [{}])[0]
@@ -154,10 +163,24 @@ def _scrape_yahoo_premarket_chart(ticker):
         closes = quote.get("close") or []
         volumes = quote.get("volume") or []
 
+        # If still missing or zero, extract the last regular session bar before today's premarket
+        if not prev_close or prev_close <= 0:
+            reg_periods = (meta.get("tradingPeriods") or {}).get("regular") or []
+            y_sessions = [p[0] for p in reg_periods if p and p[0].get("start", 0) < p_start]
+            if y_sessions:
+                last_y_sess = y_sessions[-1]
+                y_bars = [c for t, c in zip(timestamps, closes) if last_y_sess.get("start", 0) <= t <= last_y_sess.get("end", 0) and c is not None]
+                if y_bars:
+                    prev_close = float(y_bars[-1])
+
+        if not prev_close or prev_close <= 0:
+            return None
+
         pm_high = 0.0
         pm_vol = 0
         pm_dvol = 0.0
         pm_high_time = 0
+        today_closes = []
 
         # Scan premarket window
         for ts, h, c, v in zip(timestamps, highs, closes, volumes):
@@ -170,24 +193,26 @@ def _scrape_yahoo_premarket_chart(ticker):
                 pm_vol += vol
                 if c is not None and vol > 0:
                     pm_dvol += float(c) * float(vol)
+            if ts >= p_start and c is not None and c > 0:
+                today_closes.append(c)
 
-        # Fallback for current price if meta price is missing
-        if (not cur_price or cur_price <= 0) and closes:
-            valid_closes = [c for c in closes if c is not None and c > 0]
-            if valid_closes:
-                cur_price = valid_closes[-1]
-        if not cur_price or cur_price <= 0:
-            cur_price = pm_high
+        # Current price: most recent bar today, or fulldayPrice / regularMarketPrice
+        if today_closes:
+            cur_price = today_closes[-1]
+        elif not is_premarket_now and meta.get("regularMarketPrice"):
+            cur_price = float(meta["regularMarketPrice"])
+        else:
+            cur_price = float(meta.get("fulldayPrice") or pm_high or prev_close)
 
         # If Yahoo 1m feed did not stream individual 1m volume ticks during premarket,
         # fallback to the cumulative market volume recorded in meta
         eff_vol = max(pm_vol, meta.get("regularMarketVolume") or 0)
-        eff_dvol = max(pm_dvol, eff_vol * (cur_price or pm_high or 0.0))
+        eff_dvol = max(pm_dvol, eff_vol * cur_price)
 
         if pm_high <= 0:
             return None
 
-        # Premarket spike % and current gain %
+        # Premarket spike % and current gain % vs YESTERDAY'S CLOSE CANDLE
         pm_spike_pct = ((pm_high - prev_close) / prev_close) * 100.0
         current_pct = ((cur_price - prev_close) / prev_close) * 100.0
 
@@ -280,7 +305,6 @@ def _run_scanner_cycle():
 
 def _scanner_background_loop():
     """Background daemon loop that re-scans every 60 seconds."""
-    # Initial scan on startup
     time.sleep(2)
     _run_scanner_cycle()
     while True:
