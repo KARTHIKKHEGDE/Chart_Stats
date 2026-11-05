@@ -9,6 +9,14 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      - key: LOCAL_MAX
+        value: "1"
+      - key: MAX_EVENTS
+        value: "50"
+      - key: OPTIONAL_WAIT
+        value: "1.25"
+      - key: YAHOO_REQUEST_LIMIT
+        value: "4"
       - key: POLYGON_API_KEY
         sync: false
       - key: POLYGON_API_KEYS

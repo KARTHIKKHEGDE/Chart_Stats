@@ -1869,7 +1869,7 @@ def sec_dilution_history():
     if asof_date>current_day:
         return jsonify({'error':'As-of date cannot be in the future.'}),400
     today=asof_date.isoformat()
-    cache_key=f'sec_dilution_history_v17_{ticker}_{today}_asof'
+    cache_key=f'sec_dilution_history_v18_{ticker}_{today}_asof'
     cached=cget(cache_key,30*60)
     if cached is not None:
         return jsonify(cached)
@@ -2236,7 +2236,7 @@ def sec_dilution_history():
             "Use levels low/moderate/high/severe/not_confirmed, with a short explanation and source IDs. For overhang, compare confirmed active "
             "issuable shares with shares outstanding: >=50% severe, >=25% high, >=10% moderate, otherwise low; do not treat "
             "shelf capacity as active issuable shares. For dilution_history, use the number and scale of confirmed primary "
-            "dilution events in the trailing 24 months; do not rate from registration filings alone. For offering, explain "
+            "dilution events in the trailing 24 months; do not rate from registration filings alone. Give a confirmed high/severe history signal substantial weight in the overall dilution assessment, even if no offering is currently active; keep this distinct from immediate offering risk. For offering, explain "
             "whether a live ATM/equity line or effective usable shelf is supported by evidence. These are this report's "
             "qualitative signals, not a Finviz score; use not_confirmed when evidence is insufficient. "
             "Financial is separate from dilution: assess going-concern disclosures, management's substantial-doubt language, "
@@ -3094,6 +3094,7 @@ def _fetch_article_text(url, max_chars=8000):
 
 def _compute_intraday_stats(ticker, dates, max_dates=15):
     """Compute RTH behavior and premarket spike-to-VWAP stats for historical gap dates."""
+    import math
     import statistics as _stats
     def compute_day(date):
         try:
@@ -3122,6 +3123,8 @@ def _compute_intraday_stats(ticker, dates, max_dates=15):
             pm = bars[(mins >= 240) & (mins < 570)]  # 4:00–9:30 ET
             pm_high_vs_vwap = None
             pm_high_time_ist = None
+            pm_high_price = None
+            pm_high_idx = None
             if not pm.empty:
                 pm_high_idx = pm['h'].idxmax()
                 pm_high_price = float(pm['h'].max())
@@ -3130,8 +3133,26 @@ def _compute_intraday_stats(ticker, dates, max_dates=15):
                     pm_high_vs_vwap = round((pm_high_price / pm_vwap - 1) * 100, 1)
                 pm_high_time_ist = (pm_high_idx.tz_convert(IST).strftime('%H:%M IST')
                                     if hasattr(pm_high_idx, 'tz_convert') else str(pm_high_idx))
+            closes_5m=bars['c'].groupby(bars.index.floor('5min')).last()
+            ema9_5m=closes_5m.ewm(span=9,adjust=False).mean()
+            def extension_at(price,index,series):
+                if price is None or index is None:return None
+                value=series.get(index.floor('5min'))
+                return round((float(price)/float(value)-1)*100,1) if value is not None and math.isfinite(float(value)) and float(value)>0 else None
+            pm_high_ema9=extension_at(pm_high_price,pm_high_idx,ema9_5m)
+            pm_high_vwap=round((pm_high_price/float(vwap_s.loc[pm_high_idx])-1)*100,1) if pm_high_price and pm_high_idx is not None and float(vwap_s.loc[pm_high_idx])>0 else None
+            rth_high_ema9=extension_at(high_price,high_idx,ema9_5m)
+            rth_high_vwap=round((high_price/vwap_at_high-1)*100,1) if vwap_at_high>0 else None
+            dominant_high='rth' if pm_high_price is not None and high_price>pm_high_price else ('premarket' if pm_high_price is not None and high_price<pm_high_price else None)
             return {
                 'date':             date,
+                'premarket_high_price':pm_high_price,
+                'rth_high_price':high_price,
+                'dominant_high':dominant_high,
+                'premarket_high_ema9_extension_pct':pm_high_ema9,
+                'premarket_high_vwap_extension_pct':pm_high_vwap,
+                'rth_high_ema9_extension_pct':rth_high_ema9,
+                'rth_high_vwap_extension_pct':rth_high_vwap,
                 'high_vs_open_pct': round((high_price / open_price - 1) * 100, 1),
                 'high_vs_vwap_pct': round((high_price / vwap_at_high - 1) * 100, 1) if vwap_at_high > 0 else None,
                 'premarket_high_vs_vwap_pct': pm_high_vs_vwap,
@@ -3160,6 +3181,19 @@ def _compute_intraday_stats(ticker, dates, max_dates=15):
         def q(p):
             pos=(len(vals)-1)*p;lo=int(pos);hi=min(lo+1,len(vals)-1);return round(vals[lo]+(vals[hi]-vals[lo])*(pos-lo),1)
         return {'p25':q(.25),'p75':q(.75)}
+    premarket_led=[row for row in rows if row.get('dominant_high')=='premarket']
+    rth_led=[row for row in rows if row.get('dominant_high')=='rth']
+    def _mean(items,key):
+        values=[row.get(key) for row in items if row.get(key) is not None]
+        return round(_stats.mean(values),1) if values else None
+    conditional_high_extensions={
+        'premarket_led_sample_size':len(premarket_led),
+        'rth_led_sample_size':len(rth_led),
+        'premarket_high_ema9_extension_avg_pct':_mean(premarket_led,'premarket_high_ema9_extension_pct'),
+        'premarket_high_vwap_extension_avg_pct':_mean(premarket_led,'premarket_high_vwap_extension_pct'),
+        'rth_high_ema9_extension_avg_pct':_mean(rth_led,'rth_high_ema9_extension_pct'),
+        'rth_high_vwap_extension_avg_pct':_mean(rth_led,'rth_high_vwap_extension_pct'),
+    }
     high_vs_open  = [r['high_vs_open_pct']  for r in rows]
     high_vs_vwap  = [r['high_vs_vwap_pct']  for r in rows]
     pm_high_vs_vwap = [r['premarket_high_vs_vwap_pct'] for r in rows]
@@ -3181,6 +3215,7 @@ def _compute_intraday_stats(ticker, dates, max_dates=15):
         'median_close_vs_vwap_pct': _med(close_vs_vwap),
         'fade_rate_pct':            round(100 * fade_count / len(rows)),
         'typical_high_time_ist':    common_high_time,
+        'conditional_high_extensions':conditional_high_extensions,
         'rows':                     rows,
     }
 
@@ -3392,6 +3427,7 @@ Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
 
     @app.route("/api/all-in-one-summary", methods=["POST"])
     def all_in_one_summary_api():
+        request_started=time.monotonic()
         data = request.get_json(silent=True) or {}
         user  = str(data.get("user", "")).strip().lower()
         token = str(data.get("token", "")).strip()
@@ -3408,22 +3444,53 @@ Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
         events       = data.get("events", [])         # historical gap events
         sec_filings  = data.get("sec_filings", [])    # filing rows already loaded in ticker report
         dilution_ctx = data.get("dilution_text", "")  # last dilution summary text
+        dilution_risk_signals=data.get("dilution_risk_signals", {})
+        if not isinstance(dilution_risk_signals,dict):dilution_risk_signals={}
+        dilution_history_signal=dilution_risk_signals.get('dilution_history') if isinstance(dilution_risk_signals.get('dilution_history'),dict) else {}
         current_price= data.get("current_price", "")
         gap_pct      = data.get("gap_pct", "")
 
         context_fingerprint=json.dumps({'ticker':ticker,'news':news_items,'news_status':news_status,'events':events,'sec_filings':sec_filings,
-                                        'dilution_text':dilution_ctx,'grade':grade_info,'current_price':current_price,'gap_pct':gap_pct},
+                                        'dilution_text':dilution_ctx,'dilution_risk_signals':dilution_risk_signals,'grade':grade_info,'current_price':current_price,'gap_pct':gap_pct},
                                        sort_keys=True,default=str,separators=(',',':'))
-        cache_key = "aio_v2_" + __import__('hashlib').sha1(context_fingerprint.encode()).hexdigest()[:16]
-        cached = cget(cache_key, 3600)   # 1 h cache (news may change)
-        if cached:
-            return jsonify({**cached, "cached": True})
-
+        cache_key = "aio_v3_" + __import__('hashlib').sha1(context_fingerprint.encode()).hexdigest()[:16]
         # Compute real intraday VWAP stats from minute bars
         event_dates = [e.get('date', '') for e in (events or []) if e.get('date', '')]
         stats_fingerprint=json.dumps(event_dates[:15],separators=(',',':'))
-        stats_cache_key='aio_intraday_v3_'+hashlib.sha256(
+        stats_cache_key='aio_intraday_v4_'+hashlib.sha256(
             (ticker+'|'+stats_fingerprint).encode('utf-8')).hexdigest()[:24]
+        def add_intraday_stats(result, stats):
+            merged=dict(result)
+            history=merged.get('historical_behavior')
+            if not isinstance(history,dict):history={}
+            history=dict(history)
+            history.update({
+                'median_high_vs_vwap_pct':stats['median_high_vs_vwap_pct'],
+                'median_high_vs_open_pct':stats['median_high_vs_open_pct'],
+                'typical_high_time_ist':stats['typical_high_time_ist'],
+                'median_close_vs_open_pct':stats['median_close_vs_open_pct'],
+                'median_close_vs_vwap_pct':stats['median_close_vs_vwap_pct'],
+                'intraday_sample_size':stats['sample_size'],
+                'fade_rate_pct':stats['fade_rate_pct'],
+                'median_premarket_high_vs_vwap_pct':stats['median_premarket_high_vs_vwap_pct'],
+                'premarket_high_vs_vwap_range_pct':stats['premarket_high_vs_vwap_range_pct'],
+                'conditional_high_extensions':stats.get('conditional_high_extensions'),
+            })
+            merged['historical_behavior']=history
+            merged['intraday_stats']=stats
+            merged.pop('intraday_stats_pending',None)
+            return merged
+
+        cached=cget(cache_key,3600)   # 1 h cache (news may change)
+        if cached:
+            cached_stats=cget(stats_cache_key,24*60*60)
+            if cached_stats:
+                cached=add_intraday_stats(cached,cached_stats)
+                cput(cache_key,cached)
+            app.logger.info('[timing] aio_summary ticker=%s total=%.3fs cache_hit=1 intraday_ready=%s',
+                            ticker,time.monotonic()-request_started,bool(cached_stats))
+            return jsonify({**cached,"cached":True})
+
         # The fingerprint only contains completed historical event dates, so the
         # result is stable until a new event changes the key. Keep it warm for a day.
         intraday_stats=cget(stats_cache_key,24*60*60)
@@ -3478,6 +3545,12 @@ Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
                 + (f" at {r['premarket_high_time_ist']}" if r.get('premarket_high_time_ist') else '')
                 for r in is_['rows'][:8]
             )
+            ext=is_.get('conditional_high_extensions') or {}
+            extension_block=(
+                f"  Conditional high-extension averages (only sessions where one high clearly exceeded the other; n={is_['sample_size']}):\n"
+                f"    PM high > RTH high (n={ext.get('premarket_led_sample_size',0)}): 5m 9-EMA avg {ext.get('premarket_high_ema9_extension_avg_pct') if ext.get('premarket_high_ema9_extension_avg_pct') is not None else 'unavailable'}%; VWAP avg {ext.get('premarket_high_vwap_extension_avg_pct') if ext.get('premarket_high_vwap_extension_avg_pct') is not None else 'unavailable'}%\n"
+                f"    RTH high > PM high (n={ext.get('rth_led_sample_size',0)}): 5m 9-EMA avg {ext.get('rth_high_ema9_extension_avg_pct') if ext.get('rth_high_ema9_extension_avg_pct') is not None else 'unavailable'}%; VWAP avg {ext.get('rth_high_vwap_extension_avg_pct') if ext.get('rth_high_vwap_extension_avg_pct') is not None else 'unavailable'}%\n"
+            )
             intraday_block = (
                 f"\nQUANTITATIVE INTRADAY STATS (computed from {is_['sample_size']} real sessions):\n"
                 f"  Median intraday high vs open:       +{is_['median_high_vs_open_pct']}%\n"
@@ -3488,6 +3561,7 @@ Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
                 f"  Actual fade rate (close < open):    {is_['fade_rate_pct']}%\n"
                 f"  Premarket high vs cumulative VWAP (starting 13:30 IST): median {('+'+str(pm_value)+'%') if pm_value is not None else 'unavailable'}; middle 50% range {('+'+str(pm_range.get('p25'))+'% to +'+str(pm_range.get('p75'))+'%') if pm_range.get('p25') is not None else 'unavailable'}\n"
                 f"  Per-session premarket highs:\n{pm_detail_lines}\n"
+                f"{extension_block}"
                 f"  Per-session detail:\n{vwap_detail_lines}\n"
             )
         else:
@@ -3520,6 +3594,8 @@ Treat regular-session high stats and premarket high stats as separate measures. 
 DILUTION / SEC FILING CONTEXT (if available):
 {str(dilution_ctx)[:4000] or filing_text}
 Treat filing titles as leads, not proof that an offering is currently active. State when status is unconfirmed from the supplied filing text.
+Structured SEC historical dilution signal: level={dilution_history_signal.get('level','not_confirmed')}; basis={dilution_history_signal.get('basis','not supplied')}.
+Give confirmed historical dilution frequency and scale substantial weight in the overall dilution judgment. If the SEC dilution_history risk signal is high or severe, call that out clearly in the dilution conclusion and final assessment even when no current offering is confirmed. Keep historical dilution risk separate from immediate active-offering risk, and never let an unconfirmed current offering erase a high historical-risk signal.
 Explain dilution in plain, direct terms. When the report lists active warrants, give the outstanding warrant count, strike per share, stock close and date, possible shares, and cash proceeds if exercised for cash. Include the CEO's disclosed owned-share count and estimated value at that close when confirmed. Say "not confirmed" when a number is missing. Explain that CEO-owned shares are existing ownership, not new dilution, and their estimated value is not cash proceeds.
 Name disclosed banks, underwriters, placement agents, and dealers involved in active dilution. Separately name the largest or majority warrant holders only when the reviewed filings explicitly disclose their warrant positions. Never infer names, roles, or holder amounts.
 
@@ -3540,7 +3616,7 @@ Return this exact JSON structure (fill every field, use null if unknown):
     "reason": "1 sentence why"
   }},
   "historical_behavior": {{
-    "summary": "1-2 sentences on how {ticker} behaves. Distinguish the RTH high vs VWAP from the premarket high vs VWAP; give the premarket median and middle 50% range when available.",
+    "summary": "1-2 sentences on how {ticker} behaves. Distinguish the RTH high vs VWAP from the premarket high vs VWAP; give the premarket median and middle 50% range when available, and include conditional PM-high/RTH-high extension averages when available.",
     "fade_rate_pct": {fade_count * 100 // max(len(events),1) if events else 'null'},
     "sample_size": {len(events)},
     "median_high_vs_vwap_pct": {intraday_stats['median_high_vs_vwap_pct'] if intraday_stats else 'null'},
@@ -3549,7 +3625,8 @@ Return this exact JSON structure (fill every field, use null if unknown):
     "median_high_vs_open_pct": {intraday_stats['median_high_vs_open_pct'] if intraday_stats else 'null'},
     "typical_high_time_ist": "{intraday_stats['typical_high_time_ist'] if intraday_stats else ''}",
     "median_close_vs_open_pct": {intraday_stats['median_close_vs_open_pct'] if intraday_stats else 'null'},
-    "intraday_sample_size": {intraday_stats['sample_size'] if intraday_stats else 0}
+    "intraday_sample_size": {intraday_stats['sample_size'] if intraday_stats else 0},
+    "conditional_high_extensions": {json.dumps(intraday_stats['conditional_high_extensions']) if intraday_stats else 'null'}
   }},
   "similar_day_pattern": {{
     "summary": "What typically happens after the open spike. Reference the actual VWAP high % and high time if available from the intraday stats.",
@@ -3559,6 +3636,7 @@ Return this exact JSON structure (fill every field, use null if unknown):
   "final_assessment": {{
     "catalyst": "one line",
     "dilution": "one plain-language line with active warrant count/strike and CEO shares/value when confirmed; otherwise state what is not confirmed.",
+    "historical_dilution_risk": {{"level":"high|moderate|low|severe|not_confirmed","basis":"short, evidence-based explanation"}},
     "offering_risk": "high|medium|low",
     "historical_behavior": "fades|holds|mixed|unknown",
     "key_observation": "The single most important thing a trader should watch on the chart today."
@@ -3570,32 +3648,28 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
         try:
             answer, provider = _call_filing_ai(prompt, max_tokens=900, timeout=22)
             result = _parse_ai_json_object(answer)
+            if dilution_history_signal:
+                final_assessment=result.get('final_assessment') if isinstance(result.get('final_assessment'),dict) else {}
+                final_assessment=dict(final_assessment)
+                final_assessment['historical_dilution_risk']={
+                    'level':str(dilution_history_signal.get('level') or 'not_confirmed').strip().lower(),
+                    'basis':str(dilution_history_signal.get('basis') or 'Evidence not confirmed.').strip(),
+                }
+                result['final_assessment']=final_assessment
             if intraday_future is not None and intraday_stats is None and intraday_future.done():
                 try:
                     intraday_stats=intraday_future.result()
                     if intraday_stats is not None:cput(stats_cache_key,intraday_stats)
                 except Exception:
                     app.logger.exception('All-in-One intraday stats unavailable for %s',ticker)
-            # Inject computed intraday_stats so frontend can render data tables
             if intraday_stats:
-                if 'historical_behavior' not in result or not isinstance(result.get('historical_behavior'), dict):
-                    result['historical_behavior'] = {}
-                result['historical_behavior'].update({
-                    'median_high_vs_vwap_pct':  intraday_stats['median_high_vs_vwap_pct'],
-                    'median_high_vs_open_pct':  intraday_stats['median_high_vs_open_pct'],
-                    'typical_high_time_ist':    intraday_stats['typical_high_time_ist'],
-                    'median_close_vs_open_pct': intraday_stats['median_close_vs_open_pct'],
-                    'median_close_vs_vwap_pct': intraday_stats['median_close_vs_vwap_pct'],
-                    'intraday_sample_size':     intraday_stats['sample_size'],
-                    'fade_rate_pct':            intraday_stats['fade_rate_pct'],
-                    'median_premarket_high_vs_vwap_pct': intraday_stats['median_premarket_high_vs_vwap_pct'],
-                    'premarket_high_vs_vwap_range_pct': intraday_stats['premarket_high_vs_vwap_range_pct'],
-                })
-                result['intraday_stats'] = intraday_stats
+                result=add_intraday_stats(result,intraday_stats)
             out = {**result, "ticker": ticker, "provider": provider}
             stats_pending=intraday_future is not None and not intraday_future.done()
             if stats_pending:out['intraday_stats_pending']=True
-            else:cput(cache_key, out)
+            cput(cache_key, out)
+            app.logger.info('[timing] aio_summary ticker=%s provider=%s total=%.3fs cache_hit=0 intraday_pending=%s',
+                            ticker,provider,time.monotonic()-request_started,stats_pending)
             return jsonify(out)
         except Exception as exc:
             return jsonify({"error": str(exc)}), 502

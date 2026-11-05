@@ -234,10 +234,10 @@ def _scrape_yahoo_premarket_chart(ticker):
         pm_spike_pct = ((pm_high - prev_close) / prev_close) * 100.0
         current_pct = ((cur_price - prev_close) / prev_close) * 100.0
 
-        # Condition 1: Premarket spike of at least 50% today
-        # Condition 2: Premarket dollar volume >= $5,000,000 ($5M)
-        if pm_spike_pct >= 50.0 and eff_dvol >= 5_000_000:
-            status = "green" if current_pct >= 50.0 else "yellow"
+        # Scanner qualification: current change >30%, dollar volume >$500k,
+        # and a share price strictly between $0.30 and $15.
+        if current_pct > 30.0 and eff_dvol > 500_000 and 0.30 < cur_price < 15.0:
+            status = "green"
             
             # Size intensity for green scaling (more size -> deeper/brighter green)
             if current_pct >= 200.0:
@@ -260,7 +260,7 @@ def _scrape_yahoo_premarket_chart(ticker):
                 "volume": int(eff_vol),
                 "dollar_volume": round(float(eff_dvol)),
                 "status": status,
-                "is_above_50": bool(current_pct >= 50.0),
+                "is_above_30": bool(current_pct > 30.0),
                 "green_intensity": green_intensity,
             }
     except Exception:

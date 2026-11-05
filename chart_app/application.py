@@ -71,8 +71,7 @@ IST = ZoneInfo("Asia/Kolkata")
 POLY_KEY = os.getenv("POLYGON_API_KEY", "")
 POLY_RPM = min(5.0, max(0.1, float(os.getenv("POLYGON_RPM", "5"))))
 POLYGON_KEY_POOL_LIMIT = 50
-IS_RENDER = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
-LOCAL_MAX = os.getenv("LOCAL_MAX", "0" if IS_RENDER else "1").strip() == "1"
+LOCAL_MAX = os.getenv("LOCAL_MAX", "1").strip() == "1"
 CPU_COUNT = os.cpu_count() or 4
 FETCH_WORKERS_CAP = 100 if LOCAL_MAX else 50
 ANALYZE_WORKERS = max(4, CPU_COUNT * 2) if LOCAL_MAX else 8
@@ -80,7 +79,7 @@ STAGE1_WAIT = float(os.getenv("OPTIONAL_WAIT", "1.25"))
 REPORT_WORKERS = max(4, CPU_COUNT // 2) if LOCAL_MAX else 2
 SPIKE_WORKERS = 50
 WARMUP_WORKERS = max(2, CPU_COUNT // 2) if LOCAL_MAX else 1
-SERVER_THREADS = 64 if LOCAL_MAX else 50
+SERVER_THREADS = 50
 
 # ----------------------------------------------------------------------------- Polygon client
 _key_pool: list = []

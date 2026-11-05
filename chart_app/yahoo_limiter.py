@@ -4,7 +4,5 @@ from threading import BoundedSemaphore
 
 # Yahoo throttles by IP. Keep local max-parallel bursts conservative, even when
 # Polygon concurrency is high. Render retains its prior shared cap.
-_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
-_local_default = "0" if _render else "1"
-YAHOO_REQUEST_LIMIT = int(os.getenv("YAHOO_REQUEST_LIMIT", "4" if os.getenv("LOCAL_MAX", _local_default) == "1" else "16"))
+YAHOO_REQUEST_LIMIT = int(os.getenv("YAHOO_REQUEST_LIMIT", "4"))
 YAHOO_REQUEST_SEMAPHORE = BoundedSemaphore(YAHOO_REQUEST_LIMIT)
