@@ -12,7 +12,7 @@ Optional env
     POLYGON_RPM=5        Per-key calls/minute limit (free tier = 5). Total pool throughput = N_keys * RPM.
     POLY_MAX_PARALLEL=0  Max keys used simultaneously (0 = all). Tune to avoid overwhelming Polygon.
     SEC_USER_AGENT="YourName you@email.com"   (SEC EDGAR asks for contact info)
-    GAP_MIN=0.30  MAX_EVENTS=20  SIM_K=20  MIN_PRICE=0.5  MIN_DAY_VOL=100000  MIN_PM_VOL=0
+    GAP_MIN=0.30  MAX_EVENTS=8  SIM_K=20  MIN_PRICE=0.5  MIN_DAY_VOL=100000  MIN_PM_VOL=0
     STOP_PCT=0.20        stop distance (above entry) used for R-multiples + chart stop-outs
 
 Data
@@ -170,7 +170,10 @@ SEC_UA = os.getenv("SEC_USER_AGENT", "GapFadeAnalyzer admin@example.com")
 GAP_MIN = float(os.getenv("GAP_MIN", "0.30"))
 LOOKBACK_DAYS = 365
 HISTORY_DAYS = 740            # retain a full two years of daily candles plus split/calendar buffer
-MAX_EVENTS = int(os.getenv("MAX_EVENTS", "20"))
+# Limit cold historical minute-bar fetches by default so a fresh report has a
+# better chance of completing quickly. Operators can raise MAX_EVENTS when
+# they prefer broader historical coverage over response time.
+MAX_EVENTS = int(os.getenv("MAX_EVENTS", "8"))
 SIM_K = int(os.getenv("SIM_K", "20"))
 MIN_PRICE = float(os.getenv("MIN_PRICE", "0.5"))
 MIN_DAY_VOL = int(os.getenv("MIN_DAY_VOL", "100000"))

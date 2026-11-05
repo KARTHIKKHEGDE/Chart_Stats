@@ -28,17 +28,10 @@
   };
   window.UserActivity = { record };
 
-  const notice = document.createElement('div');
-  notice.setAttribute('role', 'note');
-  notice.textContent = 'Activity history is enabled for admin review: sign-ins, pages, tool actions, and submitted searches are logged. Passwords and unsent text are not recorded.';
-  notice.style.cssText = 'padding:4px 18px;background:#080c10;border-bottom:1px solid #1c252d;color:#82919e;font:10px/1.4 Consolas,monospace;text-align:right';
-  const mountNotice = () => { if (!notice.isConnected) document.body.prepend(notice); };
-  if (document.body) mountNotice(); else document.addEventListener('DOMContentLoaded', mountNotice, { once: true });
-
   record('page_view', document.title || location.pathname);
   document.addEventListener('click', event => {
     const control = event.target.closest('button, a, [role="button"], [onclick], .ticker_tab, .user_card_row');
-    if (!control || control.disabled || notice.contains(control)) return;
+    if (!control || control.disabled) return;
     const previousView = currentView();
     const label = control.getAttribute('aria-label') || control.title || control.innerText || control.textContent;
     const details = { control: control.tagName.toLowerCase() };
