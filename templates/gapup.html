@@ -969,22 +969,74 @@ function formatIstDateTime(value){
 // ── GlobeNewswire & Wire Feeds panel ────────────────────────────────────────
 const _gnwAiCache = {};
 
-async function loadGnwFeed(panel, ticker) {
-  if (!panel || panel._gnwLoading) return;
+async function refreshYahooNews(panel, ticker) {
+  if (!panel || !ticker) return;
+  const list = panel.querySelector('[data-news-list]');
+  if (!list) return;
+  try {
+    const query = new URLSearchParams({user: currentUser||'', token: sessionToken||'', ticker, offset: '0'});
+    const response = await fetch(`/api/scanner-news-more?${query.toString()}`);
+    if (!response.ok) return;
+    const data = await response.json();
+    const items = Array.isArray(data.news) ? data.news : [];
+    if (!items.length) return;
+    const seen = new Set([...list.querySelectorAll('[data-news-key]')].map(row => (row.dataset.newsKey||'').trim().toLowerCase()));
+    let added = 0;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i];
+      const key = String(item.url || item.title || '').trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      list.insertAdjacentHTML('afterbegin', newsPressReleaseRow(item, ticker));
+      seen.add(key);
+      added++;
+    }
+    if (added > 0) warmNewsSummaries(ticker, items);
+  } catch(e) {
+    console.debug('Yahoo news auto-refresh error:', e);
+  }
+}
+
+function startNewsAutoRefresh(tab, ticker) {
+  if (!tab || !ticker) return;
+  if (tab.newsRefreshTimer) clearInterval(tab.newsRefreshTimer);
+  tab.newsRefreshTimer = setInterval(async () => {
+    if (!tab || !tab.container || !tab.container.isConnected) {
+      if (tab.newsRefreshTimer) clearInterval(tab.newsRefreshTimer);
+      return;
+    }
+    const gnwPanel = tab.container.querySelector('[data-gnw-panel]');
+    if (gnwPanel) await loadGnwFeed(gnwPanel, ticker, true);
+    const yahooPanel = tab.container.querySelector('[data-news-panel]');
+    if (yahooPanel) await refreshYahooNews(yahooPanel, ticker);
+  }, 60000);
+}
+
+async function loadGnwFeed(panel, ticker, force=false) {
+  if (!panel || (panel._gnwLoading && !force)) return;
   panel._gnwLoading = true;
   panel._ticker = ticker || panel._ticker || '';
   const inner = panel.querySelector('[data-gnw-inner]');
   if (!inner) return;
-  inner.innerHTML = '<div style="color:#777;font-size:12px;padding:6px 0">Loading GlobeNewswire &amp; Wire feeds…</div>';
+  if (!force && !panel._gnwLoaded) {
+    inner.innerHTML = '<div style="color:#777;font-size:12px;padding:6px 0">Loading GlobeNewswire &amp; Wire feeds…</div>';
+  }
   try {
     const qs = new URLSearchParams({user: currentUser||'', token: sessionToken||'', ticker: panel._ticker});
+    if (force) qs.set('refresh', '1');
     const resp = await fetch('/api/gnw-feed?' + qs.toString());
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || 'Feed request failed');
     renderGnwPanel(inner, data.categories || [], panel._ticker);
     panel._gnwLoaded = true;
+    const badge = panel.querySelector('[data-gnw-timer-badge]');
+    if (badge) {
+      const now = new Date().toLocaleTimeString('en-US', {hour12: false, hour: '2-digit', minute: '2-digit'});
+      badge.textContent = `● Auto-refreshes 1m · updated ${now}`;
+    }
   } catch(e) {
-    inner.innerHTML = `<div style="color:#ff8888;font-size:12px;padding:6px 0">Could not load wire feeds: ${esc(e.message)}</div>`;
+    if (!panel._gnwLoaded) {
+      inner.innerHTML = `<div style="color:#ff8888;font-size:12px;padding:6px 0">Could not load wire feeds: ${esc(e.message)}</div>`;
+    }
   } finally {
     panel._gnwLoading = false;
   }
@@ -1779,6 +1831,7 @@ function closeTab(t){
   if(!openTabs[t]) return;
   if(openTabs[t].timer) clearTimeout(openTabs[t].timer);
   if(openTabs[t].progressTimer) clearInterval(openTabs[t].progressTimer);
+  if(openTabs[t].newsRefreshTimer) clearInterval(openTabs[t].newsRefreshTimer);
   if(openTabs[t].container) openTabs[t].container.remove();
   tickerChatHistories.delete(t);
   delete openTabs[t];
@@ -2083,6 +2136,7 @@ function renderTab(tab, r, isRefresh){
       <span style="display:flex;align-items:center;gap:8px">
         <span>📡 GlobeNewswire Feeds · Public Companies, Financing &amp; Warrants</span>
         <span style="font-size:10px;padding:1px 7px;border-radius:3px;background:#ffa50022;color:#ffa500;border:1px solid #ffa50044;font-weight:bold">DILUTION RADAR</span>
+        <span data-gnw-timer-badge style="font-size:11px;color:#3ddc84;background:#14231b;border:1px solid #234c34;padding:1px 7px;border-radius:3px;font-weight:normal">● Auto-refreshes 1m</span>
       </span>
       <button type="button" class="gnwRefreshBtn" data-ticker="${esc(h.ticker)}" style="font-size:11px;padding:3px 9px;background:#162330;border:1px solid #2c4257;color:#8ed5ff;border-radius:3px;cursor:pointer">&#x21bb; Refresh</button>
     </div>
@@ -2127,6 +2181,7 @@ function renderTab(tab, r, isRefresh){
   tab.container.querySelectorAll('table.sort').forEach(makeSortable);
   const gnwPanel = tab.container.querySelector('[data-gnw-panel]');
   if (gnwPanel) loadGnwFeed(gnwPanel, h.ticker);
+  startNewsAutoRefresh(tab, h.ticker);
   const gnwRefresh = tab.container.querySelector('.gnwRefreshBtn');
   if (gnwRefresh) gnwRefresh.onclick = () => {
     const p = gnwRefresh.closest('[data-gnw-panel]');

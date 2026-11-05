@@ -3837,10 +3837,12 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
         )
         WARRANT_KW = re.compile(r'\b(?:warrant|warrants|inducement|certificate|certificates)\b', re.I)
 
+        force_refresh = (request.args.get('refresh') or '').strip() == '1'
         cache_key = f'gnw_rss_v7_{ticker}'
-        cached = cget(cache_key, 120)
-        if cached is not None:
-            return jsonify(cached)
+        if not force_refresh:
+            cached = cget(cache_key, 60)
+            if cached is not None:
+                return jsonify(cached)
 
         # 1. Fetch ticker-specific news if ticker is provided
         ticker_items = []
