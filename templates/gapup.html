@@ -1929,6 +1929,26 @@ async function loadPremarketSpikeChart(tab,card,item){
   }
 }
 
+async function loadGapEventChart(tab,card,item){
+  if(!tab||item._chartLoading||item._chartError||item.chart?.bars?.t?.length)return;
+  item._chartLoading=true;
+  const report=tab.result,query=new URLSearchParams({ticker:report?.head?.ticker||'',date:item.date,user:currentUser||'',token:sessionToken||''});
+  try{
+    const data=await responseJson(await fetch('/api/session-chart?'+query.toString()),'Historical event chart');
+    if(tab.result!==report||!card.isConnected)return;
+    const loaded={...item,title:item.title||data.title,chart:data.chart,ticker:report?.head?.ticker};
+    tab.sessionChartCache[item.date]=loaded;
+    tab.EV[Number(card.dataset.evSlot)]=loaded;
+    card._chartItem=loaded;
+  }catch(error){
+    item._chartError=true;
+    if(tab.result===report&&card.isConnected){item.title=`${item.title||item.date} · chart unavailable: ${error.message}`;}
+  }finally{
+    item._chartLoading=false;
+    if(tab.result===report&&card.isConnected)drawEvAll(tab.EV,tab.container);
+  }
+}
+
 async function loadPremarketSpikeDays(tab,report,forceRetry=false){
   const ticker=report?.head?.ticker;
   if(!tab.container.querySelector('[data-premarket-spikes]')||!ticker)return;
@@ -1971,7 +1991,7 @@ function renderTab(tab, r, isRefresh){
   tab.lastChart = r.chart;
   tab.pathNormalization = tab.pathNormalization || 'prev_close';
   tab.lastChart.normalization = tab.pathNormalization;
-  tab.EV = r.evcharts || [];
+  tab.EV = (r.evcharts || []).map(item=>item.chart?item:{...item,chart:{bars:{t:[]}}});
   tab.result = r;
   tab.sessionDates = r.session_dates || [];
   tab.sessionChartCache = tab.sessionChartCache || {};
@@ -2168,6 +2188,7 @@ function drawEvAll(evList, containerEl){
     const renderItem=card._contextChart?{...item,chart:{...item.chart,bars:card._contextChart}}:item;
     cv._anchorDate=card._sessionDate;cv._eventTicker=tabForCharts?.result?.head?.ticker||item.ticker||'';cv._panOffset=card._panOffset||0;cv._onPanChange=value=>card._panOffset=value;cv._onPanEdge=card._onPanEdge;cv._showVWAP=card._showVWAP!==undefined?card._showVWAP:vwapChecked;cv._showEMA5Ext=card._showEMA5Ext!==undefined?card._showEMA5Ext:ema5ExtChecked;cv._ema5ExtThreshold=card._ema5ExtThreshold||ema5ExtVal;cv._avwapAnchors=card._avwapAnchors||null;
     if(!card._chartVisible&&$('#chart_modal').style.display!=='flex'){window.evLazyObserver.observe(card);return;}
+    if(!item.chart?.bars?.t?.length){if(item.premarketSpikeChart)loadPremarketSpikeChart(tabForCharts,card,item);else if(!String(item.title||'').startsWith('TODAY '))loadGapEventChart(tabForCharts,card,item);}
     const markerDates=card._contextDates?.length?card._contextDates:[card._sessionDate||item.date],markerKey=`${String(tabForCharts?.result?.head?.ticker||'').toUpperCase()}|${[...new Set(markerDates)].sort().join(',')}`;
     if(tabForCharts&&cv._marketEventKey!==markerKey){cv._marketEventKey=markerKey;cv._marketEvents=[];loadChartMarketEvents(tabForCharts.result?.head?.ticker,markerDates).then(events=>{if(cv._marketEventKey!==markerKey||!cv.isConnected)return;cv._marketEvents=events;if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);if($('#chart_modal').style.display==='flex'&&currentModalSlot===i)renderModalChart();});}
     if(!card._contextChart&&!card._contextLoading&&!card._contextError)loadChartContext(card,tabForCharts);

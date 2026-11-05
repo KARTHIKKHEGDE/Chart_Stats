@@ -102,7 +102,6 @@ def analyze_event(t, i, daily, ctx):
         "path_vwap": m.get("path_vwap"), "path_vwap_dev": m.get("path_vwap_dev"),
         "path_twap": m.get("path_twap"), "path_twap_dev": m.get("path_twap_dev"),
         "path_vwap_twap_spread": m.get("path_vwap_twap_spread"),
-        "chart": chart_pack(df, m, pc, row["date"], fl),
         "outcome": outcome(h2c, o2c, close, hod),
     }
     dv = e["path_vwap_dev"] or []
@@ -435,11 +434,12 @@ def fdate(d):
         return str(d)
 
 
-def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
+def build_report(t, live, lm, lpath, lctx, events, S, notes, daily, hod_times=None):
     simset = {id(e) for e in S}
     st = stats(S)
     open_hod = recent_open_hod_stats(daily)
-    hod_times = recent_hod_times(t, daily)
+    if hod_times is None:
+        hod_times = recent_hod_times(t, daily)
     gap_events = [e for e in events if e.get("gap", 0) >= GAP_MIN]
     pm_events = [e for e in events if e.get("pm_spike")]
     pm_st = premarket_spike_stats(pm_events)
@@ -593,10 +593,10 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
         except Exception:
             pass
         evch.append({"title": f"TODAY {day_str}  gap {pct(gap_live, 0)}  (live · {chart_source})", "date": day_str, "sim": True,
-                     "chart": chart_pack(today_chart_df, lm, pc, day_obj, fl_now)})
+                     "chart": chart_pack(today_chart_df, {**lm, "_refs": None}, pc, day_obj, fl_now)})
     for i, e in enumerate(events, 1):
         evch.append({"title": f"#{i}  {fdate(e['date'])}  gap {pct(e['gap'], 0)}  O→C {pct(e['o2c'], 0)}", "date": e["date"],
-                     "sim": id(e) in simset, "chart": e["chart"]})
+                     "sim": id(e) in simset})
 
     # ---- extras: stats / patterns
     summary = summary_text(st)
@@ -638,8 +638,12 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily):
     # Project V and price/VWAP deviation separately, weighting histories by today's as-of VWAP state.
     # Recompose expected price as P=V*(1+D), anchored to today's observed values.
     now_k = max((k for k, v in enumerate(lpath) if v is not None), default=None)
-    _, live_v, live_d = vwap_frame_paths(live["df"], pc, False) if live.get("df") is not None else ([None]*(NPTS+1),)*3
-    live_tw, live_dt, live_spread, live_active_tw = twap_frame_paths(live["df"], pc, False) if live.get("df") is not None else ([None]*(NPTS+1),)*4
+    live_v = lm.get("path_vwap") or [None] * (NPTS + 1)
+    live_d = lm.get("path_vwap_dev") or [None] * (NPTS + 1)
+    live_tw = lm.get("path_twap") or [None] * (NPTS + 1)
+    live_dt = lm.get("path_twap_dev") or [None] * (NPTS + 1)
+    live_spread = lm.get("path_vwap_twap_spread") or [None] * (NPTS + 1)
+    live_active_tw = lm.get("path_active_twap") or [None] * (NPTS + 1)
     def vwap_state_weight(event):
         """Prefer analogs whose price/VWAP relationship matches today at the cutoff."""
         history = event.get("path_vwap_dev") or []

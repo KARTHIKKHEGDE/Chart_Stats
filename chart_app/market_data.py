@@ -25,6 +25,7 @@ math = app.math
 np = app.np
 os = app.os
 pd = app.pd
+time = app.time
 poly_get = app.poly_get
 requests = app.requests
 yf = app.yf
@@ -38,6 +39,35 @@ _DEEPDIVE_NEIGHBOR_CANDLE_CACHE_MAX = 6
 _DAILY_CANDLE_REFRESH_LOCK = threading.Lock()
 _DAILY_CANDLE_REFRESH_PENDING = set()
 _DAILY_CANDLE_REFRESH_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="daily-candle-refresh")
+_SEC_SESSION = requests.Session()
+_SEC_SESSION.mount("https://", requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=8))
+_SEC_REQUEST_LOCK = threading.Lock()
+_SEC_NEXT_REQUEST = 0.0
+
+
+def _sec_get(url, headers):
+    """Start SEC requests no faster than eight per second across this process."""
+    global _SEC_NEXT_REQUEST
+    with _SEC_REQUEST_LOCK:
+        now = time.time()
+        if _SEC_NEXT_REQUEST > now:
+            time.sleep(_SEC_NEXT_REQUEST - now)
+            now = time.time()
+        _SEC_NEXT_REQUEST = now + 0.125
+    return _SEC_SESSION.get(url, headers=headers, timeout=(3, 8))
+
+
+def _sec_ticker_map():
+    if not SEC_UA:
+        raise RuntimeError("Set SEC_USER_AGENT to your name and email to enable SEC data.")
+    mapping = cget("sec_tickers", 7 * 86400)
+    if mapping is not None:
+        return mapping
+    response = _sec_get("https://www.sec.gov/files/company_tickers.json", headers={"User-Agent": SEC_UA})
+    response.raise_for_status()
+    mapping = {value["ticker"].upper(): value["cik_str"] for value in response.json().values()}
+    cput("sec_tickers", mapping)
+    return mapping
 
 
 def _yahoo_call(function):
@@ -240,15 +270,10 @@ def load_companyfacts(t):
     result={"shares":[],"cash":[],"short_term_investments":[],"operating_cash_flow":[]}
     try:
         h = {"User-Agent": SEC_UA}
-        m = cget("sec_tickers", 7 * 86400)
-        if m is None:
-            raw = requests.get("https://www.sec.gov/files/company_tickers.json", headers=h, timeout=25).json()
-            m = {v["ticker"].upper(): v["cik_str"] for v in raw.values()}
-            cput("sec_tickers", m)
+        m = _sec_ticker_map()
         cik = m.get(t.upper())
         if cik:
-            j = requests.get(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{int(cik):010d}.json",
-                             headers=h, timeout=40).json()
+            j = _sec_get(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{int(cik):010d}.json", headers=h).json()
             facts=j.get("facts") or {}
             def units(namespace, name, unit):
                 concept=(facts.get(namespace) or {}).get(name) or {}
@@ -301,13 +326,29 @@ def load_companyfacts(t):
 
 def load_shares_out(t):
     """SEC EDGAR cover-page shares outstanding with filing dates (point-in-time)."""
-    # Keep the legacy key/API for callers outside the dilution report while
-    # sourcing it from the same companyfacts response as cash-flow analysis.
-    d=cget(f"{t}_sec",3*86400)
-    if d is None:
-        d=load_companyfacts(t).get("shares") or []
-        cput(f"{t}_sec",d)
-    return d
+    ticker = str(t).upper()
+    key = f"{ticker}_sec_shares_v2"
+    rows = cget(key, 3 * 86400)
+    if rows is not None:
+        return rows
+    try:
+        cik = _sec_ticker_map().get(ticker)
+        if not cik:
+            rows = []
+        else:
+            url = ("https://data.sec.gov/api/xbrl/companyconcept/"
+                   f"CIK{int(cik):010d}/dei/EntityCommonStockSharesOutstanding.json")
+            response = _sec_get(url, headers={"User-Agent": SEC_UA})
+            response.raise_for_status()
+            facts = response.json().get("units", {}).get("shares", [])
+            rows = sorted([{"filed": row["filed"], "end": row.get("end"), "val": row["val"]}
+                           for row in facts if row.get("filed") and row.get("val", 0) > 0],
+                          key=lambda row: row["filed"])
+    except Exception:
+        return []
+    cput(key, rows)
+    cput(f"{ticker}_sec", rows)
+    return rows
 
 
 def poly_frame(rows):
@@ -499,6 +540,7 @@ def latest_security_stats(t, force=False):
         float_row, float_error = float_future.result()
 
     result = {
+        "type": details.get("type"),
         "shares_outstanding": details.get("share_class_shares_outstanding") or details.get("weighted_shares_outstanding"),
         "market_cap": details.get("market_cap"),
         "float_shares": float_row.get("free_float"),
@@ -508,6 +550,8 @@ def latest_security_stats(t, force=False):
     if not result["errors"] and any(result[key] is not None for key in
                                     ("shares_outstanding", "market_cap", "float_shares")):
         cput(key, result)
+    if details.get("type"):
+        cput(f"{t}_type", {"type": details["type"]})
     return result
 
 
@@ -582,9 +626,9 @@ def path_full(df, pc, full):
     return out
 
 
-def vwap_frame_paths(df, pc, full=True):
+def vwap_frame_paths(df, pc, full=True, frame=None):
     """Previous-close price (P), cumulative 04:00 ET VWAP (V), and price/VWAP deviation (D)."""
-    frame = vwap_twap_frame(df)
+    frame = frame if frame is not None else vwap_twap_frame(df)
     if frame.empty or pc <= 0:
         empty = [None] * (NPTS + 1)
         return empty, empty.copy(), empty.copy()
@@ -641,9 +685,9 @@ def vwap_twap_frame(df):
     return result
 
 
-def twap_frame_paths(df, pc, full=True):
+def twap_frame_paths(df, pc, full=True, frame=None):
     """5-minute TWAP height, price/TWAP deviation and VWAP-TWAP spread paths."""
-    frame = vwap_twap_frame(df)
+    frame = frame if frame is not None else vwap_twap_frame(df)
     empty = [None] * (NPTS + 1)
     if frame.empty or pc <= 0:
         return empty, empty.copy(), empty.copy(), empty.copy()
@@ -666,7 +710,7 @@ def twap_frame_paths(df, pc, full=True):
     return tw, dtp, spread, active
 
 
-def bars2(df, include_after_hours=False):
+def bars2(df, include_after_hours=False, refs=None):
     """1-minute OHLCV + continuous VWAP for interactive chart timeframes."""
     mm = df.index.hour * 60 + df.index.minute
     end = 1200 if include_after_hours else RG_END
@@ -677,17 +721,20 @@ def bars2(df, include_after_hours=False):
     vw = ((tp * s.v).cumsum() / s.v.cumsum().replace(0, np.nan)).ffill()
     b = s
     vb = vw.reindex(b.index)
-    refs = vwap_twap_frame(df)
+    refs = refs if refs is not None else vwap_twap_frame(df)
     tw = refs["twap"].reindex(b.index)
     atw = refs["active_twap"].reindex(b.index)
-    avh, running_high, anchor_vol, anchor_dollar = [], -float("inf"), 0.0, 0.0
-    for _, row in b.iterrows():
-        if float(row.h) > running_high:
-            running_high, anchor_vol, anchor_dollar = float(row.h), 0.0, 0.0
-        v = max(0.0, float(row.v or 0))
-        anchor_vol += v
-        anchor_dollar += float((row.h+row.l+row.c)/3)*v
-        avh.append(anchor_dollar/anchor_vol if anchor_vol else None)
+    highs = b.h.to_numpy(dtype=float)
+    volumes = np.maximum(b.v.to_numpy(dtype=float), 0.0)
+    typical = ((b.h + b.l + b.c) / 3).to_numpy(dtype=float)
+    previous_max = np.maximum.accumulate(highs)
+    new_high = np.r_[True, highs[1:] > previous_max[:-1]]
+    groups = np.cumsum(new_high)
+    volume_series = pd.Series(volumes)
+    dollar_series = pd.Series(typical * volumes)
+    anchor_volume = volume_series.groupby(groups).cumsum().to_numpy()
+    anchor_dollar = dollar_series.groupby(groups).cumsum().to_numpy()
+    avh = np.divide(anchor_dollar, anchor_volume, out=np.full(len(b), np.nan), where=anchor_volume > 0)
     def finite_round(values):
         result = []
         for value in values:
@@ -698,7 +745,7 @@ def bars2(df, include_after_hours=False):
     return {"t": [int(x) for x in t], "o": b.o.round(4).tolist(), "h": b.h.round(4).tolist(),
             "l": b.l.round(4).tolist(), "c": b.c.round(4).tolist(),
             "v": [int(x) for x in b.v.round(0).tolist()], "vw": finite_round(vb),
-            "tw": finite_round(tw), "atw": finite_round(atw), "avh": [round(x,4) if x is not None else None for x in avh]}
+            "tw": finite_round(tw), "atw": finite_round(atw), "avh": finite_round(avh)}
 
 
 def mdl(rg, start_ts, entry, entry_min, close, stop_price, exclude_entry_bar=False):
@@ -900,8 +947,8 @@ def metrics(df, pc, full=True):
 
     rng = hod - lod
     downlegs = calc_downlegs(rg, hod_ts, th=0.12, min_drop=0.08)
-    _, path_vwap, path_vwap_dev = vwap_frame_paths(df, pc, full)
-    path_twap, path_twap_dev, path_vwap_twap_spread, path_active_twap = twap_frame_paths(df, pc, full)
+    _, path_vwap, path_vwap_dev = vwap_frame_paths(df, pc, full, frame=refs)
+    path_twap, path_twap_dev, path_vwap_twap_spread, path_active_twap = twap_frame_paths(df, pc, full, frame=refs)
     ref_close = refs.loc[:rg.index[-1]].iloc[-1] if not refs.empty and len(refs.loc[:rg.index[-1]]) else None
     r.update(
         rg=True, open=o, hod=hod, lod=lod, close=close, hod_min=hod_ts.hour * 60 + hod_ts.minute,
@@ -935,6 +982,7 @@ def metrics(df, pc, full=True):
         path=path_full(df, pc, full), path_vwap=path_vwap, path_vwap_dev=path_vwap_dev,
         path_twap=path_twap, path_twap_dev=path_twap_dev,
         path_vwap_twap_spread=path_vwap_twap_spread, path_active_twap=path_active_twap)
+    r["_refs"] = refs
     return r
 
 
@@ -943,7 +991,7 @@ def chart_pack(df, m, pc, day, float_shares=None, include_after_hours=True):
     sig = [{"name": k, "m": v["m"], "p": v["p"], "stop_m": v["stop_m"],
             "stop_price": v["stop_price"], "stop_pct": v["stop_pct"], "pnl": v["pnl"]}
            for k, v in (m.get("models") or {}).items()]
-    return {"bars": bars2(df, include_after_hours), "date": str(day), "pc": pc, "open": m.get("open"), "pmh": m.get("pm_high"),
+    return {"bars": bars2(df, include_after_hours, refs=m.get("_refs")), "date": str(day), "pc": pc, "open": m.get("open"), "pmh": m.get("pm_high"),
             "off": ist_off(day), "stop": STOP_PCT, "sig": sig, "float_shares": float_shares,
             "cover": ({"m": m["close_min"], "p": m["close"]} if m.get("rg") else None),
             "after_hours": bool(include_after_hours)}

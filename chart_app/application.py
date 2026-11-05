@@ -9,9 +9,8 @@ Setup
     python gapup_fade.py 9000                -> pick any port (or set PORT=9000)
 
 Optional env
-    POLYGON_RPM=5        Per-key calls/minute limit (free tier = 5). Total pool throughput = N_keys * RPM.
-    POLY_MAX_PARALLEL=0  Max keys used simultaneously (0 = all). Tune to avoid overwhelming Polygon.
-    SEC_USER_AGENT="YourName you@email.com"   (SEC EDGAR asks for contact info)
+    POLYGON_RPM=5        Per-key request-rate estimate used for progress ETA.
+    SEC_USER_AGENT="Your Name your@email.com"   (real SEC contact identity; required for SEC data)
     GAP_MIN=0.30  MAX_EVENTS=8  SIM_K=20  MIN_PRICE=0.5  MIN_DAY_VOL=100000  MIN_PM_VOL=0
     STOP_PCT=0.20        stop distance (above entry) used for R-multiples + chart stop-outs
 
@@ -25,6 +24,8 @@ Everything fetched from Polygon is cached in ./.gapcache so repeat runs are fast
 (Cache note: 1-min files are reused as-is, nothing to refetch for the new sections.)
 """
 import os, re, json, time, math, random, threading, uuid, warnings, hashlib, secrets, datetime as dt
+import contextlib
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -64,109 +65,28 @@ ET = ZoneInfo("America/New_York")
 IST = ZoneInfo("Asia/Kolkata")
 POLY_KEY = os.getenv("POLYGON_API_KEY", "")
 POLY_RPM = float(os.getenv("POLYGON_RPM", "5"))
-# Maximum number of keys to use in parallel (tune via POLY_MAX_PARALLEL; default = all)
-POLY_MAX_PARALLEL = int(os.getenv("POLY_MAX_PARALLEL", "0"))  # 0 = unlimited (use all keys)
 
-# ----------------------------------------------------------------------------- multi-key pool
-# Each key gets its own HTTP session (separate TCP pool + unique headers) so
-# Polygon sees 50 distinct client fingerprints rather than one shared connection.
-_key_pool: list = []       # ordered list of active API-key strings
-_key_last: dict = {}       # key -> last-used timestamp (float)
-_key_sessions: dict = {}   # key -> dedicated requests.Session
+# ----------------------------------------------------------------------------- Polygon client
+_key_pool: list = []
+_key_cooldown: dict = {}  # expiry time after an actual HTTP 429
 _key_lock = threading.Lock()
-
-# Realistic User-Agent strings across different HTTP client libraries/versions.
-# Mixing Python, Node, Go and curl variants means consecutive requests look like
-# they come from different programs / machines.
-_UA_POOL = [
-    "python-requests/2.28.2",
-    "python-requests/2.31.0",
-    "python-requests/2.32.3",
-    "python-httpx/0.23.3",
-    "python-httpx/0.27.0",
-    "python-urllib3/1.26.18",
-    "python-urllib3/2.1.0",
-    "aiohttp/3.8.6",
-    "aiohttp/3.9.3",
-    "aiohttp/3.10.5",
-    "node-fetch/2.7.0",
-    "node-fetch/3.3.2",
-    "axios/1.4.0",
-    "axios/1.6.5",
-    "axios/1.7.2",
-    "got/12.6.1",
-    "got/14.2.1",
-    "undici/5.28.3",
-    "Go-http-client/1.1",
-    "Go-http-client/2.0",
-    "curl/7.88.1",
-    "curl/8.4.0",
-    "curl/8.7.1",
-    "Wget/1.21.4",
-    "Java/17.0.9",
-    "Java/21.0.2",
-    "okhttp/4.12.0",
-    "Dart/3.3 (dart:io)",
-    "Ruby/3.3.0 net-http",
-    "libwww-perl/6.77",
-]
-
-_ACCEPT_ENCODINGS = [
-    "gzip",
-    "gzip, deflate",
-    "gzip, deflate, br",
-    "deflate, gzip;q=1.0, *;q=0.5",
-    "gzip;q=1.0, identity; q=0.5, *;q=0",
-]
-
-_ACCEPT_LANGS = [
-    "en-US,en;q=0.9",
-    "en-GB,en;q=0.8",
-    "en;q=1.0",
-    "en-US;q=0.9,en;q=0.8",
-    "*",
-]
-
-
-def _make_session(key: str) -> requests.Session:
-    """Create a fresh requests.Session with a randomised fingerprint for this key."""
-    s = requests.Session()
-    # Deterministically seed the choice so the same key always gets the same UA
-    # (avoids churn), but each key gets a different one.
-    rng = random.Random(hashlib.md5(key.encode()).hexdigest())
-    s.headers.update({
-        "User-Agent":      rng.choice(_UA_POOL),
-        "Accept":          "application/json, */*;q=0.8",
-        "Accept-Encoding": rng.choice(_ACCEPT_ENCODINGS),
-        "Accept-Language": rng.choice(_ACCEPT_LANGS),
-        "Cache-Control":   "no-cache",
-    })
-    return s
+_key_cursor = 0
+_POLY_SESSION = requests.Session()
+_POLY_SESSION.mount("https://", requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=50))
 
 
 def _init_key_pool():
-    """Build / refresh the key pool from POLYGON_API_KEYS (comma-sep) or POLYGON_API_KEY.
-    Each key gets its own HTTP session so TCP connections are isolated.
-    """
-    global _key_pool, _key_last, _key_sessions
+    """Load configured Polygon credentials and preserve their round-robin order."""
+    global _key_pool, _key_cooldown
     raw = os.getenv("POLYGON_API_KEYS", "") or os.getenv("POLYGON_API_KEY", "")
-    keys = [k.strip() for k in raw.split(",") if k.strip()]
-    # Deduplicate while preserving order
-    seen, unique = set(), []
-    for k in keys:
-        if k not in seen:
-            seen.add(k)
-            unique.append(k)
-    _key_pool = unique
-    for k in _key_pool:
-        _key_last.setdefault(k, 0.0)
-        if k not in _key_sessions:
-            _key_sessions[k] = _make_session(k)
+    keys = [key.strip() for key in raw.split(",") if key.strip()]
+    _key_pool = list(dict.fromkeys(keys))
+    _key_cooldown = {key: expiry for key, expiry in _key_cooldown.items() if key in _key_pool}
 
 _init_key_pool()   # bootstrap pool at module load (env already loaded above)
 
 
-SEC_UA = os.getenv("SEC_USER_AGENT", "GapFadeAnalyzer admin@example.com")
+SEC_UA = os.getenv("SEC_USER_AGENT", "").strip()
 GAP_MIN = float(os.getenv("GAP_MIN", "0.30"))
 LOOKBACK_DAYS = 365
 HISTORY_DAYS = 740            # retain a full two years of daily candles plus split/calendar buffer
@@ -190,8 +110,6 @@ PM_START, RG_START, RG_END = 240, 570, 960   # minutes since midnight ET
 GAP_REL_START, GAP_REL_END = -360, 720  # minutes from premarket high for the gap-retention chart
 
 # ----------------------------------------------------------------------------- cache / http
-_cache_lock = threading.Lock()
-
 def cget(key, ttl=None):
     p = CACHE / f"{key}.json"
     if not p.exists():
@@ -206,114 +124,114 @@ def cget(key, ttl=None):
 
 def cput(key, val):
     try:
-        with _cache_lock:
-            p = CACHE / f"{key}.json"
-            p.write_text(json.dumps(val), encoding="utf-8")
+        p = CACHE / f"{key}.json"
+        tmp = p.with_name(f"{p.name}.{uuid.uuid4().hex}.tmp")
+        tmp.write_text(json.dumps(val), encoding="utf-8")
+        os.replace(tmp, p)
     except Exception:
         pass
 
 
-def _acquire_slot(rpm: float) -> tuple:
-    """Atomically reserve the earliest available request slot across all keys in the pool.
-    Returns (key, wait_seconds). Must be called with _key_lock held.
+@contextlib.contextmanager
+def _timed_stage(job, label):
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed = round(time.perf_counter() - started, 3)
+        timings = job.setdefault("timings", {})
+        timings[label] = round(timings.get(label, 0.0) + elapsed, 3)
+        app.logger.info("[timing] %s %.3fs", label, elapsed)
 
-    Per-key gap = 60 / rpm (capped at 12s for free-tier safety).
-    With N=50 keys the pool throughput = 50 * 5 = 250 RPM effective.
-    """
-    gap = min(12.0, 60.0 / max(0.1, rpm))
-    now = time.time()
-    best_key, best_slot = None, float("inf")
-    for k in _key_pool:
-        slot = max(now, _key_last.get(k, 0.0) + gap)
-        if slot < best_slot:
-            best_slot, best_key = slot, k
-    if best_key is None:
-        raise RuntimeError("No Polygon API keys configured in pool.")
-    _key_last[best_key] = best_slot
-    return best_key, max(0.0, best_slot - now)
+
+def _timed_call(job, label, function):
+    started = time.perf_counter()
+    try:
+        return function()
+    finally:
+        elapsed = round(time.perf_counter() - started, 3)
+        job.setdefault("timings", {})[label] = elapsed
+        app.logger.info("[timing] %s %.3fs", label, elapsed)
+
+
+def _event_fingerprint(daily, index, ctx):
+    """Fingerprint only the daily context used by one event, not today's full history."""
+    event_day = daily[index]["date"]
+    rows = daily[max(0, index - 252):min(len(daily), index + 32)]
+    sec = [(row.get("filed"), row.get("val")) for row in (ctx.get("sec") or [])
+           if row.get("filed") and row["filed"] <= event_day]
+    payload = {
+        "rows": [(r.get("date"), r.get("o"), r.get("h"), r.get("l"), r.get("c"), r.get("v")) for r in rows],
+        "splits": [row for row in (ctx.get("splits") or []) if row.get("date") and row["date"] <= event_day],
+        "sec": sec,
+        "ratio": round(float(ctx["ratio"]), 3) if ctx.get("ratio") else None,
+    }
+    return hashlib.sha1(json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+                        .encode("utf-8")).hexdigest()[:16]
+
+
+def _next_polygon_key():
+    """Choose the next configured key; wait only when every key is cooling down."""
+    global _key_cursor
+    while True:
+        with _key_lock:
+            if not _key_pool:
+                raise RuntimeError("POLYGON_API_KEY is not set. Set it and restart the app.")
+            now = time.time()
+            count = len(_key_pool)
+            for offset in range(count):
+                index = (_key_cursor + offset) % count
+                key = _key_pool[index]
+                if _key_cooldown.get(key, 0) <= now:
+                    _key_cursor = (index + 1) % count
+                    return key
+            wait = max(0.1, min(_key_cooldown.get(key, now + 1) for key in _key_pool) - now)
+        time.sleep(wait)
 
 
 def _poly_request_one(path: str, params: dict) -> dict:
-    """Make a single Polygon REST request using the key-pool with full fingerprint evasion.
-
-    Evasion techniques applied per request:
-      - Each key uses its own HTTP session (unique User-Agent, Accept-*, TCP pool).
-      - Random timing jitter (50-400 ms) after every rate-limit sleep so requests
-        arrive at Polygon with human-like irregular intervals, not a robotic clock.
-      - On 429, the penalised key's TCP connection is shed by recreating its session
-        so Polygon's connection-tracking cannot correlate retries.
-    """
+    """Call Polygon through one pooled session, rotating configured keys on 429."""
+    global _key_cursor
     if not _key_pool:
         _load_env_file()
         _init_key_pool()
     if not _key_pool:
         raise RuntimeError("POLYGON_API_KEY is not set. Set it and restart the app.")
 
-    rpm = float(os.getenv("POLYGON_RPM", str(POLY_RPM)))
-    p = dict(params)
-
-    max_attempts = max(10, len(_key_pool) * 3)
+    payload = dict(params)
+    max_attempts = max(5, len(_key_pool) * 3)
     for attempt in range(max_attempts):
-        with _key_lock:
-            key, wait = _acquire_slot(rpm)
-
-        # Wait for the rate-limit window PLUS random jitter so requests don't
-        # arrive on a clock tick (equal-interval pattern is a detection signal).
-        if wait > 0:
-            time.sleep(wait)
-        time.sleep(random.uniform(0.02, 0.08))   # 20-80 ms subtle jitter per request
-
-        # Use this key's dedicated session (unique fingerprint per key)
-        with _key_lock:
-            session = _key_sessions.get(key)
-            if session is None:
-                session = _make_session(key)
-                _key_sessions[key] = session
-
-        p["apiKey"] = key
+        key = _next_polygon_key()
+        payload["apiKey"] = key
         try:
-            r = session.get("https://api.polygon.io" + path, params=p, timeout=12)
+            response = _POLY_SESSION.get("https://api.polygon.io" + path, params=payload, timeout=(3, 8))
         except requests.RequestException:
-            time.sleep(random.uniform(0.3, 0.8))
+            time.sleep(min(2.0, 0.25 * (attempt + 1)))
             continue
-
-        if r.status_code == 429:
-            # Rate-limited: penalise key AND recreate its session to drop the TCP conn.
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After", "30")
+            try:
+                cooldown = max(1.0, float(retry_after))
+            except (TypeError, ValueError):
+                try:
+                    cooldown = max(1.0, parsedate_to_datetime(retry_after).timestamp() - time.time())
+                except Exception:
+                    cooldown = 30.0
             with _key_lock:
-                _key_last[key] = max(_key_last.get(key, 0.0), time.time() + 30.0)
-                old = _key_sessions.pop(key, None)
-                if old:
-                    try: old.close()
-                    except Exception: pass
-                _key_sessions[key] = _make_session(key)
-            time.sleep(random.uniform(0.5, 1.5))
+                _key_cooldown[key] = time.time() + cooldown
             continue
-
-        if r.status_code == 401:
-            # Key permanently rejected (Unknown / Invalid API key) — evict from pool.
+        if response.status_code == 401:
             with _key_lock:
                 if key in _key_pool:
                     _key_pool.remove(key)
-                _key_last.pop(key, None)
-                old = _key_sessions.pop(key, None)
-                if old:
-                    try: old.close()
-                    except Exception: pass
+                    _key_cursor = _key_cursor % max(1, len(_key_pool))
+                _key_cooldown.pop(key, None)
             if not _key_pool:
-                raise RuntimeError(f"All Polygon keys rejected (401): {r.text[:150]}")
+                raise RuntimeError(f"All Polygon keys rejected (401): {response.text[:150]}")
             continue
-
-        if r.status_code == 403:
-            # 403 on Polygon means timeframe or feature not allowed on current plan
-            # (e.g. data older than 2 years on Basic plan). The key is VALID,
-            # so do NOT evict the key or retry across other keys (they will also 403).
-            r.raise_for_status()
-
-        r.raise_for_status()
-        return r.json()
-
+        response.raise_for_status()
+        return response.json()
     raise RuntimeError(f"Polygon request failed after {max_attempts} attempts: {path}")
-
 
 def poly_get(path, params=None):
     """Public API: fetch one Polygon endpoint, distributing load across all 50 keys.
@@ -433,7 +351,6 @@ def run_job(job, t, refresh):
         _live_res   = [None]
         _daily_res  = [None]
         _splits_res = [None]
-        _type_res   = [None]
         _sec_res    = [None]
         _security_res = [None]
         _news_res   = [None]
@@ -447,40 +364,34 @@ def run_job(job, t, refresh):
 
         def _get_live():
             try:
-                _live_res[0] = live_snapshot(t,fast=True,include_profile=False)
+                _live_res[0] = _timed_call(job,"live",lambda:live_snapshot(t,fast=True,include_profile=False))
             except Exception as ex:
                 _err[0] = ex
             finally:core_finished('Yahoo live candles')
 
         def _get_daily():
             try:
-                _daily_res[0] = load_daily(t, refresh)
+                _daily_res[0] = _timed_call(job,"daily",lambda:load_daily(t, refresh))
             except Exception as ex:
                 _err[0] = ex
             finally:core_finished('daily price history')
 
         def _get_splits():
             try:
-                _splits_res[0] = load_splits(t)
+                _splits_res[0] = _timed_call(job,"splits",lambda:load_splits(t))
             except Exception:
                 _splits_res[0] = []
             finally:core_finished('split history')
 
-        def _get_type():
-            try:
-                _type_res[0] = ticker_type(t)
-            except Exception:
-                _type_res[0] = None
-
         def _get_sec():
             try:
-                _sec_res[0] = load_shares_out(t)
+                _sec_res[0] = _timed_call(job,"sec_shares",lambda:load_shares_out(t))
             except Exception:
                 _sec_res[0] = []
 
         def _get_security_stats():
             try:
-                _security_res[0] = latest_security_stats(t, force=refresh)
+                _security_res[0] = _timed_call(job,"security_stats",lambda:latest_security_stats(t, force=refresh))
             except Exception as ex:
                 _security_res[0] = {
                     "errors": [f"Polygon security metadata: {type(ex).__name__}: {ex}"]
@@ -488,7 +399,7 @@ def run_job(job, t, refresh):
 
         def _get_news():
             try:
-                _news_res[0] = _get_scanner_news(t)
+                _news_res[0] = _timed_call(job,"news",lambda:_get_scanner_news(t))
             except Exception:
                 _news_res[0] = []
 
@@ -496,7 +407,6 @@ def run_job(job, t, refresh):
             threading.Thread(target=_get_live,      daemon=True),
             threading.Thread(target=_get_daily,     daemon=True),
             threading.Thread(target=_get_splits,    daemon=True),
-            threading.Thread(target=_get_type,      daemon=True),
             threading.Thread(target=_get_sec,       daemon=True),
             threading.Thread(target=_get_security_stats, daemon=True),
             threading.Thread(target=_get_news,      daemon=True),
@@ -511,9 +421,9 @@ def run_job(job, t, refresh):
         optional_deadline=time.monotonic()+1.25
         for th in stage1_threads[3:]:
             th.join(max(0.0,optional_deadline-time.monotonic()))
-        sec_history_pending=stage1_threads[4].is_alive()
-        security_stats_pending=stage1_threads[5].is_alive()
-        news_pending=stage1_threads[6].is_alive()
+        sec_history_pending=stage1_threads[3].is_alive()
+        security_stats_pending=stage1_threads[4].is_alive()
+        news_pending=stage1_threads[5].is_alive()
 
         if _err[0]:
             raise _err[0]
@@ -523,7 +433,7 @@ def run_job(job, t, refresh):
 
         live   = _live_res[0]
         splits = _splits_res[0]
-        typ    = _type_res[0]
+        typ    = security_stats.get("type") or ticker_type(t)
         sec    = _sec_res[0]
         security_stats = _security_res[0] or {}
         polygon_float = security_stats.get("float_shares")
@@ -571,7 +481,7 @@ def run_job(job, t, refresh):
         hod_times_thread=None
         if daily:
             def _get_recent_hod_times():
-                try:hod_times_res[0]=recent_hod_times(t,daily)
+                try:hod_times_res[0]=_timed_call(job,"hod_times",lambda:recent_hod_times(t,daily))
                 except Exception:hod_times_res[0]={"date_from":None,"date_to":None,"rows":[]}
             hod_times_thread=threading.Thread(target=_get_recent_hod_times,daemon=True,
                                               name=f"hod-times-{t}")
@@ -591,15 +501,12 @@ def run_job(job, t, refresh):
         # analysis can reuse the full metrics/chart payload without refetching or
         # recomputing each historical session. Changes in prices, SEC shares,
         # splits, or current float context invalidate the cache automatically.
-        event_fingerprint=hashlib.sha256(json.dumps(
-            {"daily":daily,"sec":ctx["sec"],"splits":ctx["splits"],
-             "float":ctx["float"],"ratio":ctx["ratio"]},
-            sort_keys=True,separators=(",",":"),default=str).encode("utf-8")).hexdigest()[:16]
         results={}
         pending_idxs=[]
         for i in idxs:
-            event_key=f"{t}_{daily[i]['date']}_gap_event_v1"
-            cached_event=cget(event_key,30*86400)
+            event_key=f"{t}_{daily[i]['date']}_gap_event_v2"
+            event_fingerprint=_event_fingerprint(daily, i, ctx)
+            cached_event=cget(event_key)
             if isinstance(cached_event,dict) and cached_event.get("fingerprint")==event_fingerprint and "event" in cached_event:
                 results[i]=cached_event["event"]
             else:
@@ -614,8 +521,9 @@ def run_job(job, t, refresh):
         n_events=len(idxs)
 
         def _analyze(i):
-            event=clean(analyze_event(t,i,daily,ctx))
-            cput(f"{t}_{daily[i]['date']}_gap_event_v1",
+            event_fingerprint=_event_fingerprint(daily, i, ctx)
+            event=_timed_call(job,f"analyze:{daily[i]['date']}",lambda:clean(analyze_event(t,i,daily,ctx)))
+            cput(f"{t}_{daily[i]['date']}_gap_event_v2",
                  {"fingerprint":event_fingerprint,"event":event})
             return i,event
 
@@ -637,7 +545,7 @@ def run_job(job, t, refresh):
                        msg=f"Found {n_events} historical sessions · reusing {event_cache_hits} complete analyses · loading the remaining candles with {fetch_workers} worker(s)…")
             with ThreadPoolExecutor(max_workers=fetch_workers,thread_name_prefix="gap-minute-fetch") as fetch_pool:
                 with ThreadPoolExecutor(max_workers=analyze_workers,thread_name_prefix="gap-event-analysis") as analyze_pool:
-                    fetch_futures={fetch_pool.submit(_prefetch_minute,arg):arg for arg in fetch_args}
+                    fetch_futures={fetch_pool.submit(_timed_call,job,f"minute_fetch:{daily[arg[1]]['date']}",lambda arg=arg:_prefetch_minute(arg)):arg for arg in fetch_args}
                     analyze_futures={}
                     completed=event_cache_hits;cached_done=event_cache_hits
                     for future in as_completed(fetch_futures):
@@ -652,15 +560,21 @@ def run_job(job, t, refresh):
                     # old code waited for every analysis at the end, hiding
                     # progress and delaying report readiness behind stragglers.
                     analyzed=event_cache_hits
+                    analyze_uncached_done=0
+                    analyze_durations=[]
                     job.update(stage="analyzing",progress_pct=74,
                                msg=f"Candles loaded · calculating patterns for {n_events-event_cache_hits} uncached sessions…")
                     for future in as_completed(analyze_futures):
                         idx_i,event=future.result()
                         results[idx_i]=event
                         analyzed+=1
+                        analyze_uncached_done+=1
+                        analyze_durations.append(float(job.get("timings",{}).get(f"analyze:{daily[idx_i]['date']}",0.1)))
+                        analyze_remaining=max(0,n_events-event_cache_hits-analyze_uncached_done)
+                        analyze_eta=int(analyze_remaining*sum(analyze_durations)/max(1,len(analyze_durations)))
                         job.update(analysis_done=analyzed,analysis_total=n_events,
                                    progress_pct=74+int(22*analyzed/max(1,n_events)),
-                                   eta_seconds=max(2,int((n_events-analyzed)*.15+2)),
+                                   eta_seconds=analyze_eta,
                                    msg=f"Analyzing historical patterns · {analyzed}/{n_events} sessions complete…")
         else:
             job.update(stage="building_report",progress_pct=92 if event_cache_hits else 78,
@@ -677,15 +591,14 @@ def run_job(job, t, refresh):
                 skipped += 1
 
         # ------------------------------------------------------------------ report
-        if hod_times_thread is not None:
-            hod_times_thread.join()
         job.update(stage="building_report",progress_pct=97,eta_seconds=3,
                    msg="Historical analysis is complete · building the report and chart data…")
-        lm    = metrics(live["df"], live["pc"], False)
+        lm    = _timed_call(job,"live_metrics",lambda:metrics(live["df"], live["pc"], False))
         lctx  = ctx_feats(live["hist"], len(live["hist"]))
-        lpath = path_full(live["df"], live["pc"], False)
-        _, _, live_dev_path = vwap_frame_paths(live["df"], live["pc"], False)
-        _, live_twap_dev_path, live_spread_path, _ = twap_frame_paths(live["df"], live["pc"], False)
+        lpath = lm.get("path") or path_full(live["df"], live["pc"], False)
+        live_dev_path = lm.get("path_vwap_dev") or [None] * (NPTS + 1)
+        live_twap_dev_path = lm.get("path_twap_dev") or [None] * (NPTS + 1)
+        live_spread_path = lm.get("path_vwap_twap_spread") or [None] * (NPTS + 1)
         vwap_now_k = max((k for k, value in enumerate(live_dev_path) if value is not None), default=None)
         lg    = ((lm.get("open") or live["cur"]) / live["pc"] - 1)
         lf    = {"gap": max(lg, 0.01), "bucket": pbucket(lm.get("open") or live["cur"]), "float": fl_now,
@@ -756,7 +669,8 @@ def run_job(job, t, refresh):
         notes.append("Historical data is point-in-time for tickers still listed; delisted names are missing, "
                      "which makes fades look weaker than reality (survivorship bias).")
 
-        report = clean(build_report(t, live, lm, lpath, lctx, events, S, notes, daily))
+        hod_times=hod_times_res[0] or {"date_from":None,"date_to":None,"rows":[]}
+        report = _timed_call(job,"build_report",lambda:clean(build_report(t, live, lm, lpath, lctx, events, S, notes, daily, hod_times)))
         report["premarket_surge_days"] = None
         reverse_splits = []
         for split in splits or []:
@@ -797,10 +711,15 @@ def run_job(job, t, refresh):
                 report["text"] += f"\n- [{item['kind']}] {item['title']} ({item['publisher']}) {item['url']}"
         else:
             report["text"] += f"\n\nLatest Press Releases · Yahoo Finance\n{report['news_status']}"
+        serialize_started=time.perf_counter()
+        serialized_report=json.dumps(report, separators=(",",":"), ensure_ascii=False)
+        job.setdefault("timings",{})["json_serialize"] = round(time.perf_counter()-serialize_started,3)
+        job["report_json_bytes"] = len(serialized_report.encode("utf-8"))
         job["result"] = report
         job["status"] = "done"
         job.update(stage="complete",progress_pct=100,eta_seconds=0,msg="Report ready.",finished_at=time.time())
     except Exception as ex:
+        app.logger.exception("Ticker analysis failed for %s", t)
         job["status"] = "error"
         job["stage"] = "error"
         job["error"]  = f"{type(ex).__name__}: {ex}"
