@@ -2685,6 +2685,7 @@ def sec_dilution_history_status():
 @app.route("/api/session-chart")
 def session_chart():
     """Load any trading session on demand so chart arrows can visit non-gap-up days."""
+    request_started = time.perf_counter()
     user = (request.args.get("user") or "").strip().lower()
     token = (request.args.get("token") or "").strip()
     ticker = (request.args.get("ticker") or "").strip().upper()
@@ -2698,24 +2699,44 @@ def session_chart():
     except ValueError:
         return jsonify({"error": "Invalid session date"}), 400
     try:
+        daily_started = time.perf_counter()
         daily = load_daily(ticker)
+        daily_seconds = time.perf_counter() - daily_started
         index = next((i for i, row in enumerate(daily) if row["date"] == day), None)
         if index is None:
+            daily_started = time.perf_counter()
             daily = load_daily(ticker, force=True)
+            daily_seconds += time.perf_counter() - daily_started
             index = next((i for i, row in enumerate(daily) if row["date"] == day), None)
         if index is None or index == 0:
+            app.logger.info("[timing] session-chart ticker=%s date=%s daily=%.3fs total=%.3fs result=no-daily-session",
+                            ticker, day, daily_seconds, time.perf_counter() - request_started)
             return jsonify({"error": f"No daily session data for {day}"}), 404
         row, pc = daily[index], float(daily[index - 1]["c"])
+        minute_cached = cget(f"{ticker}_{day}_1m_polygon_v1") is not None
+        minute_started = time.perf_counter()
         df = minute_df(ticker, day)
+        minute_seconds = time.perf_counter() - minute_started
         if df is None or df.empty:
+            app.logger.info("[timing] session-chart ticker=%s date=%s daily=%.3fs minute=%.3fs total=%.3fs minute_cache=%s result=no-bars",
+                            ticker, day, daily_seconds, minute_seconds,
+                            time.perf_counter() - request_started, minute_cached)
             return jsonify({"error": f"No intraday bars are available for {day}"}), 404
         m = metrics(df, pc, True)
         gap = (m.get("open") / pc - 1) if m.get("open") and pc else None
         o2c = (m.get("close") / m.get("open") - 1) if m.get("close") and m.get("open") else None
         title = f"{day}  gap {pct(gap, 0)}  O→C {pct(o2c, 0)}"
+        chart_started = time.perf_counter()
+        chart = chart_pack(df, m, pc, dt.date.fromisoformat(day))
+        chart_seconds = time.perf_counter() - chart_started
+        app.logger.info("[timing] session-chart ticker=%s date=%s daily=%.3fs minute=%.3fs chart_pack=%.3fs total=%.3fs minute_cache=%s",
+                        ticker, day, daily_seconds, minute_seconds, chart_seconds,
+                        time.perf_counter() - request_started, minute_cached)
         return jsonify({"date": day, "title": title, "sim": False,
-                        "chart": chart_pack(df, m, pc, dt.date.fromisoformat(day))})
+                        "chart": chart})
     except Exception as exc:
+        app.logger.exception("[timing] session-chart failed ticker=%s date=%s after %.3fs",
+                             ticker, day, time.perf_counter() - request_started)
         return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 502
 
 

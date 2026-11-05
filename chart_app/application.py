@@ -9,7 +9,7 @@ Setup
     python gapup_fade.py 9000                -> pick any port (or set PORT=9000)
 
 Optional env
-    POLYGON_RPM=5        Per-key request-rate estimate used for progress ETA.
+    POLYGON_RPM=5        Per-key request-rate ceiling (50 keys = 250 requests/minute).
     SEC_USER_AGENT="Your Name your@email.com"   (real SEC contact identity; required for SEC data)
     GAP_MIN=0.30  MAX_EVENTS=12  SIM_K=20  MIN_PRICE=0.5  MIN_DAY_VOL=100000  MIN_PM_VOL=0
     STOP_PCT=0.20        stop distance (above entry) used for R-multiples + chart stop-outs
@@ -69,17 +69,18 @@ warnings.filterwarnings("ignore")
 ET = ZoneInfo("America/New_York")
 IST = ZoneInfo("Asia/Kolkata")
 POLY_KEY = os.getenv("POLYGON_API_KEY", "")
-POLY_RPM = float(os.getenv("POLYGON_RPM", "5"))
+POLY_RPM = min(5.0, max(0.1, float(os.getenv("POLYGON_RPM", "5"))))
+POLYGON_KEY_POOL_LIMIT = 50
 IS_RENDER = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
 LOCAL_MAX = os.getenv("LOCAL_MAX", "0" if IS_RENDER else "1").strip() == "1"
 CPU_COUNT = os.cpu_count() or 4
 FETCH_WORKERS_CAP = 100 if LOCAL_MAX else 50
 ANALYZE_WORKERS = max(4, CPU_COUNT * 2) if LOCAL_MAX else 8
-STAGE1_WAIT = float(os.getenv("OPTIONAL_WAIT", "8" if LOCAL_MAX else "1.25"))
+STAGE1_WAIT = float(os.getenv("OPTIONAL_WAIT", "1.25"))
 REPORT_WORKERS = max(4, CPU_COUNT // 2) if LOCAL_MAX else 2
-SPIKE_WORKERS = max(4, CPU_COUNT) if LOCAL_MAX else 4
+SPIKE_WORKERS = 50
 WARMUP_WORKERS = max(2, CPU_COUNT // 2) if LOCAL_MAX else 1
-SERVER_THREADS = 64 if LOCAL_MAX else 4
+SERVER_THREADS = 64 if LOCAL_MAX else 50
 
 # ----------------------------------------------------------------------------- Polygon client
 _key_pool: list = []
@@ -88,7 +89,7 @@ _key_next_request: dict = {}  # per-key pacing for the configured Polygon reques
 _key_lock = threading.Lock()
 _key_cursor = 0
 _POLY_SESSION = requests.Session()
-_POLY_SESSION.mount("https://", requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=50))
+_POLY_SESSION.mount("https://", requests.adapters.HTTPAdapter(pool_connections=50, pool_maxsize=50))
 
 
 def _init_key_pool():
@@ -103,16 +104,22 @@ def _init_key_pool():
         if match and value.strip():
             numbered.append((int(match.group(1)), value.strip()))
     keys.extend(value for _, value in sorted(numbered))
-    _key_pool = list(dict.fromkeys(keys))
+    unique_keys = list(dict.fromkeys(keys))
+    _key_pool = unique_keys[:POLYGON_KEY_POOL_LIMIT]
     _key_cooldown = {key: expiry for key, expiry in _key_cooldown.items() if key in _key_pool}
     if _key_pool:
-        print(f"[polygon] configured key pool: {len(_key_pool)} unique key(s), {POLY_RPM:g} RPM/key", flush=True)
+        aggregate_rpm = len(_key_pool) * POLY_RPM
+        truncated = f", capped from {len(unique_keys)}" if len(unique_keys) > len(_key_pool) else ""
+        print(f"[polygon] configured key pool: {len(_key_pool)} unique key(s){truncated}, "
+              f"{POLY_RPM:g} RPM/key, max {aggregate_rpm:g} requests/minute", flush=True)
     else:
         print("[polygon] no API keys configured", flush=True)
 
 _init_key_pool()   # bootstrap pool at module load (env already loaded above)
 print(f"[startup] LOCAL_MAX={int(LOCAL_MAX)} CPU={CPU_COUNT} report_workers={REPORT_WORKERS} "
-      f"fetch_cap={FETCH_WORKERS_CAP} analyze_workers={ANALYZE_WORKERS} stage1_wait={STAGE1_WAIT:g}s",
+      f"fetch_cap={FETCH_WORKERS_CAP} spike_workers={SPIKE_WORKERS} "
+      f"analyze_workers={ANALYZE_WORKERS} server_threads={SERVER_THREADS} "
+      f"stage1_wait={STAGE1_WAIT:g}s",
       flush=True)
 
 
@@ -120,7 +127,7 @@ SEC_UA = os.getenv("SEC_USER_AGENT", "").strip()
 GAP_MIN = float(os.getenv("GAP_MIN", "0.30"))
 LOOKBACK_DAYS = 365
 HISTORY_DAYS = 740            # retain a full two years of daily candles plus split/calendar buffer
-MAX_EVENTS = int(os.getenv("MAX_EVENTS", "30" if LOCAL_MAX else "12"))
+MAX_EVENTS = int(os.getenv("MAX_EVENTS", "50" if LOCAL_MAX else "12"))
 SIM_K = int(os.getenv("SIM_K", "20"))
 MIN_PRICE = float(os.getenv("MIN_PRICE", "0.5"))
 MIN_DAY_VOL = int(os.getenv("MIN_DAY_VOL", "100000"))
@@ -202,8 +209,7 @@ def _event_fingerprint(daily, index, ctx):
 def _next_polygon_key():
     """Choose a key that is both out of cooldown and within its per-key RPM."""
     global _key_cursor
-    # Keep each credential within the documented 5 RPM budget; with 50
-    # configured keys this allows up to 250 useful requests/minute in aggregate.
+    # At the default 5 RPM, 50 credentials have a 250 requests/minute ceiling.
     min_interval = 60.0 / max(0.1, POLY_RPM)
     while True:
         with _key_lock:
@@ -431,6 +437,8 @@ def run_job(job, t, refresh):
                     provisional=provisional[-MAX_EVENTS:]
                     if provisional:
                         workers=min(max(1,len(_key_pool)),len(provisional),FETCH_WORKERS_CAP)
+                        app.logger.info("[parallel] speculative candles ticker=%s sessions=%d workers=%d keys=%d rpm_per_key=%g",
+                                        t,len(provisional),workers,len(_key_pool),POLY_RPM)
                         with ThreadPoolExecutor(max_workers=workers,thread_name_prefix="spec-minute-fetch") as pool:
                             list(pool.map(_prefetch_minute,[(t,index,stale_daily) for index in provisional]))
                 except Exception:
@@ -629,6 +637,8 @@ def run_job(job, t, refresh):
             # concurrency remains bounded by available Polygon keys and events.
             fetch_workers=min(n_keys,len(pending_idxs),FETCH_WORKERS_CAP)
             analyze_workers=min(ANALYZE_WORKERS,len(pending_idxs))
+            app.logger.info("[parallel] historical candles ticker=%s tasks=%d workers=%d keys=%d rpm_per_key=%g",
+                            t,len(pending_idxs),fetch_workers,len(_key_pool),POLY_RPM)
             cached_sessions=sum(cget(f"{t}_{daily[i]['date']}_1m_polygon_v1") is not None for i in pending_idxs)
             uncached_sessions=max(0,len(pending_idxs)-cached_sessions)
             effective_rpm=max(0.1,float(POLY_RPM))*max(1,fetch_workers)
@@ -1140,6 +1150,8 @@ def _compute_premarket_spikes(ticker):
             candidates.append(index)
     if candidates:
         workers = min(SPIKE_WORKERS, max(1,len(_key_pool)), max(1,len(candidates)))
+        app.logger.info("[parallel] premarket spike candles ticker=%s tasks=%d workers=%d keys=%d rpm_per_key=%g",
+                        ticker,len(candidates),workers,len(_key_pool),POLY_RPM)
         with ThreadPoolExecutor(max_workers=workers) as pool:
             list(pool.map(_prefetch_minute, [(ticker, index, daily) for index in candidates]))
     found = []
