@@ -3328,6 +3328,9 @@ async function verifyPwd(){
   }
 }
 
+$('#go').onclick = () => run(false);
+$('#rf').onclick = () => run(true);
+$('#t').addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); run(false); } });
 $('#u_name').onclick=openPwdModal;
 $('#admin_rename_btn').onclick=openRenameModal;
 if($('#rename_input')) $('#rename_input').addEventListener('keydown',e=>{if(e.key==='Enter')submitRename();});
@@ -3753,18 +3756,18 @@ function loadScannerVoices(){
   if(preferredVoice && scannerAlarmEnabled) playNextScannerAnnouncement();
 }
 
-let scannerCountdownSec = 15;
+let scannerCountdownSec = 60;
 let scannerCountdownTimer = null;
 
 function startScannerCountdown(){
   if(scannerCountdownTimer) clearInterval(scannerCountdownTimer);
-  scannerCountdownSec = 15;
+  scannerCountdownSec = 60;
   scannerCountdownTimer = setInterval(()=>{
     scannerCountdownSec--;
     const el = $('#scanner_countdown');
     if(el) el.textContent = scannerCountdownSec + 's';
     if(scannerCountdownSec <= 0){
-      scannerCountdownSec = 15;
+      scannerCountdownSec = 60;
       refreshScanner();
     }
   }, 1000);
