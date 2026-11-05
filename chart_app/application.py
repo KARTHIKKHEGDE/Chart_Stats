@@ -433,9 +433,9 @@ def run_job(job, t, refresh):
 
         live   = _live_res[0]
         splits = _splits_res[0]
-        typ    = security_stats.get("type") or ticker_type(t)
         sec    = _sec_res[0]
         security_stats = _security_res[0] or {}
+        typ    = security_stats.get("type") or ticker_type(t)
         polygon_float = security_stats.get("float_shares")
         polygon_shares = security_stats.get("shares_outstanding")
         if polygon_float:
