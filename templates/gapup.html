@@ -954,7 +954,7 @@ async function initAuth(){
   }
 }
 
-let lastText="", timer=null, lastChart=null, EV=[];
+let lastText="", timer=null, EV=[];
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 async function responseJson(response,service='Request'){
   const body=await response.text();
@@ -1004,7 +1004,7 @@ function makeSortable(tb){
   });
 }
 
-let openTabs = {}; // ticker -> { ticker, result, lastText, lastChart, EV, container, timer, isRunning }
+let openTabs = {}; // ticker -> { ticker, result, lastText, EV, container, timer, isRunning }
 let activeTab = null;
 window.gapDeepDiveFilingsJump=null;
 let gapDeepDiveFilingsJumpStarted=false;
@@ -1418,14 +1418,13 @@ function getAioSummary(tab,ticker,dilutionReport){
   if(aioWarmCache.has(key))return aioWarmCache.get(key);
   const pending=fetch('/api/all-in-one-summary',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
     .then(response=>responseJson(response,'All-in-One summary'))
+    .then(result=>{if(result.intraday_stats_pending)aioWarmCache.delete(key);return result;})
     .catch(error=>{aioWarmCache.delete(key);throw error;});
   aioWarmCache.set(key,pending);return pending;
 }
 function warmAioSummary(tab,ticker,dilutionReport=null){
-  const asOf=tab?.container?.querySelector('#recent_filings_asof')?.value||'';
   setAnalysisPrefetchStatus(tab,'[data-aio-summary-trigger]','loading','All-in-One Summary is preparing in the background.');
-  return (dilutionReport?Promise.resolve(dilutionReport):getDilutionHistory(ticker,asOf))
-    .then(report=>getAioSummary(tab,ticker,report))
+  return getAioSummary(tab,ticker,dilutionReport)
     .then(result=>{setAnalysisPrefetchStatus(tab,'[data-aio-summary-trigger]','ready','All-in-One Summary is ready.');return result;})
     .catch(error=>{setAnalysisPrefetchStatus(tab,'[data-aio-summary-trigger]','error','Background summary could not finish; click to retry.');console.debug('All-in-One prefetch unavailable:',error.message);return null;});
 }
@@ -1460,13 +1459,23 @@ async function openAioModal(event,btn){
   modal.style.display='flex';content.hidden=true;content.innerHTML='';
   if(!tab||String(h.ticker||'').toUpperCase()!==ticker){status.textContent=`Load the ${ticker} report before opening its AI summary.`;return;}
   const asOf=tab?.container?.querySelector('#recent_filings_asof')?.value||'';
-  status.textContent='Starting SEC filing review…';
+  status.textContent='Preparing the summary from the loaded report, news, events, and SEC filing list…';
+  const dilutionJob=getDilutionHistory(ticker,asOf,progress=>{
+    if(modal.style.display==='flex'&&content.hidden)status.textContent=dilutionProgressMessage(progress);
+  }).then(report=>{
+    setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','ready','Dilution history is ready.');
+    if(modal.style.display==='flex'&&String($('#aio_title')?.textContent||'').includes(ticker)){
+      const section=[...content.querySelectorAll('.aioSection')].find(item=>item.querySelector('h3')?.textContent.includes('Most Relevant Dilution'));
+      if(section&&!section.querySelector('[data-aio-sec-facts]'))section.insertAdjacentHTML('beforeend',`<div data-aio-sec-facts>${aioDilutionFacts(report)}</div>`);
+    }
+    return report;
+  }).catch(error=>{
+    setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','error','Background dilution review could not finish; click to retry.');
+    console.debug('Background dilution review unavailable:',error.message);return null;
+  });
   try{
-    const dilutionReport=await getDilutionHistory(ticker,asOf,progress=>{
-      if(modal.style.display==='flex')status.textContent=dilutionProgressMessage(progress);
-    });
-    status.textContent='SEC review complete. Preparing the All-in-One summary…';
-    const d=await getAioSummary(tab,ticker,dilutionReport);
+    const dilutionReport=null;
+    const d=await getAioSummary(tab,ticker,null);
     const chip=level=>{const l=(level||'').toLowerCase();return`<span class="aioChip ${l}">${(level||'?').toUpperCase()}</span>`;};
     const esc2=s=>typeof s==='string'?s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'):'—';
     const li=arr=>(arr||[]).length?`<ul style="margin:4px 0 0 16px;padding:0">${(arr||[]).map(x=>`<li style="font-size:13px;color:#c8d5e0;line-height:1.6">${esc2(x)}</li>`).join('')}</ul>`:'';
@@ -1681,10 +1690,6 @@ function switchTab(t){
 
   const tab = openTabs[t];
   if(tab){
-    if(tab.lastChart){
-      const cv = tab.container.querySelector('#cv');
-      if(cv) drawChart(tab.lastChart, cv);
-    }
     if(tab.EV && tab.EV.length){
       drawEvAll(tab.EV, tab.container);
     }
@@ -1771,8 +1776,6 @@ async function run(refresh){
       container: cont,
       isRunning: true,
       lastText: '',
-      lastChart: null,
-      pathNormalization: 'dev',
       EV: [],
       timer: null
     };
@@ -1845,35 +1848,7 @@ function premarketSpikeChartCard(index){
   return `<div class="evc" data-ev-slot="${index}" onclick="openChartModal(${index})"><div class="evhead"><div class="evt" id="evtitle${index}"></div><span class="eventDateTag" data-event-date></span><div class="evcontrols"><select class="evtf" title="Timeframe"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select><button class="evzoom" data-zoom="out" title="Zoom out">−</button><button class="evzoom" data-zoom="in" title="Zoom in">+</button><button class="evmeasure" type="button" title="Drag across bars to measure volume, dollar volume, and float rotation">Measure</button><button class="evtoday" type="button" title="Return to today's live chart">Today</button></div></div><canvas id="ev${index}"></canvas></div>`;
 }
 
-function applyPremarketSpikeChart(tab,report,spikeChart,days){
-  const chart=report?.chart;
-  if(!chart||!spikeChart)return false;
-  const history={prev_close:spikeChart.price,dev:spikeChart.dev,vwap:spikeChart.vwap,
-    twap:spikeChart.twap,active_twap:spikeChart.active_twap,dt:spikeChart.dt,spread:spikeChart.spread,gap:spikeChart.gap};
-  if(!Object.values(history).some(item=>item?.paths?.length))return false;
-  chart.spike_history=history;chart.spikeComparison=true;
-  const liveByMode={prev_close:chart.today,dev:chart.dev_today,vwap:chart.vwap_today,
-    twap:chart.twap_today,active_twap:chart.active_twap_today,dt:chart.dt_today,spread:chart.spread_today,gap:chart.gap_today};
-  const nowByMode={prev_close:chart.now_k,dev:chart.now_k,vwap:chart.now_k,twap:chart.now_k,active_twap:chart.now_k,
-    dt:chart.now_k,spread:chart.now_k,gap:chart.gap_now_k};
-  chart.spike_projections={};
-  Object.entries(history).forEach(([mode,series])=>{
-    const live=liveByMode[mode],now=nowByMode[mode],proj=Array((series?.med||[]).length).fill(null);
-    if(!series?.paths?.length||!Array.isArray(live)||!Number.isInteger(now)||live[now]==null){chart.spike_projections[mode]=proj;return;}
-    proj[now]=live[now];
-    for(let k=now+1;k<proj.length;k++){
-      const changes=series.paths.map(path=>path?.[k]!=null&&path?.[now]!=null?path[k]-path[now]:null).filter(value=>value!=null&&Number.isFinite(value));
-      if(changes.length){changes.sort((a,b)=>a-b);const mid=(changes.length-1)/2,lo=Math.floor(mid),hi=Math.ceil(mid);proj[k]=Math.round((live[now]+(changes[lo]+changes[hi])/2)*10000)/10000;}
-    }
-    chart.spike_projections[mode]=proj;
-  });
-  const status=tab.container.querySelector('[data-path-status]');
-  if(status)status.textContent=`Comparing today with ${days.length} historical premarket spike session${days.length===1?'':'s'}.`;
-  const cv=tab.container.querySelector('#cv');if(cv)drawChart(chart,cv);
-  return true;
-}
-
-function renderPremarketSpikeDays(tab,report,days,spikeChart){
+function renderPremarketSpikeDays(tab,report,days){
   const panel=tab.container.querySelector('[data-premarket-spikes]');
   if(!panel||tab.result!==report)return;
   const compact=n=>new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(Number(n)||0);
@@ -1896,10 +1871,7 @@ function renderPremarketSpikeDays(tab,report,days,spikeChart){
     (rows.length?table(cols,rows,null,true):`<div class="foot">No sessions met both thresholds in the last year.</div>`);
   panel.querySelectorAll('table.sort').forEach(makeSortable);
   report.premarket_surge_days=days;
-  if(!applyPremarketSpikeChart(tab,report,spikeChart,days)){
-    const status=tab.container.querySelector('[data-path-status]');
-    if(status)status.textContent=days.length?'Spike sessions found, but comparison chart data is unavailable.':'No historical premarket spike sessions found for comparison.';
-  }
+
 
   days.forEach(spike=>{const existing=tab.EV.find(item=>item.date===spike.date);if(existing){existing.ticker=report.head.ticker;existing.premarketSpikeChart=true;existing.premarketSpikePct=spike.pm_high_pct;existing.premarketSpikeDollarVolume=spike.pm_dollar_volume;}});
   const existingDates=new Set(tab.EV.map(item=>item.date));
@@ -1984,7 +1956,7 @@ async function loadPremarketSpikeDays(tab,report,forceRetry=false){
           continue;
         }
         if(!response.ok)throw new Error(data.error||`Could not load premarket history (HTTP ${response.status}).`);
-        if(tab.result===report)renderPremarketSpikeDays(tab,report,data.days||[],data.spike_chart);
+        if(tab.result===report)renderPremarketSpikeDays(tab,report,data.days||[]);
         return;
       }
       throw new Error('Premarket history is still loading. Try again shortly.');
@@ -2003,9 +1975,6 @@ async function loadPremarketSpikeDays(tab,report,forceRetry=false){
 
 function renderTab(tab, r, isRefresh){
   tab.lastText = r.text;
-  tab.lastChart = r.chart;
-  tab.pathNormalization = tab.pathNormalization || 'prev_close';
-  tab.lastChart.normalization = tab.pathNormalization;
   tab.EV = (r.evcharts || []).map(item=>item.chart?item:{...item,chart:{bars:{t:[]}}});
   tab.result = r;
   tab.sessionDates = r.session_dates || [];
@@ -2042,11 +2011,6 @@ function renderTab(tab, r, isRefresh){
   `<div class="evgrid">`+tab.EV.map((_,i)=>premarketSpikeChartCard(i)).join('')+
      `<\/div><div class="foot"><span class="c" data-tip="VWAP — Volume Weighted Average Price. Key intraday support/resistance.">━ VWAP<\/span> &nbsp; <span style="color:#ff5a5a" data-tip="EMA5 Extension — flagged when high exceeds 5m 9-EMA by threshold % (Thinkorswim).">▼ % 5m 9-EMA Ext</span> &nbsp; <span style="color:#ffd23f">┅ HOD-anchored AVWAP</span> &nbsp; <span style="color:#ffd23f">N News</span> &nbsp; <span style="color:#62c8ff">S SEC filing</span>  <span class="y" data-tip="Pre-market High — highest price before the US market open. Common fade target.">┅ PM high<\/span>  <span class="d" data-tip="Previous Close — yesterday’s close. Gap % is measured from here.">┅ prev close<\/span> &nbsp; <span style="color:#d7ff6e" data-tip="EMA 9 — 9-period EMA on 2-min closes. Fast trend line.">━ EMA9<\/span> <span style="color:#ffa500" data-tip="EMA 21 — 20-period EMA on 2-min closes. Slower trend line. Bearish when EMA9 drops below it.">━ EMA21<\/span> <span class="g" data-tip="Bone Zone cloud — shaded between EMA9 &amp; EMA21. Green = bullish. Red = bearish.">▒<\/span><span class="r">▒<\/span> cloud <span class="d" data-tip="Bollinger Bands (20-period, 2 std dev). Shows expected volatility range on the 2-min chart.">━ BB(20,2)<\/span> &nbsp; <span data-tip="SELL signal — short entry triggered by an entry model.">▼ SELL<\/span> &nbsp; <span data-tip="BUY / Cover signal — close the short here. P&amp;L % shown next to it.">▲ BUY<\/span>. <span data-tip="Lighter shaded background = pre-market session before the US open; all chart times are IST.">Shaded = premarket<\/span>. X axis = IST. Measure: activate Measure, then drag across bars for volume, estimated dollar volume, and float rotation.<\/div><\/div>`;
 
-  const pmGapText = Number.isFinite(r.chart.premarket_gap_pct)
-    ? `${(r.chart.premarket_gap_pct*100).toFixed(1)}% (PM high vs prev close)` : 'Not available';
-  o += `<div class="panel"><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap"><span>${esc(T.p7)}</span><span style="display:flex;align-items:center;gap:12px;font-size:12px;font-weight:normal;color:#aaa"><span data-path-status role="status" style="color:#ffd23f"></span><span>Premarket gap: <b style="color:#e8e8e8">${esc(pmGapText)}</b></span><label for="path_norm">View <select id="path_norm" style="margin-left:5px"><option value="dev">Price vs VWAP (Dᵥ)</option><option value="dt">Price vs TWAP (Dₜ)</option><option value="spread">ln(VWAP / TWAP)</option><option value="vwap">Cumulative VWAP height</option><option value="twap">Clock-time TWAP height</option><option value="prev_close">Recomposed price from previous close</option><option value="gap">% of premarket gap retained</option></select></label></span></div><canvas id="cv"></canvas>`+
-     `<div class="foot" id="path_norm_foot"><span class="b" data-tip="Median path across this ticker’s historical premarket spike sessions.">━ spike-history median<\/span> &nbsp; <span style="color:#6c8" data-tip="Middle 50% range of the ticker’s historical premarket spike sessions.">▒ p25–p75<\/span> &nbsp; <span class="y">━ today<\/span> &nbsp; <span class="y">┅ expected continuation from the historical spike paths<\/span> &nbsp; <span class="d">━ each historical premarket spike<\/span> &nbsp; Default Y = price / cumulative VWAP − 1; expected price = projected VWAP × (1 + deviation).<\/div><\/div>`;
-
   if(r.pd.rows.length) o += `<div class="panel"><div class="ttl">${esc(T.pd)}</div>${table(r.pd.cols,r.pd.rows,null,false)}<div class="foot">${esc(r.pd.foot||'')}</div></div>`;
   o += `<div class="panel recent-filings-panel"><div class="recent-filings-heading"><span><span style="color:#25cf91">●</span> LIVE FILINGS · ${esc(h.ticker)}</span><span style="display:flex;align-items:center;flex-wrap:wrap;gap:12px"><button class="recent-filings-dilution-btn" type="button" id="recent_filings_dilution" data-ticker="${esc(h.ticker)}" title="Dilution history is preparing in the background">Dilution history</button><label class="recent-filings-date" title="Filters all six cards to filings submitted on this day; Dilution history uses the selected date as its as-of date">Filing date <input type="date" id="recent_filings_asof" aria-label="Filter filings by exact date; use as the dilution report as-of date"></label><a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent" target="_blank" rel="noopener noreferrer">Full feed ↗</a></span></div><div class="recent-filings-list" id="recent_filings_feed"></div></div>`;
 
@@ -2056,13 +2020,13 @@ function renderTab(tab, r, isRefresh){
   else loadPremarketSpikeDays(tab,r);
   const filingsDate=tab.container.querySelector('#recent_filings_asof');
   const filingsJump=window.gapDeepDiveFilingsJump;
-  if(filingsDate){const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()),part=k=>parts.find(x=>x.type===k)?.value||'00',today=`${part('year')}-${part('month')}-${part('day')}`,jumpDate=filingsJump?.ticker===String(h.ticker).toUpperCase()?normalizeFilingsDate(filingsJump.date):'',savedDate=normalizeFilingsDate(recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]);filingsDate.max=today;filingsDate.value=jumpDate||savedDate||'';recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]=filingsDate.value;filingsDate.onchange=()=>{const asOf=filingsDate.value;recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]=asOf;const filingsReady=loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker,asOf);setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','loading','Dilution history is preparing in the background.');getDilutionHistory(h.ticker,asOf).then(report=>{setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','ready','Dilution history is ready.');return Promise.all([filingsReady,warmAioSummary(tab,h.ticker,report)]);}).catch(error=>{setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','error','Background dilution review could not finish; click to retry.');console.debug('Dilution prefetch unavailable:',error.message);});};}
+  if(filingsDate){const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()),part=k=>parts.find(x=>x.type===k)?.value||'00',today=`${part('year')}-${part('month')}-${part('day')}`,jumpDate=filingsJump?.ticker===String(h.ticker).toUpperCase()?normalizeFilingsDate(filingsJump.date):'',savedDate=normalizeFilingsDate(recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]);filingsDate.max=today;filingsDate.value=jumpDate||savedDate||'';recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]=filingsDate.value;filingsDate.onchange=()=>{const asOf=filingsDate.value;recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]=asOf;loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker,asOf);setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','loading','Dilution history is preparing in the background.');getDilutionHistory(h.ticker,asOf).then(()=>setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','ready','Dilution history is ready.')).catch(error=>{setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','error','Background dilution review could not finish; click to retry.');console.debug('Dilution prefetch unavailable:',error.message);});warmAioSummary(tab,h.ticker);};}
   if(filingsJump&&filingsJump.ticker===String(h.ticker).toUpperCase()&&filingsDate){const jumpDate=normalizeFilingsDate(filingsJump.date);if(jumpDate){filingsDate.value=jumpDate;recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]=jumpDate;window.gapDeepDiveFilingsJump=null;setTimeout(()=>{tab.container.querySelector('.recent-filings-panel')?.scrollIntoView({behavior:'smooth',block:'center'});requestDilutionHistory(h.ticker,jumpDate);},350);}}
   const reportAsOf=filingsDate?.value||'';
   setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','loading','Dilution history is preparing in the background.');
-  const dilutionReady=getDilutionHistory(h.ticker,reportAsOf).then(report=>{setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','ready','Dilution history is ready.');return report;}).catch(error=>{setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','error','Background dilution review could not finish; click to retry.');console.debug('Dilution prefetch unavailable:',error.message);throw error;});
-  const filingsReady=loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker,reportAsOf).finally(()=>warmNewsSummaries(h.ticker,newsItems));
-  Promise.all([dilutionReady,filingsReady]).then(([report])=>{if(openTabs[h.ticker]===tab&&tab.result===r)return warmAioSummary(tab,h.ticker,report);}).catch(()=>{});
+  const dilutionReady=getDilutionHistory(h.ticker,reportAsOf).then(report=>{setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','ready','Dilution history is ready.');return report;}).catch(error=>{setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','error','Background dilution review could not finish; click to retry.');console.debug('Dilution prefetch unavailable:',error.message);return null;});
+  loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker,reportAsOf).finally(()=>warmNewsSummaries(h.ticker,newsItems));
+  if(openTabs[h.ticker]===tab&&tab.result===r)warmAioSummary(tab,h.ticker);
   tab.container.querySelectorAll('table.sort').forEach(makeSortable);
 
   const sigSelect = tab.container.querySelector('#sig');
@@ -2115,30 +2079,7 @@ function renderTab(tab, r, isRefresh){
     allEma5ExtVal.onchange = onVal;
     allEma5ExtVal.oninput = onVal;
   }
-  const pathNormSelect = tab.container.querySelector('#path_norm');
-  if(pathNormSelect){
-    pathNormSelect.value = tab.pathNormalization;
-    tab.lastChart.normalization = tab.pathNormalization;
-    pathNormSelect.onchange = ()=>{
-      tab.pathNormalization = pathNormSelect.value;
-      tab.lastChart.normalization = tab.pathNormalization;
-      const foot = tab.container.querySelector('#path_norm_foot');
-      if(foot) foot.lastChild.textContent = tab.pathNormalization === 'gap'
-        ? ' X = minutes from each day’s PM high · Y = % of that day’s gap retained · 100% = PM high · 0% = previous close'
-        : tab.pathNormalization === 'dev' ? ' Y = price / cumulative 13:30 IST VWAP − 1; zero is VWAP'
-        : tab.pathNormalization === 'dt' ? ' Y = price / clock-time TWAP − 1; zero is TWAP'
-        : tab.pathNormalization === 'spread' ? ' Y = ln(VWAP / TWAP); positive means volume traded at relatively higher prices'
-        : tab.pathNormalization === 'vwap' ? ' Y = cumulative 13:30 IST VWAP from previous close'
-        : tab.pathNormalization === 'twap' ? ' Y = clock-time TWAP from previous close (empty minutes forward-fill price)'
-        : ' Y = price from previous close; expected P is recomposed from VWAP × (1 + Dᵥ)';
-      const canvas = tab.container.querySelector('#cv');
-      if(canvas) drawChart(tab.lastChart, canvas);
-    };
-  }
-
   drawEvAll(tab.EV, tab.container);
-  const cv = tab.container.querySelector('#cv');
-  if(cv) drawChart(r.chart, cv);
 }
 
 function zoomGapUpChartCard(card,tab,direction){
@@ -2416,296 +2357,6 @@ $('#cm_bz').onchange = () => {
   }
 };
 
-function drawChart(ch, cvElement, hoverState){
-  const cv = cvElement || (activeTab && openTabs[activeTab] ? openTabs[activeTab].container.querySelector('#cv') : $('#cv'));
-  if(!cv || !ch || !ch.labels || !ch.labels.length) return;
-  cv._chartData = ch;
-  cv.style.cursor = 'crosshair';
-
-  if(!cv._hoverEventsBound){
-    cv._hoverEventsBound = true;
-    cv.addEventListener('mousemove', function(e){
-      const rect = cv.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-      drawChart(cv._chartData, cv, {mx, my});
-    });
-    cv.addEventListener('mouseleave', function(){
-      drawChart(cv._chartData, cv, null);
-    });
-    cv.addEventListener('touchmove', function(e){
-      if(e.touches && e.touches[0]){
-        const rect = cv.getBoundingClientRect();
-        const mx = e.touches[0].clientX - rect.left;
-        const my = e.touches[0].clientY - rect.top;
-        drawChart(cv._chartData, cv, {mx, my});
-      }
-    }, {passive: true});
-    cv.addEventListener('touchend', function(){
-      drawChart(cv._chartData, cv, null);
-    });
-  }
-
-  const parentW = (cv.parentElement && cv.parentElement.clientWidth) ? cv.parentElement.clientWidth : 0;
-  const dpr=window.devicePixelRatio||1, W=Math.max(300, parentW-28), H=400;
-  const reqW = Math.round(W * dpr), reqH = Math.round(H * dpr);
-  if(cv.width !== reqW || cv.height !== reqH){
-    cv.style.width=W+'px'; cv.style.height=H+'px';
-    cv.width=reqW; cv.height=reqH;
-  }
-  const x=cv.getContext('2d');
-  x.setTransform(dpr,0,0,dpr,0,0);
-  x.clearRect(0,0,W,H);
-  x.font='12px Consolas,monospace';
-
-  const gapMode = ch.normalization === 'gap';
-  const frameMode = ['vwap','dev','twap','active_twap','dt','spread'].includes(ch.normalization);
-  const plotBase = gapMode ? {...ch, labels:ch.gap_labels||ch.labels, open_k:ch.gap_open_k,
-    now_k:ch.gap_now_k, paths:ch.gap_paths||[], med:ch.gap_med||[], p25:ch.gap_p25||[],
-    p75:ch.gap_p75||[], today:ch.gap_today||[], proj:ch.gap_proj||[]} : frameMode ? {...ch,
-    paths:ch.normalization==='dev'?(ch.dev_paths||[]):ch.normalization==='twap'?(ch.twap_paths||[]):ch.normalization==='dt'?(ch.dt_paths||[]):ch.normalization==='spread'?(ch.spread_paths||[]):[],
-    med:ch.normalization==='dev'?ch.dev_med:ch.normalization==='twap'?ch.twap_med:ch.normalization==='dt'?ch.dt_med:ch.normalization==='spread'?ch.spread_med:ch.vwap_med,
-    p25:ch.normalization==='dev'?ch.dev_p25:ch.normalization==='twap'?ch.twap_p25:ch.normalization==='dt'?ch.dt_p25:ch.normalization==='spread'?ch.spread_p25:ch.vwap_p25,
-    p75:ch.normalization==='dev'?ch.dev_p75:ch.normalization==='twap'?ch.twap_p75:ch.normalization==='dt'?ch.dt_p75:ch.normalization==='spread'?ch.spread_p75:ch.vwap_p75,
-    today:ch.normalization==='dev'?ch.dev_today:ch.normalization==='twap'?ch.twap_today:ch.normalization==='active_twap'?ch.active_twap_today:ch.normalization==='dt'?ch.dt_today:ch.normalization==='spread'?ch.spread_today:ch.vwap_today,
-    proj:ch.normalization==='dev'?ch.dev_proj:ch.normalization==='twap'?ch.twap_proj:ch.normalization==='dt'?ch.dt_proj:ch.normalization==='spread'?ch.spread_proj:ch.vwap_proj} : ch;
-  const spikeMode=ch.spikeComparison?ch.spike_history?.[ch.normalization]:null;
-  const plot=spikeMode?{...plotBase,paths:spikeMode.paths||[],med:spikeMode.med||[],p25:spikeMode.p25||[],p75:spikeMode.p75||[],
-    proj:ch.spike_projections?.[ch.normalization]||[],now_k:gapMode?ch.gap_now_k:ch.now_k}:plotBase;
-  const pathStatus=cv.parentElement?.querySelector('[data-path-status]');
-  if(pathStatus){
-    const hasHistory=(plot.med||[]).some(v=>v!=null)||(plot.p25||[]).some(v=>v!=null);
-    const futureStart=Number.isInteger(plot.now_k)?plot.now_k+1:0;
-    const hasFutureProjection=(plot.proj||[]).slice(futureStart).some(v=>v!=null);
-    pathStatus.textContent=ch.spikeComparison?`Comparing today with ${spikeMode?.paths?.length||0} premarket spike sessions.`:!hasHistory?'Loading ticker premarket spike comparisons…':!hasFutureProjection?'Historical range shown; no future analog projection is available yet.':'';
-  }
-  const L=52,R=14,T=12,B=26, pw=W-L-R, ph=H-T-B, n=plot.labels.length;
-  const vs=[0]; [plot.med,plot.p25,plot.p75,plot.today,plot.proj,...plot.paths].forEach(a=>a.forEach(v=>{if(v!=null)vs.push(v)}));
-  let lo=Math.max(Math.min(...vs),-0.95), hi=Math.min(Math.max(...vs),10);
-  if(hi-lo<0.1){hi+=0.05;lo-=0.05}
-  const X=i=>L+pw*i/(n-1), Y=v=>T+ph*(1-(Math.max(lo,Math.min(hi,v))-lo)/(hi-lo));
-
-  // Premarket light grey background on path chart
-  if(plot.open_k != null && plot.open_k > 0){
-    x.fillStyle = 'rgba(255, 255, 255, 0.085)';
-    x.fillRect(L, T, X(plot.open_k) - L, ph);
-    x.fillStyle = '#8e8e9e';
-    x.fillText('PRE-MARKET', L + 6, T + 13);
-  }
-  x.strokeStyle='#222'; x.fillStyle='#8a8a8a'; x.lineWidth=1;
-  for(let k=0;k<=5;k++){const v=lo+(hi-lo)*k/5, y=Y(v); x.beginPath();x.moveTo(L,y);x.lineTo(W-R,y);x.stroke(); x.fillText((v*100).toFixed(0)+'%',4,y+4);}
-  const xTickStep = gapMode ? 24 : 6;
-  for(let i=0;i<n;i+=xTickStep){const xx=X(i); x.beginPath();x.moveTo(xx,T);x.lineTo(xx,T+ph);x.stroke(); x.fillText(plot.labels[i],xx-14,H-8);}
-  x.strokeStyle='#666'; x.beginPath(); x.moveTo(L,Y(0)); x.lineTo(W-R,Y(0)); x.stroke();
-  if(gapMode && lo <= 1 && hi >= 1){
-    x.strokeStyle='#697386'; x.setLineDash([3,4]); x.beginPath(); x.moveTo(L,Y(1)); x.lineTo(W-R,Y(1)); x.stroke(); x.setLineDash([]);
-    x.fillStyle='#9aa4b2'; x.fillText('PM HIGH 100%',L+6,Math.max(T+26,Y(1)-4));
-  }
-  if(plot.open_k != null && plot.open_k >= 0 && plot.open_k < n){
-    x.strokeStyle='#777'; x.setLineDash([2,3]); x.beginPath(); x.moveTo(X(plot.open_k),T); x.lineTo(X(plot.open_k),T+ph); x.stroke(); x.setLineDash([]);
-    x.fillStyle='#777'; x.fillText('US open',X(plot.open_k)+4,T+12);
-  }
-  const line=(a,col,w,dash)=>{x.strokeStyle=col;x.lineWidth=w;x.setLineDash(dash||[]);x.beginPath();let on=false;a.forEach((v,i)=>{if(v==null){on=false;return;} if(!on){x.moveTo(X(i),Y(v));on=true}else x.lineTo(X(i),Y(v));});x.stroke();x.setLineDash([]);};
-  plot.paths.forEach(p=>line(p,'rgba(120,160,200,0.20)',1));
-  x.fillStyle='rgba(108,196,255,0.14)'; x.beginPath(); let started=false;
-  for(let i=0;i<n;i++){ if(plot.p75[i]==null) continue; if(!started){x.moveTo(X(i),Y(plot.p75[i]));started=true}else x.lineTo(X(i),Y(plot.p75[i])); }
-  for(let i=n-1;i>=0;i--){ if(plot.p25[i]==null) continue; x.lineTo(X(i),Y(plot.p25[i])); }
-  x.closePath(); x.fill();
-  line(plot.med,'#6cc4ff',2.5);
-  line(plot.proj,'#ffd23f',2,[6,5]);
-  line(plot.today,'#ffd23f',2.5);
-  if(plot.now_k!=null&&plot.today[plot.now_k]!=null){x.fillStyle='#ffd23f';x.beginPath();x.arc(X(plot.now_k),Y(plot.today[plot.now_k]),4,0,7);x.fill();}
-
-  // Interactive Hover: Crosshair, Axis Badges, and HUD Tooltip
-  if(hoverState && hoverState.mx != null && hoverState.my != null){
-    const mx = hoverState.mx;
-    const my = hoverState.my;
-    if(mx >= L && mx <= W - R && my >= T && my <= T + ph){
-      const ratio = Math.max(0, Math.min(1, (mx - L) / pw));
-      const idx = Math.min(n - 1, Math.max(0, Math.round(ratio * (n - 1))));
-      const snapX = X(idx);
-
-      // Value calculation
-      const cursorVal = lo + (1 - (my - T) / ph) * (hi - lo);
-      const cursorPctStr = (cursorVal >= 0 ? '+' : '') + (cursorVal * 100).toFixed(1) + '%';
-      const timeStr = plot.labels[idx] || '';
-
-      x.save();
-
-      // Crosshair lines
-      x.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-      x.lineWidth = 1;
-      x.setLineDash([3, 3]);
-
-      // Vertical line
-      x.beginPath();
-      x.moveTo(snapX, T);
-      x.lineTo(snapX, T + ph);
-      x.stroke();
-
-      // Horizontal line
-      x.beginPath();
-      x.moveTo(L, my);
-      x.lineTo(W - R, my);
-      x.stroke();
-      x.setLineDash([]);
-
-      // Highlight dots on data curves
-      if(plot.today && plot.today[idx] != null){
-        const ty = Y(plot.today[idx]);
-        x.fillStyle = '#ffd23f';
-        x.strokeStyle = '#fff';
-        x.lineWidth = 2;
-        x.beginPath();
-        x.arc(snapX, ty, 5, 0, Math.PI * 2);
-        x.fill();
-        x.stroke();
-      }
-      if(plot.med && plot.med[idx] != null){
-        const my_pt = Y(plot.med[idx]);
-        x.fillStyle = '#6cc4ff';
-        x.strokeStyle = '#fff';
-        x.lineWidth = 1.5;
-        x.beginPath();
-        x.arc(snapX, my_pt, 4.5, 0, Math.PI * 2);
-        x.fill();
-        x.stroke();
-      }
-      if(plot.proj && plot.proj[idx] != null){
-        const py = Y(plot.proj[idx]);
-        x.fillStyle = '#ffd23f';
-        x.beginPath();
-        x.arc(snapX, py, 3.5, 0, Math.PI * 2);
-        x.fill();
-      }
-
-      // X-Axis Badge (Bottom - Time)
-      x.font = 'bold 11px Consolas,monospace';
-      const xBadgeText = timeStr ? (gapMode ? timeStr : timeStr + ' IST') : '';
-      const xBadgeW = x.measureText(xBadgeText).width + 12;
-      const xBadgeX = Math.max(L, Math.min(W - R - xBadgeW, snapX - xBadgeW / 2));
-      const xBadgeY = H - 24;
-      x.fillStyle = '#0a101d';
-      x.fillRect(xBadgeX, xBadgeY, xBadgeW, 18);
-      x.strokeStyle = '#29a8ff';
-      x.lineWidth = 1;
-      x.strokeRect(xBadgeX, xBadgeY, xBadgeW, 18);
-      x.fillStyle = '#ffffff';
-      x.fillText(xBadgeText, xBadgeX + 6, xBadgeY + 13);
-
-      // Y-Axis Badge (Left - % from prev close)
-      const yColor = cursorVal >= 0 ? '#3ddc84' : '#ff5a5a';
-      const yBadgeText = cursorPctStr;
-      const yBadgeW = L - 4;
-      const yBadgeH = 16;
-      const yBadgeX = 2;
-      const yBadgeY = Math.max(T, Math.min(T + ph - yBadgeH, my - yBadgeH / 2));
-      x.fillStyle = '#0a101d';
-      x.fillRect(yBadgeX, yBadgeY, yBadgeW, yBadgeH);
-      x.strokeStyle = yColor;
-      x.lineWidth = 1;
-      x.strokeRect(yBadgeX, yBadgeY, yBadgeW, yBadgeH);
-      x.fillStyle = yColor;
-      x.fillText(yBadgeText, yBadgeX + 3, yBadgeY + 12);
-
-      // Tooltip HUD Card
-      const rows = [];
-      rows.push({ label: gapMode ? 'From PM high' : 'Time (X)', val: gapMode ? timeStr : timeStr + ' IST', col: '#ffffff' });
-      rows.push({ label: gapMode ? 'Gap retained (Y)' : 'Value (Y)', val: cursorPctStr, col: yColor });
-      if(plot.today && plot.today[idx] != null){
-        const v = plot.today[idx];
-        rows.push({ label: 'Today', val: (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%', col: '#ffd23f' });
-      }
-      if(plot.proj && plot.proj[idx] != null){
-        const v = plot.proj[idx];
-        rows.push({ label: 'Projected', val: (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%', col: '#ffd23f' });
-      }
-      if(plot.med && plot.med[idx] != null){
-        const v = plot.med[idx];
-        rows.push({ label: 'History Median', val: (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%', col: '#6cc4ff' });
-      }
-      if(plot.p25 && plot.p75 && plot.p25[idx] != null && plot.p75[idx] != null){
-        const v25 = (plot.p25[idx] * 100).toFixed(1);
-        const v75 = (plot.p75[idx] * 100).toFixed(1);
-        rows.push({ label: 'p25–p75 Range', val: `${v25}% to ${v75}%`, col: '#78a0c8' });
-      }
-
-      x.font = '11px Consolas,monospace';
-      let maxW = 150;
-      rows.forEach(r => {
-        const tw = x.measureText(`${r.label}: ${r.val}`).width;
-        if(tw + 20 > maxW) maxW = tw + 20;
-      });
-
-      const pad = 8, lineH = 17;
-      const boxW = maxW;
-      const boxH = rows.length * lineH + pad * 2;
-      let boxX = snapX + 16;
-      if(boxX + boxW > W - R) boxX = snapX - boxW - 16;
-      if(boxX < L + 2) boxX = L + 2;
-
-      let boxY = my - boxH / 2;
-      if(boxY < T + 4) boxY = T + 4;
-      if(boxY + boxH > T + ph) boxY = T + ph - boxH;
-
-      // Draw Tooltip Container
-      x.fillStyle = 'rgba(10, 15, 26, 0.95)';
-      x.fillRect(boxX, boxY, boxW, boxH);
-      x.strokeStyle = '#29a8ff';
-      x.lineWidth = 1;
-      x.strokeRect(boxX, boxY, boxW, boxH);
-
-      // Tooltip Rows
-      rows.forEach((r, ri) => {
-        const ry = boxY + pad + (ri + 1) * lineH - 4;
-        x.fillStyle = '#8e9aa8';
-        x.fillText(r.label + ':', boxX + 8, ry);
-        const lw = x.measureText(r.label + ': ').width;
-        x.fillStyle = r.col;
-        x.fillText(r.val, boxX + 8 + lw, ry);
-      });
-
-      x.restore();
-    }
-  }
-}
-window.addEventListener('resize',()=>{
-  if($('#gap_deepdive_chart_modal').style.display==='flex'&&gapDeepDiveCurrent){
-    const cv=$('#gap_chart_modal_canvas');
-    if(!cv._responsiveResizeFrame)cv._responsiveResizeFrame=requestAnimationFrame(()=>{
-      cv._responsiveResizeFrame=0;
-      if($('#gap_deepdive_chart_modal').style.display==='flex'&&gapDeepDiveCurrent)
-        drawGapDeepDiveCanvas(cv,gapDeepDiveCurrent.chart,$('#gap_chart_tf').value,Math.max(300,$('#gap_chart_plot_wrap').clientHeight));
-    });
-  }
-  if($('#chart_modal').style.display === 'flex'){
-    renderModalChart();
-  }
-  if(activeTab && openTabs[activeTab]){
-    const tab = openTabs[activeTab];
-    if(tab.lastChart){
-      const cv = tab.container.querySelector('#cv');
-      if(cv) drawChart(tab.lastChart, cv);
-    }
-    if(tab.EV && tab.EV.length){
-      drawEvAll(tab.EV, tab.container);
-    }
-  }
-});
-
-$('#go').onclick=()=>run(false); $('#rf').onclick=()=>run(true);
-$('#t').addEventListener('keydown',e=>{
-  if(e.key!=='Enter')return;
-  e.preventDefault();
-  const submitted=$('#t').value.trim();
-  if(!submitted)return;
-  run(false);
-  // run() switches to the submitted tab synchronously; clear only the entry field
-  // afterwards so its completed tab keeps running while this field is ready for the next ticker.
-  $('#t').value='';
-  $('#t').focus();
-});
-let gapDeepDiveRequest=0,gapDeepDiveLoaded=false,gapDeepDivePromise=null;
 function openGapDeepDive(){
   $('#tabs_view').style.display='none';$('#tab_bar').style.display='none';$('#multiday_view').style.display='none';$('#gap_deepdive_view').style.display='block';
   if(!gapDeepDiveLoaded)loadGapDeepDive();

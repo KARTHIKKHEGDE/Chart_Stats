@@ -608,24 +608,6 @@ def ctx_feats(daily, i):
     return f
 
 
-def path_full(df, pc, full):
-    """Price path as % from PREVIOUS CLOSE at each 5-min step, 04:00 ET (k=0) -> 16:00 ET (k=144)."""
-    mm_all = (df.index.hour * 60 + df.index.minute).to_numpy()
-    keep = (mm_all >= PM_START) & (mm_all < RG_END)
-    mm, c = mm_all[keep], df.c.to_numpy()[keep]
-    if not len(mm):
-        return [None] * (NPTS + 1)
-    out = [0.0]
-    for k in range(1, NPTS + 1):
-        end = PM_START + 5 * k
-        if not full and mm[-1] < end - 5:
-            out.append(None)
-            continue
-        idx = int(np.searchsorted(mm, end, side="left")) - 1
-        out.append(0.0 if idx < 0 else round(float(c[idx] / pc - 1), 4))
-    return out
-
-
 def vwap_frame_paths(df, pc, full=True, frame=None):
     """Previous-close price (P), cumulative 04:00 ET VWAP (V), and price/VWAP deviation (D)."""
     frame = frame if frame is not None else vwap_twap_frame(df)
@@ -881,6 +863,22 @@ def metrics(df, pc, full=True):
     vw = vws.loc[rg.index]
     vwap_close = float(vw.iloc[-1]) if pd.notna(vw.iloc[-1]) else None
     pm_high = r["pm_high"]
+    # Keep the scalar VWAP grade inputs without constructing chart path arrays.
+    sampled_vwap_dev=refs["d_vwap"].iloc[4::5] if not refs.empty else pd.Series(dtype=float)
+    rth_sample_start=(RG_START-PM_START)//5-1
+    sampled_rth_vwap_dev=[float(value) for value in sampled_vwap_dev.iloc[rth_sample_start:]
+                          if pd.notna(value)]
+    first_loss=next((index for index,value in enumerate(sampled_rth_vwap_dev) if value<0),None)
+    vwap_below_frac=(sum(value<0 for value in sampled_rth_vwap_dev)/len(sampled_rth_vwap_dev)
+                     if sampled_rth_vwap_dev else None)
+    vwap_failed_reclaim=None
+    if first_loss is not None:
+        later=sampled_rth_vwap_dev[first_loss+1:]
+        vwap_failed_reclaim=bool(any(value>=0 for value in later) and any(value<0 for value in later))
+    ten_am_index=(600-PM_START)//5-1
+    vwap_dev_1000=(float(sampled_vwap_dev.iloc[ten_am_index])
+                   if len(sampled_vwap_dev)>ten_am_index and pd.notna(sampled_vwap_dev.iloc[ten_am_index])
+                   else None)
 
     # post-HOD VWAP loss (used by the entry model + rejection stats)
     after = rg.loc[hod_ts:]
@@ -947,8 +945,6 @@ def metrics(df, pc, full=True):
 
     rng = hod - lod
     downlegs = calc_downlegs(rg, hod_ts, th=0.12, min_drop=0.08)
-    _, path_vwap, path_vwap_dev = vwap_frame_paths(df, pc, full, frame=refs)
-    path_twap, path_twap_dev, path_vwap_twap_spread, path_active_twap = twap_frame_paths(df, pc, full, frame=refs)
     ref_close = refs.loc[:rg.index[-1]].iloc[-1] if not refs.empty and len(refs.loc[:rg.index[-1]]) else None
     r.update(
         rg=True, open=o, hod=hod, lod=lod, close=close, hod_min=hod_ts.hour * 60 + hod_ts.minute,
@@ -971,6 +967,8 @@ def metrics(df, pc, full=True):
         hod_vwap_twap_spread=(float(ref_hod["spread"]) if ref_hod is not None and pd.notna(ref_hod["spread"]) else None),
         twap_touch_after_hod=bool(len(touch_rows)),
         twap_touch_min=(int(touch_rows.index[0].hour*60+touch_rows.index[0].minute) if len(touch_rows) else None),
+        vwap_dev_1000=vwap_dev_1000,vwap_below_frac=vwap_below_frac,
+        vwap_failed_reclaim=vwap_failed_reclaim,
         lost_min=lost_min, vwap_never=never,
         vwap_reject=bool(lost_min is not None and lost_min < 660 and vwap_close is not None and close < vwap_close),
         vb_min=vb_min, vb_to_close=vb_to_close, vb_to_high=vb_to_high,
@@ -978,10 +976,7 @@ def metrics(df, pc, full=True):
         gap_fill=min(max((o - lod) / (o - pc), 0.0), 1.0) if o > pc else None,
         f2_ret=f2_ret, f2_red=bool(f2_ret < 0), f2_l2c=f2_l2c, f5_ret=f5_ret, f5_l2c=f5_l2c,
         f5_red=bool(f5_ret < 0), f5_rng=float(first5.h.max() / first5.l.min() - 1),
-        orl_broke=orl_broke, failed_bo=failed_bo, consol_bd=consol_bd, models=models,
-        path=path_full(df, pc, full), path_vwap=path_vwap, path_vwap_dev=path_vwap_dev,
-        path_twap=path_twap, path_twap_dev=path_twap_dev,
-        path_vwap_twap_spread=path_vwap_twap_spread, path_active_twap=path_active_twap)
+        orl_broke=orl_broke, failed_bo=failed_bo, consol_bd=consol_bd, models=models)
     r["_refs"] = refs
     return r
 

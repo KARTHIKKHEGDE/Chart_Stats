@@ -50,6 +50,9 @@ _FILING_AI_KEY_POS = {"groq": 0, "gemini": 0}
 _SEC_DILUTION_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix='sec-dilution')
 _SEC_DILUTION_DATA_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix='sec-dilution-data')
 _SEC_DILUTION_JOB_LOCK = threading.Lock()
+_AIO_INTRADAY_EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix='aio-intraday-job')
+_AIO_INTRADAY_LOCK = threading.Lock()
+_AIO_INTRADAY_FUTURES = {}
 _GAP_CHART_PACK_POOL = ThreadPoolExecutor(max_workers=4,thread_name_prefix='gap-chart-pack')
 _GAP_CHART_PACK_REQUESTS = threading.BoundedSemaphore(3)
 _RECENT_FILINGS_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix='sec-recent-filings')
@@ -136,7 +139,7 @@ def _filing_ai_key_order(provider, keys):
     return keys[start:] + keys[:start]
 
 
-def _call_filing_ai(prompt, max_tokens=550):
+def _call_filing_ai(prompt, max_tokens=550, timeout=45):
     failures = []
     for provider in ("groq", "gemini"):
         keys = _filing_ai_keys(provider)
@@ -152,7 +155,7 @@ def _call_filing_ai(prompt, max_tokens=550):
                               "messages": [{"role": "user", "content": prompt}],
                               "temperature": 0.1, "max_completion_tokens": max_tokens,
                               "response_format": {"type": "json_object"}},
-                        timeout=45,
+                        timeout=timeout,
                     )
                 else:
                     model = (os.getenv("GEMINI_FILING_MODEL") or os.getenv("GEMINI_MODEL")
@@ -163,7 +166,7 @@ def _call_filing_ai(prompt, max_tokens=550):
                         json={"contents": [{"parts": [{"text": prompt}]}],
                               "generationConfig": {"temperature": 0.1, "maxOutputTokens": max_tokens,
                                                    "responseMimeType": "application/json"}},
-                        timeout=45,
+                        timeout=timeout,
                     )
                 if response.status_code in (401, 403):
                     failures.append(f"{provider} key rejected")
@@ -1936,7 +1939,10 @@ def sec_dilution_history():
                         0,len(filing_urls))
         primary_results=[(None,None)]*len(filing_urls)
         readable_filings=0
-        with ThreadPoolExecutor(max_workers=min(8,max(1,len(candidates)))) as pool:
+        # SEC requests are globally paced to 8 starts/sec in _sec_get. Keep
+        # enough requests in flight to fill that bandwidth even when EDGAR is
+        # slow to return individual filing pages.
+        with ThreadPoolExecutor(max_workers=min(24,max(1,len(candidates)))) as pool:
             futures={pool.submit(read_sec_document,url):index for index,url in enumerate(filing_urls)}
             for completed,future in enumerate(as_completed(futures),1):
                 index=futures[future]
@@ -1988,7 +1994,7 @@ def sec_dilution_history():
                         0,len(exhibit_jobs))
         exhibit_results=[(None,None)]*len(exhibit_jobs)
         readable_exhibits=0
-        with ThreadPoolExecutor(max_workers=min(8,max(1,len(exhibit_jobs)))) as pool:
+        with ThreadPoolExecutor(max_workers=min(24,max(1,len(exhibit_jobs)))) as pool:
             futures={pool.submit(read_sec_document,job['url']):index
                      for index,job in enumerate(exhibit_jobs)}
             for completed,future in enumerate(as_completed(futures),1):
@@ -2007,7 +2013,7 @@ def sec_dilution_history():
             job['text']=text if text and len(text)>=100 else None
         sources=[]
         excerpts=[]
-        def add_source(source,text,excerpt_limit=8500):
+        def add_source(source,text,excerpt_limit=3200):
             source_id=f'F{len(sources)+1}'
             source['id']=source_id
             sources.append(source)
@@ -2023,7 +2029,7 @@ def sec_dilution_history():
                 item=job['item'];title=f"Exhibit {job['number']} — {job['label'] or 'Financing agreement'} ({item.get('form','')} filing)"
                 add_source({'ticker':ticker,'accession':'','title':title,'form':f"EX-{job['number']}",
                             'filing_date':item.get('filing_date',''),'url':job['url'],'document_url':job['url']},
-                           job['text'],5000)
+                           job['text'],3200)
         app.logger.info('SEC dilution review %s: prepared %d source documents (%d filings, %d exhibits) in %.1fs',
                         ticker,len(sources),len(candidates),len(exhibit_jobs),time.monotonic()-request_started)
         if not sources:
@@ -2233,6 +2239,7 @@ def sec_dilution_history():
             f"Ticker: {ticker}\n{snapshot_context}\nRecorded splits through the selected date: {'; '.join(split_context) or 'none found from market data'}. "
             "For a figure stated before a listed split, multiply share counts by split-to/split-from and divide strike/price by that ratio before combining it with later figures.\n\n"
             f"SEC filings read ({len(sources)}; source IDs link to filings):\n"+'\n\n'.join(excerpts))
+        app.logger.info('SEC dilution review %s: sending %d characters of filing evidence to AI',ticker,len(prompt))
         update_progress('ai_analysis',f'Analyzing {len(sources)} SEC filing documents for active dilution and history…')
         answer,provider=_call_filing_ai(prompt,max_tokens=6000)
         app.logger.info('SEC dilution review %s: AI response received from %s after %.1fs total',
@@ -3070,7 +3077,10 @@ def _compute_intraday_stats(ticker, dates, max_dates=15):
         except Exception:
             return None
     sessions=(dates or [])[:max_dates]
-    with ThreadPoolExecutor(max_workers=min(8,max(1,len(sessions))),thread_name_prefix='aio-intraday') as pool:
+    # Up to 15 distinct event dates are analyzed here. Give each its own
+    # concurrent slot so a 50-key Polygon pool can fetch the cold sessions
+    # together instead of serializing behind eight workers.
+    with ThreadPoolExecutor(max_workers=min(15,max(1,len(sessions))),thread_name_prefix='aio-intraday') as pool:
         rows=[row for row in pool.map(compute_day,sessions) if row]
     if not rows:
         return None
@@ -3106,6 +3116,23 @@ def _compute_intraday_stats(ticker, dates, max_dates=15):
         'typical_high_time_ist':    common_high_time,
         'rows':                     rows,
     }
+
+
+def _aio_intraday_future(cache_key, ticker, event_dates):
+    """Share one background cold-candle calculation across summary requests."""
+    with _AIO_INTRADAY_LOCK:
+        future=_AIO_INTRADAY_FUTURES.get(cache_key)
+        if future is None or future.cancelled():
+            future=_AIO_INTRADAY_EXECUTOR.submit(_compute_intraday_stats,ticker,event_dates)
+            def cache_when_ready(completed):
+                try:stats=completed.result()
+                except Exception:
+                    app.logger.exception('Background All-in-One stats failed for %s',ticker)
+                    return
+                if stats is not None:cput(cache_key,stats)
+            future.add_done_callback(cache_when_ready)
+            _AIO_INTRADAY_FUTURES[cache_key]=future
+        return future
 
 
 def register_news_ai_routes(app, db_validate_session):
@@ -3333,8 +3360,18 @@ Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
         # The fingerprint only contains completed historical event dates, so the
         # result is stable until a new event changes the key. Keep it warm for a day.
         intraday_stats=cget(stats_cache_key,24*60*60)
+        intraday_future=None
         if intraday_stats is None:
-            intraday_stats=_compute_intraday_stats(ticker,event_dates)
+            intraday_future=_aio_intraday_future(stats_cache_key,ticker,event_dates)
+            # Do not hold the AI request behind cold historical candle calls.
+            # Use warm stats immediately; give an already-near-complete fetch
+            # a brief chance to finish before starting the prompt.
+            try:
+                intraday_stats=intraday_future.result(timeout=0.35)
+            except TimeoutError:
+                intraday_stats=None
+            except Exception:
+                app.logger.exception('All-in-One intraday stats unavailable for %s',ticker)
             if intraday_stats is not None:cput(stats_cache_key,intraday_stats)
 
         # Format news
@@ -3464,8 +3501,14 @@ Return this exact JSON structure (fill every field, use null if unknown):
 Be direct. No fluff. Use actual data from context. Do not invent numbers not in the context."""
 
         try:
-            answer, provider = _call_filing_ai(prompt, max_tokens=900)
+            answer, provider = _call_filing_ai(prompt, max_tokens=900, timeout=22)
             result = _parse_ai_json_object(answer)
+            if intraday_future is not None and intraday_stats is None and intraday_future.done():
+                try:
+                    intraday_stats=intraday_future.result()
+                    if intraday_stats is not None:cput(stats_cache_key,intraday_stats)
+                except Exception:
+                    app.logger.exception('All-in-One intraday stats unavailable for %s',ticker)
             # Inject computed intraday_stats so frontend can render data tables
             if intraday_stats:
                 if 'historical_behavior' not in result or not isinstance(result.get('historical_behavior'), dict):
@@ -3483,7 +3526,9 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
                 })
                 result['intraday_stats'] = intraday_stats
             out = {**result, "ticker": ticker, "provider": provider}
-            cput(cache_key, out)
+            stats_pending=intraday_future is not None and not intraday_future.done()
+            if stats_pending:out['intraday_stats_pending']=True
+            else:cput(cache_key, out)
             return jsonify(out)
         except Exception as exc:
             return jsonify({"error": str(exc)}), 502

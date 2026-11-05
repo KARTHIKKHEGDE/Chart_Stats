@@ -69,6 +69,7 @@ POLY_RPM = float(os.getenv("POLYGON_RPM", "5"))
 # ----------------------------------------------------------------------------- Polygon client
 _key_pool: list = []
 _key_cooldown: dict = {}  # expiry time after an actual HTTP 429
+_key_next_request: dict = {}  # per-key pacing for the configured Polygon requests/minute
 _key_lock = threading.Lock()
 _key_cursor = 0
 _POLY_SESSION = requests.Session()
@@ -104,7 +105,6 @@ except Exception:
     pass
 NPTS = 144                    # 5-minute steps from 04:00 ET to 16:00 ET (premarket + regular session)
 PM_START, RG_START, RG_END = 240, 570, 960   # minutes since midnight ET
-GAP_REL_START, GAP_REL_END = -360, 720  # minutes from premarket high for the gap-retention chart
 
 # ----------------------------------------------------------------------------- cache / http
 def cget(key, ttl=None):
@@ -143,6 +143,7 @@ def _timed_stage(job, label):
 
 def _timed_call(job, label, function):
     started = time.perf_counter()
+    app.logger.info("[timing] %s started", label)
     try:
         return function()
     finally:
@@ -168,8 +169,11 @@ def _event_fingerprint(daily, index, ctx):
 
 
 def _next_polygon_key():
-    """Choose the next configured key; wait only when every key is cooling down."""
+    """Choose a key that is both out of cooldown and within its per-key RPM."""
     global _key_cursor
+    # Keep each credential within the documented 5 RPM budget; with 50
+    # configured keys this allows up to 250 useful requests/minute in aggregate.
+    min_interval = 60.0 / max(0.1, min(5.0, POLY_RPM))
     while True:
         with _key_lock:
             if not _key_pool:
@@ -179,10 +183,12 @@ def _next_polygon_key():
             for offset in range(count):
                 index = (_key_cursor + offset) % count
                 key = _key_pool[index]
-                if _key_cooldown.get(key, 0) <= now:
+                ready_at = max(_key_cooldown.get(key, 0), _key_next_request.get(key, 0))
+                if ready_at <= now:
                     _key_cursor = (index + 1) % count
+                    _key_next_request[key] = now + min_interval
                     return key
-            wait = max(0.1, min(_key_cooldown.get(key, now + 1) for key in _key_pool) - now)
+            wait = max(0.05, min(max(_key_cooldown.get(key, 0), _key_next_request.get(key, 0)) for key in _key_pool) - now)
         time.sleep(wait)
 
 
@@ -263,14 +269,11 @@ from chart_app.market_data import (
     med,
     metrics,
     minute_df,
-    path_full,
     pbucket,
     poly_frame,
     recent_hod_times,
     recent_open_hod_stats,
     ticker_type,
-    twap_frame_paths,
-    vwap_frame_paths,
     vwap_twap_frame,
 )
 
@@ -512,7 +515,12 @@ def run_job(job, t, refresh):
             event_fingerprint=_event_fingerprint(daily, i, ctx)
             cached_event=cget(event_key)
             if isinstance(cached_event,dict) and cached_event.get("fingerprint")==event_fingerprint and "event" in cached_event:
-                results[i]=cached_event["event"]
+                cached_result=cached_event["event"]
+                for path_key in ("path","path_vwap","path_vwap_dev","path_twap","path_twap_dev",
+                                 "path_vwap_twap_spread","path_active_twap"):
+                    cached_result.pop(path_key,None)
+                results[i]=cached_result
+                cput(event_key,{"fingerprint":event_fingerprint,"event":cached_result})
             else:
                 pending_idxs.append(i)
         event_cache_hits=len(results)
@@ -599,11 +607,6 @@ def run_job(job, t, refresh):
                    msg="Historical analysis is complete · building the report and chart data…")
         lm    = _timed_call(job,"live_metrics",lambda:metrics(live["df"], live["pc"], False))
         lctx  = ctx_feats(live["hist"], len(live["hist"]))
-        lpath = lm.get("path") or path_full(live["df"], live["pc"], False)
-        live_dev_path = lm.get("path_vwap_dev") or [None] * (NPTS + 1)
-        live_twap_dev_path = lm.get("path_twap_dev") or [None] * (NPTS + 1)
-        live_spread_path = lm.get("path_vwap_twap_spread") or [None] * (NPTS + 1)
-        vwap_now_k = max((k for k, value in enumerate(live_dev_path) if value is not None), default=None)
         lg    = ((lm.get("open") or live["cur"]) / live["pc"] - 1)
         lf    = {"gap": max(lg, 0.01), "bucket": pbucket(lm.get("open") or live["cur"]), "float": fl_now,
                  "pm_rel": (lm["pm_vol"] / lctx["avgvol20"]) if lctx.get("avgvol20") else None,
@@ -619,35 +622,6 @@ def run_job(job, t, refresh):
                 d += 0.5 * abs(math.log(max(1 + e["runup5"], .2) / max(1 + lf["runup5"], .2)))
             if e["float"] and lf["float"]:
                 d += 0.3 * abs(math.log(e["float"] / lf["float"]))
-            # Match today's VWAP state before asking analogs for the remaining path.
-            hist_dev = e.get("path_vwap_dev") or []
-            if vwap_now_k is not None and len(hist_dev) > vwap_now_k:
-                target_d, analog_d = live_dev_path[vwap_now_k], hist_dev[vwap_now_k]
-                if analog_d is not None:
-                    d += 2.0 * abs(target_d - analog_d) / 0.05
-                    if (target_d < 0) != (analog_d < 0): d += 1.0
-                    start = max((RG_START-PM_START)//5, vwap_now_k-12)
-                    diffs = [(live_dev_path[k], hist_dev[k]) for k in range(start, vwap_now_k+1)
-                             if k < len(hist_dev) and live_dev_path[k] is not None and hist_dev[k] is not None]
-                    if len(diffs) >= 3:
-                        weights = np.exp(np.linspace(-2.0, 0.0, len(diffs)))
-                        weights /= weights.sum()
-                        rmse = float(np.sqrt(np.sum(weights * np.square([a-b for a,b in diffs]))))
-                        d += 1.5 * rmse / 0.04
-            for target_path, key, scale, weight in ((live_twap_dev_path, "path_twap_dev", .075, 1.2),
-                                                     (live_spread_path, "path_vwap_twap_spread", .04, 1.0)):
-                analog_path = e.get(key) or []
-                if vwap_now_k is not None and len(analog_path) > vwap_now_k and target_path[vwap_now_k] is not None and analog_path[vwap_now_k] is not None:
-                    d += 1.5*weight * abs(target_path[vwap_now_k] - analog_path[vwap_now_k]) / scale
-                    recent = [(target_path[k], analog_path[k]) for k in range(max((RG_START-PM_START)//5, vwap_now_k-12), vwap_now_k+1)
-                              if k < len(analog_path) and target_path[k] is not None and analog_path[k] is not None]
-                    if len(recent) >= 3:
-                        w = np.exp(np.linspace(-2.0, 0.0, len(recent))); w /= w.sum()
-                        rmse = float(np.sqrt(np.sum(w*np.square([x-y for x,y in recent]))))
-                        d += weight * rmse / scale
-                    if key == "path_vwap_twap_spread":
-                        bucket = lambda x: 1 if x > .02 else -1 if x < -.02 else 0
-                        if bucket(target_path[vwap_now_k]) != bucket(analog_path[vwap_now_k]): d += .7
             return d
 
         # Premarket-only spike sessions inform the dedicated PM fade grade, but
@@ -674,7 +648,7 @@ def run_job(job, t, refresh):
                      "which makes fades look weaker than reality (survivorship bias).")
 
         hod_times=hod_times_res[0] or {"date_from":None,"date_to":None,"rows":[]}
-        report = _timed_call(job,"build_report",lambda:clean(build_report(t, live, lm, lpath, lctx, events, S, notes, daily, hod_times)))
+        report = _timed_call(job,"build_report",lambda:clean(build_report(t, live, lm, events, S, notes, daily, hod_times)))
         report["premarket_surge_days"] = None
         reverse_splits = []
         for split in splits or []:
@@ -982,7 +956,7 @@ _PREMARKET_SPIKE_SLOTS = threading.BoundedSemaphore(2)
 
 
 def _compute_premarket_spikes(ticker):
-    cache_key = f"{ticker}_premarket_spikes_v6"
+    cache_key = f"{ticker}_premarket_spikes_v7"
     daily = load_daily(ticker)
     if not daily:
         raise RuntimeError("No daily history available from Polygon.")
@@ -1008,7 +982,6 @@ def _compute_premarket_spikes(ticker):
         with ThreadPoolExecutor(max_workers=workers) as pool:
             list(pool.map(_prefetch_minute, [(ticker, index, daily) for index in candidates]))
     found = []
-    spike_paths = {"price": [], "vwap": [], "dev": [], "twap": [], "dt": [], "spread": [], "active_twap": [], "gap": []}
     for index in candidates:
         day = daily[index]["date"]
         prior_close = float(daily[index - 1].get("c") or 0)
@@ -1051,27 +1024,6 @@ def _compute_premarket_spikes(ticker):
                     (((pm_through_high["h"] + pm_through_high["l"] + pm_through_high["c"]) / 3)
                      * pm_through_high["v"]).sum()
                 )
-                price_path = path_full(bars, prior_close, True)
-                _, vwap_path, dev_path = vwap_frame_paths(bars, prior_close, True)
-                twap_height, dt_path, spread_path, active_twap = twap_frame_paths(bars, prior_close, True)
-                pm_high_minute = int(high_index.hour * 60 + high_index.minute)
-                spike_gap_path = [None] * 217
-                gap_size = high / prior_close - 1
-                for offset in range(-360, 721, 5):
-                    k = (pm_high_minute + offset - PM_START) / 5
-                    if not gap_size or k < 0 or k > len(price_path)-1: continue
-                    left, right = int(math.floor(k)), int(math.ceil(k))
-                    if price_path[left] is None or price_path[right] is None: continue
-                    frac = k-left
-                    spike_gap_path[(offset+360)//5] = round((price_path[left] + (price_path[right]-price_path[left])*frac) / gap_size, 4)
-                spike_paths["price"].append(price_path)
-                spike_paths["vwap"].append(vwap_path)
-                spike_paths["dev"].append(dev_path)
-                spike_paths["twap"].append(twap_height)
-                spike_paths["dt"].append(dt_path)
-                spike_paths["spread"].append(spread_path)
-                spike_paths["active_twap"].append(active_twap)
-                spike_paths["gap"].append(spike_gap_path)
                 found.append({
                     "date": day,
                     "pm_high_pct": round((high / prior_close - 1) * 100, 2),
@@ -1091,18 +1043,7 @@ def _compute_premarket_spikes(ticker):
             continue
     found.sort(key=lambda item: item["date"], reverse=True)
 
-    def summarize_paths(paths):
-        if not paths:return {"paths": [], "med": [], "p25": [], "p75": []}
-        medians=[];p25=[];p75=[]
-        for k in range(max(map(len,paths))):
-            values=[path[k] for path in paths if len(path)>k and path[k] is not None and np.isfinite(path[k])]
-            medians.append(round(float(np.percentile(values,50)),4) if values else None)
-            p25.append(round(float(np.percentile(values,25)),4) if values else None)
-            p75.append(round(float(np.percentile(values,75)),4) if values else None)
-        return {"paths":paths,"med":medians,"p25":p25,"p75":p75}
-
-    spike_chart={name:summarize_paths(paths) for name,paths in spike_paths.items()}
-    result={"days":found,"spike_chart":spike_chart}
+    result={"days":found}
     cput(cache_key, result)
     return result
 
@@ -1141,7 +1082,7 @@ def premarket_spikes_api():
         return jsonify({"error": "Session expired. Please sign in again."}), 401
     if not re.fullmatch(r"[A-Z0-9.-]{1,12}", ticker):
         return jsonify({"error": "Invalid ticker."}), 400
-    cache_key = f"{ticker}_premarket_spikes_v6"
+    cache_key = f"{ticker}_premarket_spikes_v7"
     job_key = _premarket_spike_job_key(ticker)
     job_state_path = CACHE / f"{job_key}.json"
     retry = request.args.get("retry") == "1"

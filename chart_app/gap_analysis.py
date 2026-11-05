@@ -13,14 +13,10 @@ from chart_app.market_data import (
     pbucket,
     recent_hod_times,
     recent_open_hod_stats,
-    twap_frame_paths,
-    vwap_frame_paths,
 )
 
 ET = app.ET
 GAP_MIN = app.GAP_MIN
-GAP_REL_END = app.GAP_REL_END
-GAP_REL_START = app.GAP_REL_START
 IST = app.IST
 LOOKBACK_DAYS = app.LOOKBACK_DAYS
 MAX_EVENTS = app.MAX_EVENTS
@@ -28,9 +24,6 @@ MIN_DAY_VOL = app.MIN_DAY_VOL
 MIN_PM_VOL = app.MIN_PM_VOL
 PM_GRADE_MIN_SPIKE = 0.20
 MIN_PRICE = app.MIN_PRICE
-NPTS = app.NPTS
-PM_START = app.PM_START
-RG_START = app.RG_START
 STOP_PCT = app.STOP_PCT
 dt = app.dt
 math = app.math
@@ -83,12 +76,7 @@ def analyze_event(t, i, daily, ctx):
         "early_hod": m["hod_min"] < 600, "faded15": h2c <= -0.15, "below_open": o2c < 0,
         "below_vwap": (close < m["vwap_close"]) if m["vwap_close"] else None,
         "vwap_never": m["vwap_never"], "vwap_reject": m["vwap_reject"],
-        "hod_vwap_twap_spread": m.get("hod_vwap_twap_spread"),
-        "hod_vwap": m.get("hod_vwap"), "hod_twap": m.get("hod_twap"),
         "hod_price_vs_vwap_pct": m.get("hod_price_vs_vwap_pct"),
-        "hod_price_vs_twap_pct": m.get("hod_price_vs_twap_pct"),
-        "twap_touch_after_hod": m.get("twap_touch_after_hod"),
-        "twap_touch_min": m.get("twap_touch_min"),
         "failed_bo": m["failed_bo"], "consol_bd": m["consol_bd"],
         "float": fl, "stale": stale,
         "cum_dv_to_hod": m.get("cum_dv_to_hod"),
@@ -98,19 +86,12 @@ def analyze_event(t, i, daily, ctx):
         "pm_rot_hi": (m["pm_cum_hi"] / fl) if (fl and m["pm_cum_hi"]) else None,
         "rot_day": ((m["pm_vol"] + m["rg_vol"]) / fl) if fl else None,
         "pm_rel": (m["pm_vol"] / cf["avgvol20"]) if cf["avgvol20"] else None,
-        "bucket": pbucket(o), "models": m["models"], "path": m["path"],
-        "path_vwap": m.get("path_vwap"), "path_vwap_dev": m.get("path_vwap_dev"),
-        "path_twap": m.get("path_twap"), "path_twap_dev": m.get("path_twap_dev"),
-        "path_vwap_twap_spread": m.get("path_vwap_twap_spread"),
+        "bucket": pbucket(o), "models": m["models"],
         "outcome": outcome(h2c, o2c, close, hod),
     }
-    dv = e["path_vwap_dev"] or []
-    rth_dev = [x for x in dv[(RG_START-PM_START)//5:] if x is not None]
-    first_loss = next((j for j, x in enumerate(rth_dev) if x < 0), None)
-    reclaimed = first_loss is not None and any(x >= 0 for x in rth_dev[first_loss+1:])
-    e["vwap_dev_1000"] = dv[(600-PM_START)//5] if len(dv) > (600-PM_START)//5 else None
-    e["vwap_below_frac"] = (sum(x < 0 for x in rth_dev)/len(rth_dev)) if rth_dev else None
-    e["vwap_failed_reclaim"] = bool(reclaimed and any(x < 0 for x in rth_dev[first_loss+1:])) if first_loss is not None else None
+    e["vwap_dev_1000"] = m.get("vwap_dev_1000")
+    e["vwap_below_frac"] = m.get("vwap_below_frac")
+    e["vwap_failed_reclaim"] = m.get("vwap_failed_reclaim")
     e.update({k: cf[k] for k in ("runup5", "runup20", "sma20d", "sma50d", "dist52h", "pdv_rvol", "pc_loc", "day2plus")})
 
     # ---- multi-day.  Day 1 = first session AFTER the gap day.  Day-1 behaviour is judged vs the gap-day close;
@@ -209,7 +190,6 @@ def stats(S):
     for k in ("faded15", "below_open", "below_vwap", "early_hod", "vwap_never", "vwap_reject", "failed_bo",
               "consol_bd", "d1_red", "below_pm", "orl_broke", "f5_red", "pm_vb", "pm_vr", "pm_vr_all"):
         st[k] = frac(S, k)
-    st["twap_touch_after_hod"] = frac(S, "twap_touch_after_hod")
     for k in ("fill0", "fill5", "fill30"):
         st[k] = frac(S, k)
     st["med_fill"] = med(vals(S, "fill_days"))
@@ -226,12 +206,6 @@ def stats(S):
     st["med_hod_price_vs_vwap_pct"] = med(vals(S, "hod_price_vs_vwap_pct"))
     st["p25_hod_price_vs_vwap_pct"] = pctl(vals(S, "hod_price_vs_vwap_pct"), 25)
     st["p75_hod_price_vs_vwap_pct"] = pctl(vals(S, "hod_price_vs_vwap_pct"), 75)
-    st["med_hod_price_vs_twap_pct"] = med(vals(S, "hod_price_vs_twap_pct"))
-    st["p25_hod_price_vs_twap_pct"] = pctl(vals(S, "hod_price_vs_twap_pct"), 25)
-    st["p75_hod_price_vs_twap_pct"] = pctl(vals(S, "hod_price_vs_twap_pct"), 75)
-    st["med_hod_vwap_twap_spread"] = med(vals(S, "hod_vwap_twap_spread"))
-    st["p25_hod_vwap_twap_spread"] = pctl(vals(S, "hod_vwap_twap_spread"), 25)
-    st["p75_hod_vwap_twap_spread"] = pctl(vals(S, "hod_vwap_twap_spread"), 75)
     return st
 
 
@@ -264,14 +238,14 @@ def grade(st, pm_stats=None):
         s_vwap = (rate(st.get("vwap_failed_reclaim", (0, 0))) or 0) * 100
         s_spread = clamp(((st.get("med_hod_vwap_twap_spread") or 0) + .02) / .08) * 100
         s_twap_touch = (rate(st.get("twap_touch_after_hod", (0, 0))) or 0) * 100
-        base_score = (.26*s_fade + .16*s_o2c + .16*s_sq + .12*s_cons + .08*s_d2 + .05*s_n +
-                      .06*s_vwap + .05*s_spread + .06*s_twap_touch)
+        # Rebalance the removed VWAP/TWAP comparison weights across retained signals.
+        base_score = (.29*s_fade + .18*s_o2c + .18*s_sq + .13*s_cons + .09*s_d2 + .06*s_n +
+                      .07*s_vwap)
         score = .75 * base_score + .25 * s_pm if s_pm is not None else base_score
-        comps = [("Fade rate (red close vs open)", 26, s_fade), ("Median open→close", 16, s_o2c),
-                 ("Squeeze risk (p75 open→HOD)", 16, s_sq), ("Early HOD / VWAP-loss consistency", 12, s_cons),
-                 ("Day-1 follow-through", 8, s_d2), ("Sample size", 5, s_n),
-                 ("Failed VWAP reclaim", 6, s_vwap), ("VWAP premium to TWAP at HOD", 5, s_spread),
-                 ("TWAP touch after HOD", 6, s_twap_touch)]
+        comps = [("Fade rate (red close vs open)", 29, s_fade), ("Median open→close", 18, s_o2c),
+                 ("Squeeze risk (p75 open→HOD)", 18, s_sq), ("Early HOD / VWAP-loss consistency", 13, s_cons),
+                 ("Day-1 follow-through", 9, s_d2), ("Sample size", 6, s_n),
+                 ("Failed VWAP reclaim", 7, s_vwap)]
         if s_pm is not None:
             comps = [(name, weight * .75, value) for name, weight, value in comps]
     else:
@@ -434,7 +408,7 @@ def fdate(d):
         return str(d)
 
 
-def build_report(t, live, lm, lpath, lctx, events, S, notes, daily, hod_times=None):
+def build_report(t, live, lm, events, S, notes, daily, hod_times=None):
     simset = {id(e) for e in S}
     st = stats(S)
     open_hod = recent_open_hod_stats(daily)
@@ -618,169 +592,17 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily, hod_times=No
     mfoot = ("2m/5m ORB shorts enter on a break below the opening-range low; stop = the high of the first "
              "2-minute/5-minute candle, respectively. Short at open stop = 20% above entry.")
 
-    # ---- [7] aggregate path chart: premarket -> close, % from prev close, IST axis
-    arr = np.array([[np.nan if v is None else v for v in e["path"]] for e in S], dtype=float) if S else np.zeros((0, NPTS + 1))
-
-    def band(q):
-        out = []
-        for k in range(NPTS + 1):
-            col = arr[:, k] if len(arr) else []
-            col = col[~np.isnan(col)] if len(arr) else []
-            out.append(round(float(np.percentile(col, q)), 4) if len(col) >= 1 else None)
-        return out
-    def frame_band(key, q):
-        out = []
-        for k in range(NPTS + 1):
-            col = [e.get(key, [None] * (NPTS+1))[k] for e in S if len(e.get(key) or []) > k]
-            col = [v for v in col if v is not None and np.isfinite(v)]
-            out.append(round(float(np.percentile(col, q)), 4) if col else None)
-        return out
-    labels = [hhmm(PM_START + 5 * k, live["date"]) for k in range(NPTS + 1)]
-    # Project V and price/VWAP deviation separately, weighting histories by today's as-of VWAP state.
-    # Recompose expected price as P=V*(1+D), anchored to today's observed values.
-    now_k = max((k for k, v in enumerate(lpath) if v is not None), default=None)
-    live_v = lm.get("path_vwap") or [None] * (NPTS + 1)
-    live_d = lm.get("path_vwap_dev") or [None] * (NPTS + 1)
-    live_tw = lm.get("path_twap") or [None] * (NPTS + 1)
-    live_dt = lm.get("path_twap_dev") or [None] * (NPTS + 1)
-    live_spread = lm.get("path_vwap_twap_spread") or [None] * (NPTS + 1)
-    live_active_tw = lm.get("path_active_twap") or [None] * (NPTS + 1)
-    def vwap_state_weight(event):
-        """Prefer analogs whose price/VWAP relationship matches today at the cutoff."""
-        history = event.get("path_vwap_dev") or []
-        today_state = live_d[now_k] if now_k is not None and now_k < len(live_d) else None
-        if today_state is None:
-            return 1.0
-        if now_k is None or len(history) <= now_k or history[now_k] is None:
-            return 0.0
-        # Differences are fractional returns: 0.025 means 2.5 percentage points.
-        distance = abs(float(history[now_k]) - float(today_state))
-        return math.exp(-0.5 * (distance / 0.025) ** 2)
-
-    def weighted_median(values, weights):
-        if not values:
-            return None
-        ordered = sorted(zip(values, weights), key=lambda pair: pair[0])
-        total_weight = sum(weight for _, weight in ordered)
-        if total_weight <= 0:
-            return float(np.median(values))
-        halfway = total_weight / 2
-        running = 0.0
-        for value, weight in ordered:
-            running += weight
-            if running >= halfway:
-                return float(value)
-        return float(ordered[-1][0])
-
-    def project_frame(history_key, live_frame):
-        out = [None] * (NPTS + 1)
-        if now_k is None or live_frame[now_k] is None: return out
-        out[now_k] = live_frame[now_k]
-        for k in range(now_k + 1, NPTS + 1):
-            pairs = [(e[history_key][k] - e[history_key][now_k], vwap_state_weight(e)) for e in S
-                     if len(e.get(history_key) or []) > k and e[history_key][k] is not None
-                     and e[history_key][now_k] is not None]
-            if pairs:
-                changes, weights = zip(*pairs)
-                projected_change = weighted_median(list(changes), list(weights))
-                out[k] = round(live_frame[now_k] + projected_change, 4)
-        return out
-    vwap_proj = project_frame("path_vwap", live_v)
-    dev_proj = project_frame("path_vwap_dev", live_d)
-    twap_proj = project_frame("path_twap", live_tw)
-    dt_proj = project_frame("path_twap_dev", live_dt)
-    spread_proj = project_frame("path_vwap_twap_spread", live_spread)
-    proj = [round((1 + v) * (1 + d) - 1, 4) if v is not None and d is not None else None
-            for v, d in zip(vwap_proj, dev_proj)]
-    gap_offsets = list(range(GAP_REL_START, GAP_REL_END + 1, 5))
-    gap_labels = ["PM high" if offset == 0 else f"{offset:+d}m" for offset in gap_offsets]
-    def gap_retention(path, gap_size, pm_high_min):
-        aligned = []
-        if not gap_size or gap_size <= 0 or pm_high_min is None:
-            return [None] * len(gap_offsets)
-        for offset in gap_offsets:
-            source_pos = (pm_high_min + offset - PM_START) / 5
-            if source_pos < 0 or source_pos > NPTS:
-                aligned.append(None)
-                continue
-            left, right = int(math.floor(source_pos)), int(math.ceil(source_pos))
-            if path[left] is None or path[right] is None:
-                aligned.append(None)
-                continue
-            fraction = source_pos - left
-            value = path[left] + (path[right] - path[left]) * fraction
-            aligned.append(round(value / gap_size, 4))
-        return aligned
-
-    historical_gap_paths = [gap_retention(e["path"], e.get("pm_high_pct"), e.get("pm_hi_min")) for e in S]
-    gap_arr = np.array([[np.nan if v is None else v for v in path]
-                        for path in historical_gap_paths], dtype=float) if historical_gap_paths else np.zeros((0, len(gap_offsets)))
-    def gap_band(q):
-        out = []
-        for k in range(len(gap_offsets)):
-            col = gap_arr[:, k] if len(gap_arr) else []
-            col = col[~np.isnan(col)] if len(gap_arr) else []
-            out.append(round(float(np.percentile(col, q)), 4) if len(col) else None)
-        return out
-    live_gap_size = ((lm.get("pm_high") / live["pc"] - 1)
-                     if lm.get("pm_high") and live["pc"] > 0 and lm["pm_high"] > live["pc"] else None)
-    live_pm_high_min = lm.get("pm_hi_min")
-    gap_today = gap_retention(lpath, live_gap_size, live_pm_high_min)
-    gap_now_k = max((k for k, value in enumerate(gap_today) if value is not None), default=None)
-    gap_proj = [None] * len(gap_offsets)
-    if live_gap_size is not None and gap_now_k is not None:
-        gap_value = gap_today[gap_now_k]
-        if gap_value is not None:
-            gap_proj[gap_now_k] = gap_value
-        for k in range(gap_now_k + 1, len(gap_offsets)):
-            changes = []
-            for path in historical_gap_paths:
-                future_value, current_value = path[k], path[gap_now_k]
-                if future_value is not None and current_value is not None:
-                    changes.append(future_value - current_value)
-            if changes:
-                if gap_value is not None:
-                    gap_proj[k] = round(gap_value + float(np.median(changes)), 4)
-    gap_open_k = (round((RG_START - live_pm_high_min - GAP_REL_START) / 5)
-                  if live_pm_high_min is not None else None)
-    chart = {"labels": labels, "paths": [e["path"] for e in S], "med": band(50), "p25": band(25), "p75": band(75),
-             "vwap_med": frame_band("path_vwap", 50), "vwap_p25": frame_band("path_vwap", 25), "vwap_p75": frame_band("path_vwap", 75),
-             "dev_paths": [e.get("path_vwap_dev") for e in S], "dev_med": frame_band("path_vwap_dev", 50),
-             "dev_p25": frame_band("path_vwap_dev", 25), "dev_p75": frame_band("path_vwap_dev", 75),
-             "twap_med": frame_band("path_twap", 50), "twap_p25": frame_band("path_twap", 25), "twap_p75": frame_band("path_twap", 75),
-             "twap_paths": [e.get("path_twap") for e in S],
-             "dt_med": frame_band("path_twap_dev", 50), "dt_p25": frame_band("path_twap_dev", 25), "dt_p75": frame_band("path_twap_dev", 75),
-             "dt_paths": [e.get("path_twap_dev") for e in S],
-             "spread_med": frame_band("path_vwap_twap_spread", 50), "spread_p25": frame_band("path_vwap_twap_spread", 25), "spread_p75": frame_band("path_vwap_twap_spread", 75),
-             "spread_paths": [e.get("path_vwap_twap_spread") for e in S],
-             "vwap_today": live_v, "dev_today": live_d, "twap_today": live_tw, "active_twap_today": live_active_tw, "dt_today": live_dt, "spread_today": live_spread,
-             "vwap_proj": vwap_proj, "dev_proj": dev_proj, "twap_proj": twap_proj, "dt_proj": dt_proj, "spread_proj": spread_proj,
-             "today": lpath, "proj": proj, "gap_labels": gap_labels, "gap_paths": historical_gap_paths,
-             "gap_med": gap_band(50), "gap_p25": gap_band(25), "gap_p75": gap_band(75),
-             "gap_today": gap_today, "gap_proj": gap_proj, "premarket_gap_pct": live_gap_size,
-             "gap_now_k": gap_now_k, "gap_open_k": gap_open_k,
-             "normalization": "prev_close", "forecast_reference": "vwap_relative_weighted_analogs",
-             "now_k": now_k, "open_k": (RG_START - PM_START) // 5}
-    keyk = [(0, 240), (66, 570), (72, 600), (84, 660), (96, 720), (120, 840), (144, 960)]
-    ptext = []
-    for k, mn in keyk:
-        m_, a_, b_ = chart["med"][k], chart["p25"][k], chart["p75"][k]
-        ptext.append([f"{hhmm(mn, live['date'])} IST  history median / p25..p75 / today / proj (% from prev close)",
-                      f"{pct(m_, 0)}  /  {pct(a_, 0)}..{pct(b_, 0)}  /  {pct(lpath[k], 0)}  /  {pct(proj[k], 0)}", "w"])
-
     head.update(ticker=t, n=st["n"], summary=summary,
                 sub=f"Chart-Based Gap Up Analysis — Current Day: {day_display} · Times in IST", notes=notes)
     T = {
         "p1": f"[1] CURRENT DAY SETUP ({day_display} — latest data)",
-        "p6": "[6] 2-MIN CHARTS — today + historical premarket spike sessions, premarket → close, volume + VWAP + TWAP + running-HOD AVWAP",
-        "p7": "[7] TODAY VS HISTORICAL PREMARKET SPIKES — VWAP / TWAP COMPARISON",
+        "p6": "[6] 2-MIN CHARTS — today + historical premarket spike sessions, premarket → close, volume + VWAP + running-HOD AVWAP",
         "pd": "[D] ENTRY MODELS (similar setups)",
     }
     dilution_url = f"https://finviz.com/stock?b=2&p=m&t={quote(t, safe='')}&ta=1&ty=di"
     text = [f"Ticker: {t}  |  Finviz Dilution: {dilution_url}", f"Current Day: {day_display}", head["sub"], "=" * 42,
             f"Chart-Based Fade Grade: {head['grade']} ({head['score']})",
             f"Verdict: {head['verdict']}", "", T["p1"], kv_text(left), kv_text(right)]
-    text += ["", T["p7"], kv_text(ptext, 40)]
     if mrows:
         text += ["", T["pd"], tbl_text(mcols, mrows), mfoot]
     return {"head": head, "titles": T, "p1": {"left": left, "right": right},
@@ -788,7 +610,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily, hod_times=No
             "evcharts": evch, "session_dates": [r["date"] for r in daily] + [day_str, next_session.isoformat()],
             "model_names": ["2m ORB low break", "5m ORB low break", "Short at open"],
         "pd": {"cols": mcols, "rows": mrows, "foot": mfoot}, "premarket_grade": pm_st,
-            "chart": chart, "dilution_url": dilution_url, "text": "\n".join(text)}
+            "dilution_url": dilution_url, "text": "\n".join(text)}
 
 
 def clean(o):
