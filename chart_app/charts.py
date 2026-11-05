@@ -16,6 +16,7 @@ from chart_app.application import (
     load_daily,
     metrics,
     minute_df,
+    ist_off,
     pct,
     pd,
     poly_frame,
@@ -2850,6 +2851,50 @@ def _yahoo_chart_today_rows(ticker):
     return rows
 
 
+@app.route('/api/yahoo-live-chart')
+def yahoo_live_chart():
+    """Return current Yahoo 1-minute candles, volume, and cumulative VWAP."""
+    user=(request.args.get('user') or '').strip().lower()
+    token=(request.args.get('token') or '').strip()
+    ticker=(request.args.get('ticker') or '').strip().upper()
+    day=(request.args.get('date') or '').strip()
+    if user not in _auth.ALLOWED_USERS or not _db_validate_session(user,token):
+        return jsonify({'error':'Unauthorized'}),401
+    if not re.fullmatch(r'[A-Z.\-]{1,10}',ticker):
+        return jsonify({'error':'Invalid ticker'}),400
+    try:
+        dt.date.fromisoformat(day)
+    except ValueError:
+        return jsonify({'error':'Invalid session date'}),400
+    if day!=dt.datetime.now(ET).date().isoformat():
+        return jsonify({'error':'Yahoo live candles are only available for the current ET session.'}),404
+    try:
+        rows=_yahoo_chart_today_rows(ticker)
+        if not rows:
+            return jsonify({'error':'Yahoo Finance has no current intraday candles for this ticker.'}),503
+        bars={key:[] for key in ('t','d','o','h','l','c','v','vw')}
+        cumulative_volume=0.0
+        cumulative_dollars=0.0
+        for row in rows:
+            moment=dt.datetime.fromtimestamp(row['t']/1000,ET)
+            volume=max(0.0,float(row.get('v') or 0))
+            typical=(float(row['h'])+float(row['l'])+float(row['c']))/3
+            cumulative_volume+=volume
+            cumulative_dollars+=typical*volume
+            bars['t'].append(moment.hour*60+moment.minute)
+            bars['d'].append(day)
+            for key in ('o','h','l','c'):
+                bars[key].append(float(row[key]))
+            bars['v'].append(volume)
+            bars['vw'].append(cumulative_dollars/cumulative_volume if cumulative_volume>0 else None)
+        return jsonify({'chart':{'bars':bars,'date':day,'off':ist_off(day),
+                                 'after_hours':True,'timeframe':'1m'},
+                        'source':'Yahoo Finance','volume_source':'Yahoo 1-minute bars'})
+    except Exception as exc:
+        app.logger.warning('Yahoo live hover chart failed for %s: %s',ticker,exc)
+        return jsonify({'error':f'{type(exc).__name__}: {exc}'}),502
+
+
 @app.route('/api/chart-context/prefetch')
 def chart_context_prefetch():
     """Warm the selected session and up to two neighboring sessions per interval."""
@@ -2915,7 +2960,8 @@ def chart_context():
     context_ttl=(15 if source=='anychart' and day==today_et else 30 if day==today_et else
                  30*86400 if tf=='1d' else 3600)
     cached_context=cget(context_key,context_ttl)
-    if cached_context is not None: return jsonify(cached_context)
+    if cached_context is not None and (not is_live_anychart or cached_context.get('source')=='yahoo_finance'):
+        return jsonify(cached_context)
     try:
         daily=_gap_deepdive_daily_history(ticker); idx=next((i for i,r in enumerate(daily) if r["date"]==day),None)
         if idx is None:
@@ -3017,8 +3063,11 @@ def chart_context():
             packed=cget(prepared_key,30 if date>=today_et else 30*86400)
             if packed is not None:
                 packed_by_date[date]=packed;continue
-            if is_live_anychart and date==day and not yahoo_today_frame.empty:
-                pack_day(date,yahoo_today_frame);continue
+            if is_live_anychart and date==day:
+                if not yahoo_today_frame.empty:pack_day(date,yahoo_today_frame)
+                # The live Anychart session must come from Yahoo. Never hide a
+                # Yahoo miss by silently falling back to delayed Polygon bars.
+                continue
             if date in seed_frames:
                 pack_day(date,seed_frames.pop(date));continue
             cached_rows=cget(f'{ticker}_{date}_1m_polygon_v1') if date<today_et else None
@@ -3069,7 +3118,10 @@ def chart_context():
             packed=packed_by_date.get(date)
             if packed:
                 packed['d']=[date]*len(packed['t']);packed_parts.append(packed)
-        if not packed_parts: return jsonify({"error":"No intraday bars are available for this range"}),404
+        if not packed_parts:
+            if is_live_anychart:
+                return jsonify({"error":yahoo_today_error or "Yahoo Finance has no current intraday bars for this session."}),503
+            return jsonify({"error":"No intraday bars are available for this range"}),404
         fields=tuple(dict.fromkeys(field for part in packed_parts for field in part if field!='timeframe'))
         bars={field:[] for field in fields}
         for part in packed_parts:

@@ -220,8 +220,10 @@ function drawGapDeepDiveNavigator(mainCv,baseChart,timeframe){
 }
 function setGapDeepDiveMouseMode(mode,cv,ui={}){
   const measure=ui.measure||$('#gap_chart_measure'),pan=ui.pan||$('#gap_chart_pan');
+  const avwap=ui.avwap||$('#gap_chart_avwap'),avwapActive=mode==='avwap';
   cv._rangeMeasureMode=mode==='measure';cv._zoomSelectMode=mode!=='measure'&&mode!=='pan'&&mode!=='avwap';cv._panToolMode=mode==='pan';
   if(mode!=='avwap')cv._avwapSelectMode=false;
+  if(avwap){avwap.dataset.active=avwapActive?'1':'';avwap.style.borderColor=avwapActive?'#62c8ff':'#444';avwap.style.color=avwapActive?'#071018':'#ddd';avwap.style.background=avwapActive?'#62c8ff':'#181818';}
   if(measure){measure.dataset.active=cv._rangeMeasureMode?'1':'';measure.style.borderColor=cv._rangeMeasureMode?'#62c8ff':'';measure.textContent=cv._rangeMeasureMode?'Measure active':'Measure range';}
   if(pan){pan.dataset.active=cv._panToolMode?'1':'';pan.style.borderColor=cv._panToolMode?'#62c8ff':'';}
   cv.style.cursor=(cv._rangeMeasureMode||cv._zoomSelectMode||mode==='avwap')?'crosshair':'grab';
@@ -290,7 +292,7 @@ function cancelUnifiedChartSelection(cv,ui={}){
   if(wasPanning){cv._panOffset=cv._panStartOffset||0;cv._yZoom=cv._panStartYZoom||1;cv._onPanChange?.(cv._panOffset);cv._onYZoomChange?.(cv._yZoom);}
   cv._panActive=false;cv._selectedRangeId=null;cv._rangeDrag=null;cv._zoomDrag=null;cv._avwapSelectMode=false;
   if(cancelAvwap&&!drag&&cv._avwapAnchors?.b==null){const previous=cv._drawingUndo?.pop();if(previous)restoreChartDrawing(cv,previous);else cv._avwapAnchors=null;}
-  if(keepMeasure)setGapDeepDiveMouseMode('measure',cv,ui);else if(cv._panToolMode||cv._rangeMeasureMode)setGapDeepDiveMouseMode('zoom',cv,ui);
+  if(keepMeasure)setGapDeepDiveMouseMode('measure',cv,ui);else if(cv._panToolMode||cv._rangeMeasureMode||cancelAvwap)setGapDeepDiveMouseMode('zoom',cv,ui);
   cv._featurePersist?.();
   const box=ui.measureBox||$('#gap_chart_measure_box'),status=ui.status||$('#gap_chart_avwap_status');if(box)box.hidden=true;
   if(status)status.textContent=removeId?(keepMeasure?'Drawing removed · Measure remains active.':'Drawing removed.'):drag?(keepMeasure?'Drawing cancelled · Measure remains active.':'Drawing cancelled.'):cancelAvwap?'AVWAP selection cancelled.':keepMeasure?'Measure remains active.':'Selection cleared. Hold and drag on the chart to zoom.';
