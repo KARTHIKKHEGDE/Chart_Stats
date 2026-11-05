@@ -578,11 +578,11 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily, hod_times=No
     # ---- [6] per-event 2-min charts (today first)
     evch = []
     if live["df"] is not None and len(live["df"]):
-        today_chart_df=live["df"].copy()
-        chart_source='Polygon/history + Yahoo recent bars'
+        today_chart_df=live["df"]
+        chart_source='live intraday data'
         try:
             from chart_app.market_data import yahoo_recent_live_bars
-            yahoo_recent=yahoo_recent_live_bars(t)
+            yahoo_recent=yahoo_recent_live_bars(t, timeout=3)
             if yahoo_recent is not None and not yahoo_recent.empty:
                 yahoo_recent=yahoo_recent[yahoo_recent.index.date==day_obj]
                 if not yahoo_recent.empty:
@@ -590,6 +590,7 @@ def build_report(t, live, lm, lpath, lctx, events, S, notes, daily, hod_times=No
                     today_chart_df=today_chart_df[today_chart_df.index<cutoff]
                     today_chart_df=pd.concat([today_chart_df,yahoo_recent]).sort_index()
                     today_chart_df=today_chart_df[~today_chart_df.index.duplicated(keep='last')]
+                    chart_source='live intraday + recent Yahoo bars'
         except Exception:
             pass
         evch.append({"title": f"TODAY {day_str}  gap {pct(gap_live, 0)}  (live · {chart_source})", "date": day_str, "sim": True,

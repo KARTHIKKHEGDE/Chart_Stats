@@ -161,12 +161,12 @@ def load_daily(t, force=False):
     key = f"{ticker}_daily_polygon_v1"
     if not force:
         fresh=cget(key,6*3600)
-        if fresh is not None and all("vw" in row for row in fresh):
+        if fresh is not None:
             return fresh
         # Serve a known-good local copy immediately, then refresh the runtime
         # cache in the background so Render restarts do not force a cold wait.
         stale=cget(key)
-        if stale is not None and all("vw" in row for row in stale):
+        if stale is not None:
             _schedule_daily_candle_refresh(ticker)
             return stale
     rows=_fetch_daily_candles(ticker)
@@ -417,7 +417,7 @@ def live_snapshot(t, fast=False, include_profile=True):
     if fast:
         # Keep the blocking live request small. The report already loads Polygon
         # daily history for prior closes and historical session analysis.
-        df=_yahoo_call(lambda:tk.history(period="1d",interval="1m",prepost=True,auto_adjust=False))
+        df=_yahoo_call(lambda:tk.history(period="1d",interval="1m",prepost=True,auto_adjust=False,timeout=4))
         dly=None
     else:
         with ThreadPoolExecutor(max_workers=2) as yf_pool:
@@ -483,12 +483,12 @@ def live_snapshot(t, fast=False, include_profile=True):
             "latest_time_ist": df.index[-1].astimezone(IST).strftime("%H:%M IST")}
 
 
-def yahoo_recent_live_bars(ticker, minutes=20):
+def yahoo_recent_live_bars(ticker, minutes=20, timeout=3):
     """Return Yahoo 1-minute bars for the recent live window, when available."""
     try:
         import yfinance as yf
         frame=_yahoo_call(lambda:yf.Ticker(str(ticker).upper().replace('.', '-')).history(
-            period='1d',interval='1m',prepost=True,auto_adjust=False,actions=False))
+            period='1d',interval='1m',prepost=True,auto_adjust=False,actions=False,timeout=timeout))
         if frame is None or frame.empty:
             return None
         if frame.index.tz is None:

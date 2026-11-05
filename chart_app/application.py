@@ -11,7 +11,7 @@ Setup
 Optional env
     POLYGON_RPM=5        Per-key request-rate estimate used for progress ETA.
     SEC_USER_AGENT="Your Name your@email.com"   (real SEC contact identity; required for SEC data)
-    GAP_MIN=0.30  MAX_EVENTS=8  SIM_K=20  MIN_PRICE=0.5  MIN_DAY_VOL=100000  MIN_PM_VOL=0
+    GAP_MIN=0.30  MAX_EVENTS=20  SIM_K=20  MIN_PRICE=0.5  MIN_DAY_VOL=100000  MIN_PM_VOL=0
     STOP_PCT=0.20        stop distance (above entry) used for R-multiples + chart stop-outs
 
 Data
@@ -90,10 +90,7 @@ SEC_UA = os.getenv("SEC_USER_AGENT", "").strip()
 GAP_MIN = float(os.getenv("GAP_MIN", "0.30"))
 LOOKBACK_DAYS = 365
 HISTORY_DAYS = 740            # retain a full two years of daily candles plus split/calendar buffer
-# Limit cold historical minute-bar fetches by default so a fresh report has a
-# better chance of completing quickly. Operators can raise MAX_EVENTS when
-# they prefer broader historical coverage over response time.
-MAX_EVENTS = int(os.getenv("MAX_EVENTS", "8"))
+MAX_EVENTS = int(os.getenv("MAX_EVENTS", "20"))
 SIM_K = int(os.getenv("SIM_K", "20"))
 MIN_PRICE = float(os.getenv("MIN_PRICE", "0.5"))
 MIN_DAY_VOL = int(os.getenv("MIN_DAY_VOL", "100000"))
@@ -199,14 +196,17 @@ def _poly_request_one(path: str, params: dict) -> dict:
         raise RuntimeError("POLYGON_API_KEY is not set. Set it and restart the app.")
 
     payload = dict(params)
-    max_attempts = max(5, len(_key_pool) * 3)
+    # A large key pool should not turn one unavailable endpoint into minutes of
+    # retries. Retry a small number of distinct configured credentials only.
+    max_attempts = min(3, len(_key_pool))
     for attempt in range(max_attempts):
         key = _next_polygon_key()
         payload["apiKey"] = key
         try:
-            response = _POLY_SESSION.get("https://api.polygon.io" + path, params=payload, timeout=(3, 8))
+            response = _POLY_SESSION.get("https://api.polygon.io" + path, params=payload, timeout=(2, 4))
         except requests.RequestException:
-            time.sleep(min(2.0, 0.25 * (attempt + 1)))
+            if attempt + 1 < max_attempts:
+                time.sleep(0.1 * (attempt + 1))
             continue
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After", "30")
