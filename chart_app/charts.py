@@ -3325,9 +3325,14 @@ def register_news_ai_routes(app, db_validate_session):
             return jsonify({**cached, "cached": True})
 
         text = _fetch_article_text(url)
-        prompt = f"""You are a concise stock-market analyst. Read the following news article about {ticker or 'a company'} and return a JSON object with exactly these keys:
+        prompt = f"""You are an expert stock-market analyst specializing in small-cap dilution, warrants, and price action.
+Read the following news article about {ticker or 'a company'} and return a JSON object with exactly these keys:
 
-"summary": 2-3 short punchy sentences in plain English — what happened, why it matters for the stock. No jargon.
+"summary": 2-3 short punchy sentences in simple plain English explaining what happened and why it matters for the stock. No jargon.
+"dilution_impact": if this news involves dilution, warrants, direct offerings, private placements, shelf registrations, or ATM share sales, explain the exact dilution impact in simple, plain English (number of shares, exercise price vs market price, warrant overhang, cash raised, and whether this creates heavy selling pressure). If no dilution is involved, return null.
+"management_comment": if the article contains a management/executive/CEO/CFO quote, include up to two complete sentences verbatim. Never cut a quote mid-sentence or mid-word; if the full sentence is not available, return null.
+"catalyst_type": one of: "warrant/inducement", "financing/offering", "product/partnership", "regulatory", "earnings/revenue", "lawsuit/legal", "macro/sector", "unrelated fluff", "unknown"
+"sentiment": one of: "bullish", "bearish", "neutral" — what happened, why it matters for the stock. No jargon.
 "management_comment": if the article contains a management/executive/CEO/CFO quote, include up to two complete sentences verbatim. Never cut a quote mid-sentence or mid-word; if the full sentence is not available, return null.
 "catalyst_type": one of: "product/partnership", "financing/offering", "regulatory", "earnings/revenue", "lawsuit/legal", "macro/sector", "unrelated fluff", "unknown"
 "sentiment": one of: "bullish", "bearish", "neutral"
@@ -3348,8 +3353,12 @@ Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
                 if management_comment and not re.search(r'[.!?…][”’"\')\]]*$',management_comment):
                     app.logger.info('Omitting incomplete management quote from news summary for %s',ticker or 'unknown ticker')
                     management_comment=None
+            dilution_impact = result.get("dilution_impact")
+            if not isinstance(dilution_impact, str) or not dilution_impact.strip() or dilution_impact.lower() in ("null", "none"):
+                dilution_impact = None
             out = {
                 "summary": str(result.get("summary") or "No summary available."),
+                "dilution_impact": dilution_impact,
                 "management_comment": management_comment or None,
                 "catalyst_type": str(result.get("catalyst_type") or "unknown"),
                 "sentiment": str(result.get("sentiment") or "neutral"),
@@ -3740,98 +3749,212 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
         except Exception as exc:
             return jsonify({"error": str(exc)}), 502
 
-    # ── GlobeNewswire RSS feeds ──────────────────────────────────────────────
-    _GNW_FEEDS = [
-        {
-            "id": "public",
-            "label": "Public Companies",
-            "badge": "ALL",
-            "priority": 1,
-            "url": "https://www.globenewswire.com/RssFeed/orgclass/1/feedTitle/GlobeNewswire%20-%20News%20about%20Public%20Companies",
-        },
-        {
-            "id": "financing",
-            "label": "Financing Agreements",
-            "badge": "DILUTION",
-            "priority": 2,
-            "url": "https://www.globenewswire.com/RssFeed/subjectcode/17-Financing%20Agreements/feedTitle/GlobeNewswire%20-%20Financing%20Agreements",
-        },
-        {
-            "id": "warrants",
-            "label": "Warrants & Certificates",
-            "badge": "DILUTION",
-            "priority": 2,
-            "url": "https://www.globenewswire.com/RssFeed/subjectcode/82-Warrants%20And%20Certificates/feedTitle/GlobeNewswire%20-%20Warrants%20And%20Certificates",
-        },
-    ]
+    # ── Press Release feeds (GlobeNewswire via StockTitan & Google News) ─────
+    _GNW_HEADERS = {
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/120.0.0.0 Safari/537.36'
+        ),
+        'Accept': 'application/rss+xml,application/xml,text/xml,*/*',
+    }
 
-    def _parse_gnw_rss(xml_bytes, max_items=5):
+    def _parse_gnw_rss(xml_bytes, max_items=100):
         import xml.etree.ElementTree as ET
-        from email.utils import parsedate_to_datetime
+        from email.utils import parsedate_to_datetime as _p2d
+        import datetime as _dt
+        if xml_bytes.startswith(b'\xef\xbb\xbf'):
+            xml_bytes = xml_bytes[3:]
         root = ET.fromstring(xml_bytes)
+        ns_atom = {'atom': 'http://www.w3.org/2005/Atom'}
+        entries = root.findall('.//atom:entry', ns_atom) or list(root.iter('item'))
         items = []
-        for item in root.iter("item"):
-            t = (item.findtext("title") or "").strip()
-            link = (item.findtext("link") or "").strip()
-            pub_raw = (item.findtext("pubDate") or "").strip()
-            desc = (item.findtext("description") or "").strip()
+        seen = set()
+        for e in entries:
+            t = (e.findtext('{http://www.w3.org/2005/Atom}title') or
+                 e.findtext('title') or '').strip()
+            link_el = e.find('{http://www.w3.org/2005/Atom}link')
+            link = (link_el.get('href') if link_el is not None
+                    else e.findtext('link') or '').strip()
+            pub_raw = (e.findtext('{http://www.w3.org/2005/Atom}updated') or
+                       e.findtext('pubDate') or '').strip()
+            desc = (e.findtext('{http://www.w3.org/2005/Atom}summary') or
+                    e.findtext('description') or '').strip()
             if not t or not link:
                 continue
+            key = t[:60].lower()
+            if key in seen:
+                continue
+            seen.add(key)
             try:
-                pub_dt = parsedate_to_datetime(pub_raw)
-                published = pub_dt.isoformat()
+                published = _p2d(pub_raw).isoformat()
             except Exception:
-                published = pub_raw
-            items.append({"title": t, "url": link, "published": published,
-                           "summary": desc[:200] if desc else ""})
+                try:
+                    published = _dt.datetime.fromisoformat(pub_raw).isoformat()
+                except Exception:
+                    published = pub_raw
+            items.append({'title': t, 'url': link, 'published': published,
+                          'summary': desc[:300] if desc else ''})
             if len(items) >= max_items:
                 break
         return items
 
-    @app.route("/api/gnw-feed")
-    def gnw_feed_api():
-        user  = (request.args.get("user")  or "").strip().lower()
-        token = (request.args.get("token") or "").strip()
-        if not user or not db_validate_session(user, token):
-            return jsonify({"error": "Unauthorized"}), 401
+    def _fetch_gnw_feed(urls, max_items=100):
+        for url in urls:
+            try:
+                resp = requests.get(url, timeout=12, headers=_GNW_HEADERS)
+                if resp.status_code == 200:
+                    items = _parse_gnw_rss(resp.content, max_items=max_items)
+                    if items:
+                        return items, url
+            except Exception as exc:
+                app.logger.debug('GNW RSS fetch failed for %s: %s', url, exc)
+        return [], (urls[0] if urls else '')
 
-        DILUTION_KEYWORDS = re.compile(
-            r"offering|warrant|atm|shelf|s-3|s-1|dilut|convert|note|debenture"
-            r"|financ|agreement|securities|prospectus|direct offer",
+    @app.route('/api/gnw-feed')
+    def gnw_feed_api():
+        user  = (request.args.get('user')  or '').strip().lower()
+        token = (request.args.get('token') or '').strip()
+        ticker = (request.args.get('ticker') or '').strip().upper()
+        if not user or not db_validate_session(user, token):
+            return jsonify({'error': 'Unauthorized'}), 401
+
+        DILUTION_KW = re.compile(
+            r'offering|warrant|atm|shelf|s-3|s-1|dilut|convert|note|debenture'
+            r'|financing|agreement|securities|prospectus|direct offer'
+            r'|registered direct|private placement|inducement',
             re.I,
         )
+        FINANCING_KW = re.compile(
+            r'financing|private placement|registered direct|direct offering'
+            r'|credit facility|loan agreement|securities purchase|convertible note',
+            re.I,
+        )
+        WARRANT_KW = re.compile(r'warrant|inducement|certificate', re.I)
 
-        results = []
-        for feed in _GNW_FEEDS:
-            cache_key = f"gnw_rss_v2_{feed['id']}"
-            cached = cget(cache_key, 180)   # 3-min cache
-            if cached is not None:
-                items = cached
-            else:
-                try:
-                    resp = requests.get(
-                        feed["url"], timeout=10,
-                        headers={"User-Agent": "GapFadeAnalyzer/1.0 rss-reader",
-                                 "Accept": "application/rss+xml,application/xml,text/xml,*/*"},
-                    )
-                    resp.raise_for_status()
-                    items = _parse_gnw_rss(resp.content, max_items=4)
-                    cput(cache_key, items)
-                except Exception as exc:
-                    app.logger.warning("GNW RSS fetch failed for %s: %s", feed["id"], exc)
-                    items = []
+        cache_key = f'gnw_rss_v4_{ticker}'
+        cached = cget(cache_key, 120)
+        if cached is not None:
+            return jsonify(cached)
 
-            # Tag dilution-related items
-            for it in items:
-                it["dilution"] = bool(DILUTION_KEYWORDS.search(it["title"] + " " + it.get("summary", "")))
+        # 1. Fetch ticker-specific news if ticker is provided
+        ticker_items = []
+        if ticker:
+            ticker_items, _ = _fetch_gnw_feed([f'https://www.stocktitan.net/rss/news/{ticker}'], max_items=10)
 
-            results.append({
-                "id":       feed["id"],
-                "label":    feed["label"],
-                "badge":    feed["badge"],
-                "priority": feed["priority"],
-                "items":    items,
-            })
+        # 2. Fetch general live press releases
+        global_items, _ = _fetch_gnw_feed(['https://www.stocktitan.net/rss/'], max_items=100)
 
-        return jsonify({"categories": results})
+        # Fallback to Google News search if global stream was empty
+        if not global_items:
+            global_items, _ = _fetch_gnw_feed([
+                'https://news.google.com/rss/search?q=site:globenewswire.com&hl=en-US&gl=US&ceid=US:en'
+            ], max_items=25)
+
+        # Tag all items
+        for it in ticker_items + global_items:
+            it['dilution'] = bool(DILUTION_KW.search(it['title'] + ' ' + it.get('summary', '')))
+
+        # Separate into the 3 categories requested by user
+        # 1. Public Companies: All types of public-company announcements
+        pub_items = []
+        pub_seen = set()
+        for it in (ticker_items + global_items):
+            if it['url'] not in pub_seen:
+                pub_seen.add(it['url'])
+                pub_items.append(it)
+            if len(pub_items) >= 2:
+                break
+
+        # 2. Financing Agreements: Financing announcements and agreements
+        fin_items = []
+        fin_seen = set()
+        # First priority: ticker matching financing/dilution
+        for it in ticker_items:
+            if FINANCING_KW.search(it['title'] + ' ' + it.get('summary', '')) or it['dilution']:
+                if it['url'] not in fin_seen:
+                    fin_seen.add(it['url'])
+                    fin_items.append(it)
+        # Next: global items matching financing
+        for it in global_items:
+            if FINANCING_KW.search(it['title'] + ' ' + it.get('summary', '')):
+                if it['url'] not in fin_seen:
+                    fin_seen.add(it['url'])
+                    fin_items.append(it)
+            if len(fin_items) >= 2:
+                break
+
+        # If still < 2, fallback to Google News financing search
+        if len(fin_items) < 2:
+            extra_fin, _ = _fetch_gnw_feed([
+                'https://news.google.com/rss/search?q=%22private+placement%22+OR+%22registered+direct%22+OR+%22financing+agreement%22+site:globenewswire.com&hl=en-US&gl=US&ceid=US:en'
+            ], max_items=4)
+            for it in extra_fin:
+                it['dilution'] = True
+                if it['url'] not in fin_seen:
+                    fin_seen.add(it['url'])
+                    fin_items.append(it)
+                if len(fin_items) >= 2:
+                    break
+
+        # 3. Warrants and Certificates: Warrant-related announcements
+        war_items = []
+        war_seen = set()
+        # First priority: ticker matching warrants
+        for it in ticker_items:
+            if WARRANT_KW.search(it['title'] + ' ' + it.get('summary', '')):
+                if it['url'] not in war_seen:
+                    war_seen.add(it['url'])
+                    war_items.append(it)
+        # Next: global items matching warrants
+        for it in global_items:
+            if WARRANT_KW.search(it['title'] + ' ' + it.get('summary', '')):
+                if it['url'] not in war_seen:
+                    war_seen.add(it['url'])
+                    war_items.append(it)
+            if len(war_items) >= 2:
+                break
+
+        # If still < 2, fallback to Google News warrants search
+        if len(war_items) < 2:
+            extra_war, _ = _fetch_gnw_feed([
+                'https://news.google.com/rss/search?q=%22warrant+inducement%22+OR+%22warrant+exercise%22+OR+%22warrants%22+site:globenewswire.com&hl=en-US&gl=US&ceid=US:en'
+            ], max_items=4)
+            for it in extra_war:
+                it['dilution'] = bool(DILUTION_KW.search(it['title']))
+                if it['url'] not in war_seen:
+                    war_seen.add(it['url'])
+                    war_items.append(it)
+                if len(war_items) >= 2:
+                    break
+
+        categories = [
+            {
+                'id': 'public',
+                'label': 'Public Companies',
+                'sublabel': 'Start here · All types of public-company announcements',
+                'badge': 'ALL',
+                'priority': 1,
+                'items': pub_items[:2],
+            },
+            {
+                'id': 'financing',
+                'label': 'Financing Agreements',
+                'sublabel': 'High priority · Financing announcements and agreements',
+                'badge': 'DILUTION',
+                'priority': 2,
+                'items': fin_items[:2],
+            },
+            {
+                'id': 'warrants',
+                'label': 'Warrants and Certificates',
+                'sublabel': 'High priority · Warrant-related announcements',
+                'badge': 'DILUTION',
+                'priority': 2,
+                'items': war_items[:2],
+            },
+        ]
+        result = {'categories': categories, 'ticker': ticker}
+        cput(cache_key, result)
+        return jsonify(result)
 
