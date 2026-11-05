@@ -8,6 +8,7 @@
 .app_ui_user_visibility.json
 
 .cache/
+.local_reload_version
 
 # Local data cache (Polygon / SEC / Yahoo caches)
 .gapcache/

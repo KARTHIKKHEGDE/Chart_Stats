@@ -821,6 +821,29 @@ KEYWORD_HTML = (Path(__file__).resolve().parent.parent / "templates" / "keyword_
 
 app = Flask(__name__, static_folder="../static")
 app.logger.setLevel(logging.INFO)
+
+
+@app.after_request
+def _inject_local_reload_script(response):
+    if os.getenv("LOCAL_AUTO_RELOAD") == "1" and response.mimetype == "text/html":
+        html = response.get_data(as_text=True)
+        if "</body>" in html and "/static/local_reload.js" not in html:
+            response.set_data(html.replace("</body>", '<script src="/static/local_reload.js"></script></body>'))
+    return response
+
+
+@app.route("/api/local-reload-version")
+def local_reload_version():
+    if os.getenv("LOCAL_AUTO_RELOAD") != "1":
+        return jsonify({"error": "Not found"}), 404
+    marker = Path(__file__).resolve().parent.parent / ".local_reload_version"
+    try:
+        version = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        version = "0"
+    return jsonify({"version": version}), 200, {"Cache-Control": "no-store"}
+
+
 if not SEC_UA:
     app.logger.warning("SEC_USER_AGENT is unset; SEC-based dilution and filing data will be unavailable until a contact identity is configured.")
 
@@ -1337,8 +1360,9 @@ def main():
     url=f"http://127.0.0.1:{port}"
     print(f"Open {url}")
     if LOCAL_MAX:
-        import webbrowser
-        threading.Timer(1.2,lambda:webbrowser.open(url)).start()
+        if os.getenv("LOCAL_NO_BROWSER") != "1":
+            import webbrowser
+            threading.Timer(1.2,lambda:webbrowser.open(url)).start()
         from waitress import serve
         serve(app,host="127.0.0.1",port=port,threads=SERVER_THREADS)
     else:

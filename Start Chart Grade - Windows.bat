@@ -15,7 +15,7 @@ if errorlevel 1 goto failed
 call ".venv\Scripts\activate.bat"
 python -m pip install -r requirements.txt
 if errorlevel 1 goto failed
-python chart_stats.py 8080
+python scripts\local_dev_server.py 8080
 goto done
 
 :failed

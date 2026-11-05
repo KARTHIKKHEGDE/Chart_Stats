@@ -4,7 +4,7 @@ Flask tools for gap-up fade analysis, SEC keyword event comparison, market scann
 
 ## Run locally
 
-Double-click `Start Chart Grade - Windows.bat` on Windows or `Start Chart Grade - Mac.command` on macOS. The first run creates a `.env` from `env.example`, installs dependencies, and starts the local server; add your own Polygon keys and SEC contact string to `.env` when prompted. Local runs use `LOCAL_MAX=1` and Waitress. To run manually, use `python chart_stats.py 8080`. Deployment keeps using `gunicorn chart_stats:app`.
+Double-click `Start Chart Grade - Windows.bat` on Windows or `Start Chart Grade - Mac.command` on macOS. The first run creates a `.env` from `env.example`, installs dependencies, and starts the local server; add your own Polygon keys and SEC contact string to `.env` when prompted. Local runs use `LOCAL_MAX=1` and Waitress. The launchers watch Python files, templates, and static assets; saving one restarts the server and refreshes open app tabs automatically. To run manually without auto-reload, use `python chart_stats.py 8080`. Deployment keeps using `gunicorn chart_stats:app`.
 
 To check the Polygon keys in `.env`, run `python check_keys.py`. The checker reports each key by number without displaying its value; it sends one request per unique key.
 
