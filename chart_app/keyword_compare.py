@@ -36,8 +36,8 @@ from chart_app.application import (
     requests,
     threading,
     time,
-    twap_frame_paths,
 )
+from chart_app.market_data import twap_frame_paths
 from chart_app import auth as _auth
 
 _KW_FINANCING_FORMS = ("8-K,6-K,S-1,S-3,S-4,F-1,F-3,F-4,8-A,424B1,424B2,424B3,424B4,424B5,424B6,424B7,10-K,10-Q,20-F,40-F")
