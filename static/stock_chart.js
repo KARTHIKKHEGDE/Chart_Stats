@@ -1,5 +1,11 @@
 (function(global){
   const $=selector=>document.querySelector(selector);
+  function isExpandedChartCanvas(cv){
+    const fullscreen=document.fullscreenElement;
+    if(fullscreen&&(fullscreen===cv||fullscreen.contains(cv)))return true;
+    const modal=cv.closest('#chart_modal,#gap_deepdive_chart_modal,#chartModal');
+    return !!modal&&getComputedStyle(modal).display!=='none'&&getComputedStyle(modal).visibility!=='hidden';
+  }
   const formatDateMDY=value=>{
     const raw=String(value??'');
     const match=raw.slice(0,10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -187,7 +193,7 @@ function bindGapDeepDiveRangeInput(cv){
   cv.addEventListener('pointerup',finish,true);cv.addEventListener('pointercancel',finish,true);
   cv.addEventListener('dblclick',e=>{if(!cv._fullFeatures)return;cv._rangeZoom=1;cv._panOffset=0;cv._yZoom=1;cv._gapDeepDiveRedraw?.();},true);
   cv.addEventListener('wheel',e=>{
-  if(!cv._fullFeatures||!cv._wheelZoomEnabled||!cv._rangeGeometry)return;
+  if(!cv._fullFeatures||!cv._wheelZoomEnabled||!cv._rangeGeometry||!isExpandedChartCanvas(cv))return;
     const g=cv._rangeGeometry;if(e.offsetX<g.L||e.offsetX>g.L+g.plotW)return;
     const ratio=(e.offsetX-g.L)/g.plotW,anchor=g.viewStart+ratio*g.viewSpan,rawZoom=(cv._rangeZoom||1)*Math.exp(-Math.sign(e.deltaY)*.18),minZoom=g.baseViewSpan/g.span;
     if(e.deltaY>0&&rawZoom<minZoom-1e-6&&cv._onZoomOutMore){const requestedSessions=Math.ceil(g.baseViewSpan/rawZoom)+1;Promise.resolve(cv._onZoomOutMore(requestedSessions)).then(added=>{if(added){cv._wheelZoomMore?.(ratio,-1);return;}const zoom=minZoom,nextSpan=Math.min(g.span,g.baseViewSpan/zoom);setGapDeepDiveZoomView(cv,g,zoom,anchor-ratio*nextSpan);cv._gapDeepDiveRedraw?.();}).catch(()=>{});e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();return;}
@@ -455,7 +461,7 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
     cv.addEventListener('pointerup',e=>{if(cv._measureActive){cv._measureActive=false;return;}if(!cv._panActive)return;cv._panActive=false;cv.style.cursor='grab';if(cv._panDidMove&&cv._panMode==='time'){const dx=e.clientX-cv._panStartX;if(cv._panMinOffset===cv._panMaxOffset&&Math.abs(dx)>20)cv._onPanEdge?.(dx<0?1:-1);else if(cv._panOffset>=cv._panMaxOffset-1)cv._onPanEdge?.(1);else if(cv._panOffset<=cv._panMinOffset+1)cv._onPanEdge?.(-1);}});
     cv.addEventListener('pointercancel',()=>{cv._panActive=false;cv.style.cursor='grab';});
     cv.addEventListener('wheel',e=>{
-      if(cv._fullFeatures)return;
+      if(cv._fullFeatures||!isExpandedChartCanvas(cv))return;
       const g=cv._rangeGeometry;if(!g)return;
       if(e.offsetX<=L){e.preventDefault();cv._yZoom=Math.max(.5,Math.min(20,(cv._yZoom||1)*Math.exp(-Math.sign(e.deltaY)*.15)));cv._onYZoomChange?.(cv._yZoom);if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);return;}
       if(e.offsetX>=g.L+g.plotW)return;
