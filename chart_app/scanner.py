@@ -151,10 +151,19 @@ def _scrape_yahoo_premarket_chart(ticker):
     clean_sym = ticker.replace(".", "-")
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{clean_sym}?range=2d&interval=1m&includePrePost=true"
     try:
-        with YAHOO_REQUEST_SEMAPHORE:
-            resp = _http_session.get(url, timeout=5)
-        if resp.status_code != 200:
-            return None
+        resp = None
+        for attempt in range(3):
+            with YAHOO_REQUEST_SEMAPHORE:
+                resp = _http_session.get(url, timeout=5)
+            if resp.status_code == 200:
+                break
+            if resp.status_code not in (429, 500, 502, 503, 504) or attempt == 2:
+                return None
+            try:
+                retry_delay = float(resp.headers.get("Retry-After") or 0)
+            except (TypeError, ValueError):
+                retry_delay = 0
+            time.sleep(min(2.0, max(retry_delay, 0.25 * (attempt + 1))))
         data = resp.json()
         result_list = (data.get("chart") or {}).get("result")
         if not result_list:
@@ -167,17 +176,21 @@ def _scrape_yahoo_premarket_chart(ticker):
         p_end = pre.get("end", 0)
         reg = (meta.get("currentTradingPeriod") or {}).get("regular") or {}
         r_start = reg.get("start", 0)
+        if not p_start or not p_end or p_end <= p_start:
+            et_day = dt.datetime.now(ET).date()
+            p_start = int(dt.datetime.combine(et_day, dt.time(4, 0), ET).timestamp())
+            p_end = int(dt.datetime.combine(et_day, dt.time(9, 30), ET).timestamp())
+        if not r_start:
+            r_start = p_end
         now_ts = time.time()
 
         # Determine true yesterday close price:
-        # Before regular market opens (now_ts < r_start), Yahoo's meta.regularMarketPrice
-        # holds yesterday's official regular session closing candle!
-        # During/after regular market hours, meta.previousClose holds yesterday's close candle.
+        # In Yahoo's chart API, chartPreviousClose and previousClose are always
+        # the official previous session closing price. regularMarketPrice reflects
+        # the current/latest trading price (even in premarket), so it must NEVER
+        # be used as prev_close!
         is_premarket_now = (now_ts < r_start) if r_start else True
-        if is_premarket_now and meta.get("regularMarketPrice"):
-            prev_close = float(meta["regularMarketPrice"])
-        else:
-            prev_close = float(meta.get("previousClose") or meta.get("chartPreviousClose") or 0.0)
+        prev_close = float(meta.get("chartPreviousClose") or meta.get("previousClose") or meta.get("regularMarketPreviousClose") or 0.0)
 
         timestamps = chart.get("timestamp") or []
         quote = ((chart.get("indicators") or {}).get("quote") or [{}])[0]
@@ -204,8 +217,15 @@ def _scrape_yahoo_premarket_chart(ticker):
         pm_high_time = 0
         today_closes = []
 
-        # Scan premarket window
-        for ts, h, c, v in zip(timestamps, highs, closes, volumes):
+        # Yahoo can return a shorter or partially-null volume array than the
+        # OHLC arrays for thinly traded symbols. Iterate by timestamp so one
+        # missing volume element cannot truncate all later price bars.
+        for index, ts in enumerate(timestamps):
+            h = highs[index] if index < len(highs) else None
+            c = closes[index] if index < len(closes) else None
+            v = volumes[index] if index < len(volumes) else 0
+            if ts is None:
+                continue
             if p_start <= ts < p_end:
                 bar_price = h if (h is not None and h > 0) else (c or 0.0)
                 if bar_price > pm_high:
@@ -221,10 +241,16 @@ def _scrape_yahoo_premarket_chart(ticker):
         # Current price: most recent bar today, or fulldayPrice / regularMarketPrice
         if today_closes:
             cur_price = today_closes[-1]
-        elif not is_premarket_now and meta.get("regularMarketPrice"):
+        elif meta.get("fulldayPrice"):
+            cur_price = float(meta["fulldayPrice"])
+        elif meta.get("regularMarketPrice"):
             cur_price = float(meta["regularMarketPrice"])
         else:
-            cur_price = float(meta.get("fulldayPrice") or pm_high or prev_close)
+            cur_price = float(pm_high or prev_close)
+
+        # If in premarket and no discrete premarket high bar was formed, use current price / day high
+        if is_premarket_now and pm_high <= 0:
+            pm_high = max(cur_price, float(meta.get("regularMarketDayHigh") or 0.0))
 
         # If Yahoo 1m feed did not stream individual 1m volume ticks during premarket,
         # fallback to the cumulative market volume recorded in meta
@@ -235,13 +261,21 @@ def _scrape_yahoo_premarket_chart(ticker):
             return None
 
         # Premarket spike % and current gain % vs YESTERDAY'S CLOSE CANDLE
-        pm_spike_pct = ((pm_high - prev_close) / prev_close) * 100.0
-        current_pct = ((cur_price - prev_close) / prev_close) * 100.0
+        pm_spike_pct = ((pm_high - prev_close) / prev_close) * 100.0 if prev_close > 0 else 0.0
+        current_pct = ((cur_price - prev_close) / prev_close) * 100.0 if prev_close > 0 else 0.0
 
-        # Scanner qualification: current change >30%, dollar volume >$500k,
-        # and a share price strictly between $0.30 and $15.
-        if current_pct > 30.0 and eff_dvol > 500_000 and 0.30 < cur_price < 15.0:
-            status = "green"
+        # Scanner qualification:
+        # Green: current change >30% (or spiked and currently >=50%)
+        # Yellow: spiked >=50% in premarket, now faded below 50%
+        # Volume: dollar volume >$500k, share price strictly between $0.30 and $15.0
+        meets_criteria = (current_pct > 30.0 or pm_spike_pct >= 50.0) and eff_dvol > 500_000 and 0.30 <= cur_price <= 15.0
+        if meets_criteria:
+            if current_pct >= 50.0 or (current_pct > 30.0 and pm_spike_pct < 50.0):
+                status = "green"
+            elif pm_spike_pct >= 50.0 and current_pct < 50.0:
+                status = "yellow"
+            else:
+                status = "green"
             
             # Size intensity for green scaling (more size -> deeper/brighter green)
             if current_pct >= 200.0:

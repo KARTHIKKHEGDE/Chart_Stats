@@ -28,7 +28,7 @@ services:
       - key: SERVER_THREADS
         value: "50"
       - key: YAHOO_REQUEST_LIMIT
-        value: "4"
+        value: "16"
       - key: POLYGON_API_KEY
         sync: false
       - key: POLYGON_API_KEYS

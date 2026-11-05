@@ -2108,6 +2108,12 @@ function zoomGapUpChartCard(card,tab,direction){
   }
   card._zoom=Math.max(minZoom,nextZoom);redraw();
 }
+function drawEvCardLoading(canvas,message='Loading chart context…'){
+  const width=Math.max(300,(canvas.parentElement?.clientWidth||316)-16),height=540,dpr=Math.min(3,Math.max(window.devicePixelRatio||1,2));
+  canvas.style.width=`${width}px`;canvas.style.height=`${height}px`;canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);
+  const context=canvas.getContext('2d');context.setTransform(canvas.width/width,0,0,canvas.height/height,0,0);context.clearRect(0,0,width,height);
+  context.fillStyle='#91a5b7';context.font='13px Consolas,monospace';context.fillText(message,14,28);
+}
 function drawEvAll(evList, containerEl){
   const cEl = containerEl || (activeTab && openTabs[activeTab] ? openTabs[activeTab].container : document);
   const list = evList || (activeTab && openTabs[activeTab] ? openTabs[activeTab].EV : []);
@@ -2159,7 +2165,8 @@ function drawEvAll(evList, containerEl){
     if(!item.chart?.bars?.t?.length){if(item.premarketSpikeChart)loadPremarketSpikeChart(tabForCharts,card,item);else if(!String(item.title||'').startsWith('TODAY '))loadGapEventChart(tabForCharts,card,item);}
     const markerDates=card._contextDates?.length?card._contextDates:[card._sessionDate||item.date],markerKey=`${String(tabForCharts?.result?.head?.ticker||'').toUpperCase()}|${[...new Set(markerDates)].sort().join(',')}`;
     if(tabForCharts&&cv._marketEventKey!==markerKey){cv._marketEventKey=markerKey;cv._marketEvents=[];loadChartMarketEvents(tabForCharts.result?.head?.ticker,markerDates).then(events=>{if(cv._marketEventKey!==markerKey||!cv.isConnected)return;cv._marketEvents=events;if(cv._drawEvArgs)drawEv(cv,...cv._drawEvArgs);if($('#chart_modal').style.display==='flex'&&currentModalSlot===i)renderModalChart();});}
-    if(!card._contextChart&&!card._contextLoading&&!card._contextError)loadChartContext(card,tabForCharts);
+    if(!card._contextChart&&!card._contextLoading&&!card._contextError&&!card._contextRetryPending)loadChartContext(card,tabForCharts);
+    if(!card._contextChart&&(card._contextLoading||card._contextRetryPending||card._contextError)){drawEvCardLoading(cv,card._contextRetryPending?'Retrying chart data…':card._contextError?'Chart context unavailable · open chart to retry':'Loading chart context…');return;}
     cv._zoomOwner=card;cv._onZoomOutMore=async requestedSessions=>{if(card._contextLoading)return false;const loaded=Math.max(1,card._contextDates?.length||card._chartDays||5),maximum=card._chartTf==='1d'?550:400;if(loaded>=Math.min(maximum,requestedSessions))return false;card._chartDays=Math.min(maximum,Math.max(loaded+20,requestedSessions));await loadChartContext(card,tabForCharts);return !card._contextError;};drawEv(cv,renderItem.chart,sel,card._showBz===undefined?bzChecked:card._showBz,undefined,card._chartTf,card._zoom||1);
   });
 }
@@ -2178,22 +2185,29 @@ async function loadChartContext(card,tab,anchorDate,extendDaily=false,extendSide
     const cacheKey=`${tf}|${days}|${card._sessionDate}`;
     const cached=card._contextCache[cacheKey];
     if(cached?.dates?.length>=Math.min(days,5)&&cached.dates.includes(card._sessionDate)){
-      card._contextChart=cached.bars;card._contextDates=cached.dates;card._contextDaily=false;card._contextError='';card._contextLoading=false;card._contextEdgeDone={};
+      card._contextChart=cached.bars;card._contextDates=cached.dates;card._contextDaily=false;card._contextError='';card._contextLoading=false;card._contextRetryPending=false;card._contextRetryCount=0;card._contextEdgeDone={};
       if($('#chart_modal').style.display==='flex'&&currentModalSlot===Number(card.dataset.evSlot))$('#cm_status').textContent=`Loaded ${cached.dates.length} sessions around ${card._sessionDate}.`;
       drawEvAll(tab.EV,tab.container);
       if($('#chart_modal').style.display==='flex'&&currentModalSlot===Number(card.dataset.evSlot))renderModalChart();
       return;
     }
   }
-  card._contextLoading=true;card._contextError='';
+  card._contextLoading=true;card._contextError='';card._contextRetryPending=false;
   const requestId=(card._contextRequestId||0)+1;card._contextRequestId=requestId;
   const query=new URLSearchParams({ticker:tab.result?.head?.ticker||'',date:anchorDate||card._sessionDate,days:String(days),tf,user:currentUser||'',token:sessionToken||'',postmarket:'1',source:'polygon'});
   if($('#chart_modal').style.display==='flex'&&currentModalSlot===Number(card.dataset.evSlot))$('#cm_status').textContent=`Loading up to two sessions before and after ${tab.result?.head?.ticker||''} ${formatDateMDY(card._sessionDate)}…`;
   try{const response=await fetch('/api/chart-context?'+query.toString()),data=await gapDeepDiveJson(response);if(requestId!==card._contextRequestId)return;if(!response.ok)throw new Error(data.error||'Could not load chart range');if(extendDaily&&tf==='1d'&&card._contextDaily&&card._contextChart){const previousDates=card._contextDates||[],merged=mergeDailyChartBars(card._contextChart,data.bars),addedBefore=previousDates.length?merged.d.indexOf(previousDates[0]):0,addedAfter=previousDates.length?merged.d.length-merged.d.indexOf(previousDates[previousDates.length-1])-1:0;card._contextChart=merged;card._contextDates=merged.d;card._panOffset=(card._panOffset||0)-addedBefore;if(extendSide&&((extendSide<0&&!addedBefore)||(extendSide>0&&!addedAfter))){card._contextEdgeDone=card._contextEdgeDone||{};card._contextEdgeDone[extendSide]=true;}else card._contextEdgeDone={};}else{card._contextChart=data.bars;card._contextDates=data.dates;card._contextDaily=!!data.daily;card._contextEdgeDone={};
     // Save to per-TF cache (all TFs incl. 1d, not during anchor-change extends)
     if(!anchorDate&&!extendDaily){const cacheKey=`${tf}|${days}|${card._sessionDate}`;card._contextCache[cacheKey]={bars:data.bars,dates:data.dates};}
-  }if(anchorDate)card._sessionDate=extendDaily?card._sessionDate:anchorDate;}
-  catch(error){if(!extendDaily)card._contextChart=null;card._contextError=error.message;}
+  }if(anchorDate)card._sessionDate=extendDaily?card._sessionDate:anchorDate;card._contextRetryPending=false;card._contextRetryCount=0;}
+  catch(error){if(!extendDaily)card._contextChart=null;card._contextError=error.message;
+    const status=Number(error.status)||Number(error.message.match(/HTTP\s+(\d+)/i)?.[1]||0);
+    if(!extendDaily&&(status===0||status===429||status>=500)&&(card._contextRetryCount||0)<2){
+      card._contextRetryCount=(card._contextRetryCount||0)+1;card._contextRetryPending=true;
+      const retryRequestId=requestId,delay=350*card._contextRetryCount;
+      setTimeout(()=>{if(!card.isConnected||card._contextRequestId!==retryRequestId)return;card._contextRetryPending=false;card._contextError='';loadChartContext(card,tab);},delay);
+    }
+  }
   card._contextLoading=false;
   if($('#chart_modal').style.display==='flex'&&currentModalSlot===Number(card.dataset.evSlot))$('#cm_status').textContent=card._contextError
     ?`Could not load neighboring sessions: ${card._contextError}`
@@ -3772,22 +3786,44 @@ function saveScannerApproach(id){
 function checkScannerTickerAnnouncements(tickers, sessionDate){
   if(!scannerAlarmEnabled || !sessionDate) return;
   const storageKey = 'gap_scanner_spoken_' + currentUser + '_' + sessionDate;
+  const firstSeenKey = 'gap_scanner_firstseen_' + currentUser + '_' + sessionDate;
   if(scannerAnnouncementSession !== sessionDate){
     scannerAnnouncementSession = sessionDate;
     try { scannerTickerAnnouncements = JSON.parse(localStorage.getItem(storageKey) || '{}') || {}; }
     catch(e){ scannerTickerAnnouncements = {}; }
+    // Load first-seen set for today (tickers seen for the first time this session)
+    try {
+      const fs = JSON.parse(localStorage.getItem(firstSeenKey) || '[]');
+      window._scannerFirstSeen = new Set(Array.isArray(fs) ? fs : []);
+    } catch(e){ window._scannerFirstSeen = new Set(); }
   }
+  if(!window._scannerFirstSeen) window._scannerFirstSeen = new Set();
   const now = Date.now();
+  let firstSeenChanged = false;
   for(const row of tickers){
     const ticker = String(row.ticker || '').toUpperCase();
     if(!ticker) continue;
+    const isFirstTime = !window._scannerFirstSeen.has(ticker);
     const last = Number(scannerTickerAnnouncements[ticker] || 0);
-    if(last && now - last < 5 * 60 * 1000) continue;
-    const headline = scannerSettings.news_enabled ? String(row.latest_news || '').trim() : '';
-    announceScannerTicker(ticker, headline ? 'Latest news. ' + headline : '');
+    const sinceLastSpoken = last ? now - last : Infinity;
+    // Always announce on first appearance (with news headline)
+    // Re-announce every 5 min for name only (news only if news_enabled)
+    if(!isFirstTime && sinceLastSpoken < 5 * 60 * 1000) continue;
+    const headline = String(row.latest_news || '').trim();
+    // First appearance: always read the news headline if available
+    // Repeat every 5 min: only read news if news_enabled checkbox is on
+    const readNews = headline && (isFirstTime || scannerSettings.news_enabled);
+    announceScannerTicker(ticker, readNews ? 'Latest news. ' + headline : '');
     scannerTickerAnnouncements[ticker] = now;
+    if(isFirstTime){
+      window._scannerFirstSeen.add(ticker);
+      firstSeenChanged = true;
+    }
   }
   try { localStorage.setItem(storageKey, JSON.stringify(scannerTickerAnnouncements)); } catch(e){}
+  if(firstSeenChanged){
+    try { localStorage.setItem(firstSeenKey, JSON.stringify([...window._scannerFirstSeen])); } catch(e){}
+  }
 }
 
 function loadScannerVoices(){
