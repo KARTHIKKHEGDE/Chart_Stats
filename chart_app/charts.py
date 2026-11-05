@@ -141,31 +141,32 @@ def _filing_ai_key_order(provider, keys):
 
 def _call_filing_ai(prompt, max_tokens=550, timeout=45):
     failures = []
-    for provider in ("groq", "gemini"):
+    for provider in ("gemini", "groq"):
         keys = _filing_ai_keys(provider)
         if not keys:
             continue
         for key in _filing_ai_key_order(provider, keys):
             try:
-                if provider == "groq":
-                    response = requests.post(
-                        "https://api.groq.com/openai/v1/chat/completions",
-                        headers={"Authorization": f"Bearer {key}"},
-                        json={"model": os.getenv("GROQ_FILING_MODEL", "openai/gpt-oss-20b"),
-                              "messages": [{"role": "user", "content": prompt}],
-                              "temperature": 0.1, "max_completion_tokens": max_tokens,
-                              "response_format": {"type": "json_object"}},
-                        timeout=timeout,
-                    )
-                else:
+                if provider == "gemini":
                     model = (os.getenv("GEMINI_FILING_MODEL") or os.getenv("GEMINI_MODEL")
-                             or "gemini-3.5-flash-lite").strip()
+                             or "gemini-3.5-flash").strip()
                     response = requests.post(
                         f"https://generativelanguage.googleapis.com/v1beta/models/{quote(model, safe='-.:')}:generateContent",
                         headers={"x-goog-api-key": key},
                         json={"contents": [{"parts": [{"text": prompt}]}],
                               "generationConfig": {"temperature": 0.1, "maxOutputTokens": max_tokens,
-                                                   "responseMimeType": "application/json"}},
+                                                   "responseMimeType": "application/json",
+                                                   "thinkingConfig": {"thinkingBudget": 0}}},
+                        timeout=min(timeout, 25),
+                    )
+                else:
+                    response = requests.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {key}"},
+                        json={"model": os.getenv("GROQ_FILING_MODEL", "llama-3.3-70b-versatile"),
+                              "messages": [{"role": "user", "content": prompt}],
+                              "temperature": 0.1, "max_completion_tokens": max_tokens,
+                              "response_format": {"type": "json_object"}},
                         timeout=timeout,
                     )
                 if response.status_code in (401, 403):
@@ -173,21 +174,21 @@ def _call_filing_ai(prompt, max_tokens=550, timeout=45):
                     continue
                 if response.status_code == 429:
                     failures.append(f"{provider} quota/rate limit reached")
-                    break
+                    continue
                 response.raise_for_status()
                 payload = response.json()
                 if provider == "groq":
                     answer = payload["choices"][0]["message"]["content"]
                 else:
-                    answer = "".join(part.get("text", "") for part in
-                                     payload["candidates"][0]["content"]["parts"])
+                    parts = payload.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                    answer = "".join(part.get("text", "") for part in parts if isinstance(part, dict) and "text" in part)
                 if answer.strip():
                     return answer.strip(), provider
                 failures.append(f"{provider} returned an empty explanation")
-                break
+                continue
             except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
                 failures.append(f"{provider} request failed ({type(exc).__name__})")
-                break
+                continue
     if not _filing_ai_keys("groq") and not _filing_ai_keys("gemini"):
         raise RuntimeError("Configure GROQ_API_KEYS or GEMINI_API_KEYS in the server environment.")
     raise RuntimeError("AI explanation providers are unavailable or at quota. Try again later.")
@@ -1882,7 +1883,7 @@ def sec_dilution_history():
         candidates.extend(item for item in recent_6k if str(item.get('accession') or '') not in candidate_keys)
         candidate_keys={str(item.get('accession') or '') for item in candidates}
         candidates.extend(item for item in recent_ownership if str(item.get('accession') or '') not in candidate_keys)
-        candidates=sorted(candidates,key=lambda item:item.get('filing_date',''),reverse=True)[:70]
+        candidates=sorted(candidates,key=lambda item:item.get('filing_date',''),reverse=True)[:35]
         app.logger.info('SEC dilution review %s: selected %d filings from %d candidates',
                         ticker,len(candidates),len(all_filings))
         update_progress('selecting_filings',
@@ -1959,7 +1960,7 @@ def sec_dilution_history():
         source_records=[]
         exhibit_jobs=[]
         seen_exhibits=set()
-        source_budget=70
+        source_budget=35
         for item,(filing_text,filing_anchors),url in zip(candidates,primary_results,filing_urls):
             if not filing_text or len(filing_text)<100:
                 app.logger.info('Skipping unreadable dilution source %s %s',ticker,item.get('accession'))
