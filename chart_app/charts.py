@@ -157,7 +157,7 @@ def _call_filing_ai(prompt, max_tokens=550, timeout=45):
                               "generationConfig": {"temperature": 0.1, "maxOutputTokens": max_tokens,
                                                    "responseMimeType": "application/json",
                                                    "thinkingConfig": {"thinkingBudget": 0}}},
-                        timeout=min(timeout, 25),
+                        timeout=timeout,
                     )
                 else:
                     response = requests.post(
@@ -195,21 +195,66 @@ def _call_filing_ai(prompt, max_tokens=550, timeout=45):
 
 
 def _parse_ai_json_object(answer):
-    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", answer.strip(), flags=re.I)
+    cleaned = re.sub(r"```(?:json)?", "", (answer or "").strip(), flags=re.I).strip()
     try:
-        parsed=json.loads(cleaned)
-    except (ValueError, TypeError):
-        parsed={}
-        start=cleaned.find('{')
-        if start>=0:
-            decoder=json.JSONDecoder()
-            try:
-                parsed,_end=decoder.raw_decode(cleaned[start:])
-            except (ValueError,TypeError):
-                parsed={}
-    if not isinstance(parsed, dict):
-        return {}
-    return parsed
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+    start = cleaned.find('{')
+    if start >= 0:
+        cleaned = cleaned[start:]
+        try:
+            decoder = json.JSONDecoder()
+            parsed, _end = decoder.raw_decode(cleaned)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+        # Auto-close truncated JSON strings, arrays, and braces
+        in_string = False
+        escape = False
+        stack = []
+        clean_chars = []
+        for c in cleaned:
+            if escape:
+                escape = False
+                clean_chars.append(c)
+                continue
+            if c == '\\':
+                escape = True
+                clean_chars.append(c)
+                continue
+            if c == '"':
+                in_string = not in_string
+                clean_chars.append(c)
+                continue
+            if in_string:
+                clean_chars.append(c)
+                continue
+            if c in '{[':
+                stack.append(c)
+                clean_chars.append(c)
+            elif c in '}]':
+                if stack and ((c == '}' and stack[-1] == '{') or (c == ']' and stack[-1] == '[')):
+                    stack.pop()
+                clean_chars.append(c)
+            else:
+                clean_chars.append(c)
+        reconstructed = ''.join(clean_chars)
+        if in_string:
+            reconstructed += '"'
+        reconstructed = re.sub(r',\s*$', '', reconstructed)
+        for opener in reversed(stack):
+            reconstructed += '}' if opener == '{' else ']'
+        try:
+            parsed = json.loads(reconstructed)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+    return {}
 
 
 def _parse_filing_summary(answer):
