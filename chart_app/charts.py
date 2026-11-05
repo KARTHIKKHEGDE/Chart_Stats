@@ -3739,3 +3739,99 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
             return jsonify(out)
         except Exception as exc:
             return jsonify({"error": str(exc)}), 502
+
+    # ── GlobeNewswire RSS feeds ──────────────────────────────────────────────
+    _GNW_FEEDS = [
+        {
+            "id": "public",
+            "label": "Public Companies",
+            "badge": "ALL",
+            "priority": 1,
+            "url": "https://www.globenewswire.com/RssFeed/orgclass/1/feedTitle/GlobeNewswire%20-%20News%20about%20Public%20Companies",
+        },
+        {
+            "id": "financing",
+            "label": "Financing Agreements",
+            "badge": "DILUTION",
+            "priority": 2,
+            "url": "https://www.globenewswire.com/RssFeed/subjectcode/17-Financing%20Agreements/feedTitle/GlobeNewswire%20-%20Financing%20Agreements",
+        },
+        {
+            "id": "warrants",
+            "label": "Warrants & Certificates",
+            "badge": "DILUTION",
+            "priority": 2,
+            "url": "https://www.globenewswire.com/RssFeed/subjectcode/82-Warrants%20And%20Certificates/feedTitle/GlobeNewswire%20-%20Warrants%20And%20Certificates",
+        },
+    ]
+
+    def _parse_gnw_rss(xml_bytes, max_items=5):
+        import xml.etree.ElementTree as ET
+        from email.utils import parsedate_to_datetime
+        root = ET.fromstring(xml_bytes)
+        items = []
+        for item in root.iter("item"):
+            t = (item.findtext("title") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            pub_raw = (item.findtext("pubDate") or "").strip()
+            desc = (item.findtext("description") or "").strip()
+            if not t or not link:
+                continue
+            try:
+                pub_dt = parsedate_to_datetime(pub_raw)
+                published = pub_dt.isoformat()
+            except Exception:
+                published = pub_raw
+            items.append({"title": t, "url": link, "published": published,
+                           "summary": desc[:200] if desc else ""})
+            if len(items) >= max_items:
+                break
+        return items
+
+    @app.route("/api/gnw-feed")
+    def gnw_feed_api():
+        user  = (request.args.get("user")  or "").strip().lower()
+        token = (request.args.get("token") or "").strip()
+        if not user or not db_validate_session(user, token):
+            return jsonify({"error": "Unauthorized"}), 401
+
+        DILUTION_KEYWORDS = re.compile(
+            r"offering|warrant|atm|shelf|s-3|s-1|dilut|convert|note|debenture"
+            r"|financ|agreement|securities|prospectus|direct offer",
+            re.I,
+        )
+
+        results = []
+        for feed in _GNW_FEEDS:
+            cache_key = f"gnw_rss_v2_{feed['id']}"
+            cached = cget(cache_key, 180)   # 3-min cache
+            if cached is not None:
+                items = cached
+            else:
+                try:
+                    resp = requests.get(
+                        feed["url"], timeout=10,
+                        headers={"User-Agent": "GapFadeAnalyzer/1.0 rss-reader",
+                                 "Accept": "application/rss+xml,application/xml,text/xml,*/*"},
+                    )
+                    resp.raise_for_status()
+                    items = _parse_gnw_rss(resp.content, max_items=4)
+                    cput(cache_key, items)
+                except Exception as exc:
+                    app.logger.warning("GNW RSS fetch failed for %s: %s", feed["id"], exc)
+                    items = []
+
+            # Tag dilution-related items
+            for it in items:
+                it["dilution"] = bool(DILUTION_KEYWORDS.search(it["title"] + " " + it.get("summary", "")))
+
+            results.append({
+                "id":       feed["id"],
+                "label":    feed["label"],
+                "badge":    feed["badge"],
+                "priority": feed["priority"],
+                "items":    items,
+            })
+
+        return jsonify({"categories": results})
+

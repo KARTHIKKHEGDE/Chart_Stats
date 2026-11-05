@@ -965,6 +965,100 @@ function formatIstDateTime(value){
   const get=type=>parts.find(part=>part.type===type)?.value||'';
   return `${get('month')}/${get('day')}/${get('year')} · ${get('hour')}:${get('minute')} ${get('dayPeriod')} IST`;
 }
+
+// ── GlobeNewswire RSS panel ───────────────────────────────────────────────
+const _gnwAiCache = {};
+
+async function loadGnwFeed(panel) {
+  if (!panel || panel._gnwLoaded) return;
+  panel._gnwLoaded = true;
+  const inner = panel.querySelector('[data-gnw-inner]');
+  if (!inner) return;
+  inner.innerHTML = '<div style="color:#777;padding:6px 0">Loading GlobeNewswire feeds…</div>';
+  try {
+    const qs = new URLSearchParams({user: currentUser||'', token: sessionToken||''});
+    const resp = await fetch('/api/gnw-feed?' + qs.toString());
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'GNW feed error');
+    renderGnwPanel(inner, data.categories || []);
+  } catch(e) {
+    inner.innerHTML = `<div style="color:#f87;padding:6px 0">Could not load GlobeNewswire feeds: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderGnwPanel(inner, cats) {
+  const BADGE_COLOR = {DILUTION:'#ffa500', ALL:'#5b8dd9'};
+  let html = '';
+  for (const cat of cats) {
+    const bc = BADGE_COLOR[cat.badge] || '#777';
+    const isDilution = cat.badge === 'DILUTION';
+    html += `<div style="margin-bottom:14px">`;
+    html += `<div style="display:flex;align-items:center;gap:7px;margin-bottom:5px">`;
+    html += `<span style="font:bold 12px Consolas,monospace;color:#c8d8e8">${esc(cat.label)}</span>`;
+    html += `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:${bc}22;color:${bc};border:1px solid ${bc}44;font-weight:bold">${esc(cat.badge)}</span>`;
+    html += `</div>`;
+    if (!cat.items || !cat.items.length) {
+      html += `<div style="color:#555;font-size:12px;padding:3px 0">No recent items.</div>`;
+    } else {
+      const show = cat.items.slice(0, 2);
+      for (const item of show) {
+        const dilStyle = item.dilution ? 'border-left:3px solid #ffa500;padding-left:8px;' : '';
+        html += `<div data-gnw-item style="${dilStyle}padding:5px 0;border-bottom:1px solid #1f2938">`;
+        const pub = item.published ? formatIstDateTime(item.published) : '';
+        if (pub) html += `<span style="display:inline-block;margin-right:7px;padding:1px 5px;border:1px solid #294458;border-radius:3px;background:#0b151c;color:#9fc5dc;font-size:11px;white-space:nowrap">${esc(pub)}</span>`;
+        if (item.dilution) html += `<span style="font-size:10px;color:#ffa500;margin-right:5px;font-weight:bold">⚠ DILUTION</span>`;
+        html += `<button type="button" class="newsAiTrigger gnwAiTrigger" style="background:none;border:0;color:#6cc4ff;cursor:pointer;font:inherit;text-align:left;padding:0;text-decoration:underline;text-underline-offset:2px" data-url="${esc(item.url)}" data-title="${esc(item.title)}" data-published="${esc(item.published||'')}" data-ticker="">${esc(item.title)}</button>`;
+        html += `<div data-gnw-ai-box style="display:none;margin-top:6px"></div>`;
+        html += `</div>`;
+      }
+    }
+    html += `</div>`;
+  }
+  inner.innerHTML = html || '<div style="color:#555;padding:6px 0">No GlobeNewswire items found.</div>';
+  // Wire up click-for-AI on GNW items
+  inner.querySelectorAll('.gnwAiTrigger').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const row = btn.closest('[data-gnw-item]');
+      const box = row && row.querySelector('[data-gnw-ai-box]');
+      if (!box) return;
+      if (box.dataset.done) { box.style.display = box.style.display === 'none' ? '' : 'none'; return; }
+      box.style.display = '';
+      box.innerHTML = '<span style="color:#777;font-size:12px">Analyzing with AI…</span>';
+      const url = btn.dataset.url, title = btn.dataset.title;
+      const cacheKey = 'gnw_ai_' + url;
+      if (_gnwAiCache[cacheKey]) { renderGnwAiResult(box, _gnwAiCache[cacheKey]); return; }
+      try {
+        const resp = await fetch('/api/news-summary', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({user: currentUser||'', token: sessionToken||'', url, title, ticker: ''})
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || 'AI error');
+        _gnwAiCache[cacheKey] = data;
+        box.dataset.done = '1';
+        renderGnwAiResult(box, data);
+      } catch(err) {
+        box.innerHTML = `<span style="color:#f87;font-size:12px">AI failed: ${esc(err.message)}</span>`;
+      }
+    });
+  });
+}
+
+function renderGnwAiResult(box, data) {
+  const SEN = {bullish:'#3ddc84', bearish:'#ff5a5a', neutral:'#aaa'};
+  const sc = SEN[data.sentiment] || '#aaa';
+  let h = `<div style="background:#0d1620;border:1px solid #1e3047;border-radius:5px;padding:9px 12px;margin-top:4px;font-size:12px">`;
+  if (data.summary) h += `<div style="color:#c8d8e8;line-height:1.5;margin-bottom:5px">${esc(data.summary)}</div>`;
+  if (data.management_comment) h += `<div style="color:#aaa;border-left:2px solid #29a8ff;padding-left:8px;margin-bottom:5px;font-style:italic">${esc(data.management_comment)}</div>`;
+  h += `<div style="display:flex;gap:10px;flex-wrap:wrap">`;
+  h += `<span style="font-size:11px;color:#777">Type: <span style="color:#8fd3ff">${esc(data.catalyst_type||'—')}</span></span>`;
+  h += `<span style="font-size:11px;color:#777">Sentiment: <span style="color:${sc};font-weight:bold">${esc(data.sentiment||'—')}</span></span>`;
+  if (data.cached) h += `<span style="font-size:10px;color:#444">cached</span>`;
+  h += `</div></div>`;
+  box.innerHTML = h;
+}
+
 function newsPressReleaseRow(item,ticker){
   const hasUrl=/^https?:\/\//i.test(item.url||'');
   const link=hasUrl
@@ -2003,6 +2097,18 @@ function renderTab(tab, r, isRefresh){
   const newsItems = r.news || [];
   o += `<div class="panel" data-news-panel><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px"><span>Latest Press Releases &#x2013; Yahoo Finance</span><span style="display:flex;gap:7px;flex-wrap:wrap"><button type="button" class="aioBtn" onclick="openAioModal(event,this)" data-aio-summary-trigger data-ticker="${esc(h.ticker)}" style="font-size:11px;padding:4px 10px">&#128202; All-in-One Summary</button><button type="button" class="aioBtn" data-ticker-chat-toggle data-ticker="${esc(h.ticker)}" aria-label="Open AI chat for ${esc(h.ticker)}" style="font-size:11px;padding:4px 10px">&#128172; Ask AI</button></span></div>`+
     (newsItems.length ? `<div data-news-list>${newsItems.map(item=>newsPressReleaseRow(item,h.ticker)).join('')}</div><div style="display:flex;align-items:center;gap:10px;margin-top:8px"><button type="button" class="newsMoreBtn" data-ticker="${esc(h.ticker)}" data-offset="${newsItems.length}" style="border:1px solid #24577a;border-radius:4px;background:#102333;color:#8ed5ff;padding:6px 12px;cursor:pointer;font:inherit">2 more</button><span class="foot" data-news-more-status role="status"></span></div>` : `<div class="foot">${esc(r.news_status || 'No press releases found on Yahoo Finance.')}</div>`) + `</div>`;
+
+  o += `<div class="panel" data-gnw-panel style="margin-top:0">
+    <div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <span style="display:flex;align-items:center;gap:8px">
+        <span>&#x1F4E1; GlobeNewswire Feeds</span>
+        <span style="font-size:10px;padding:1px 7px;border-radius:3px;background:#ffa50022;color:#ffa500;border:1px solid #ffa50044;font-weight:bold">DILUTION ALERTS</span>
+      </span>
+      <button type="button" onclick="this.closest('[data-gnw-panel]').querySelector('[data-gnw-inner]').innerHTML='';this.closest('[data-gnw-panel]')._gnwLoaded=false;loadGnwFeed(this.closest('[data-gnw-panel]'));" style="font-size:11px;padding:3px 9px;background:#1a2635;border:1px solid #294458;color:#8ed5ff;border-radius:3px;cursor:pointer">&#x21bb; Refresh</button>
+    </div>
+    <div data-gnw-inner style="min-height:30px"><div style="color:#777;font-size:12px;padding:4px 0">Loading…</div></div>
+  </div>`;
+
   const reverseSplits=r.reverse_splits||[];
   o += `<div class="panel"><div class="ttl">Reverse Splits · ${reverseSplits.length} ${reverseSplits.length===1?'event':'events'}</div>`+
     (reverseSplits.length?`<div class="kv">${reverseSplits.map(item=>`<span>Reverse split</span><span>${esc(formatDateMDY(item.date))} · ${esc(item.ratio)} reverse${item.price_conversion?` (${esc(item.price_conversion)})`:''}</span>`).join('')}</div>`:`<div class="foot">No reverse splits found in available split history.</div>`)+`</div>`;
@@ -2039,6 +2145,8 @@ function renderTab(tab, r, isRefresh){
     if(openTabs[h.ticker]===tab&&tab.result===r)warmAioSummary(tab,h.ticker,dilutionReport);
   });
   tab.container.querySelectorAll('table.sort').forEach(makeSortable);
+  const gnwPanel = tab.container.querySelector('[data-gnw-panel]');
+  if (gnwPanel) loadGnwFeed(gnwPanel);
 
   const sigSelect = tab.container.querySelector('#sig');
   const bzCheck = tab.container.querySelector('#bz');
