@@ -991,12 +991,11 @@ async function loadGnwFeed(panel, ticker) {
 }
 
 function renderGnwPanel(inner, cats, ticker) {
-  const BADGE_COLOR = {DILUTION: '#ffa500', ALL: '#5b8dd9'};
+  const BADGE_COLOR = {WARRANTS: '#f59e0b', FINANCING: '#38bdf8', PUBLIC: '#818cf8', ALL: '#818cf8'};
   let html = '';
   for (const cat of cats) {
     const bc = BADGE_COLOR[cat.badge] || '#777';
-    const isDilution = cat.badge === 'DILUTION';
-    html += `<div style="margin-bottom:14px;padding:8px 10px;background:#0d1117;border:1px solid ${isDilution ? '#382510' : '#1b2330'};border-radius:5px">`;
+    html += `<div style="margin-bottom:14px;padding:8px 10px;background:#0d1117;border:1px solid #1f2937;border-radius:5px">`;
     html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;flex-wrap:wrap">`;
     html += `<div style="display:flex;align-items:center;gap:7px">`;
     html += `<span style="font:bold 13px Consolas,monospace;color:#e6edf3">${esc(cat.label)}</span>`;
@@ -1013,7 +1012,8 @@ function renderGnwPanel(inner, cats, ticker) {
     } else {
       const show = items.slice(0, 2);
       for (const item of show) {
-        const isItemDilution = Boolean(item.dilution || isDilution);
+        // Tag ONLY if this specific item is actually dilution
+        const isItemDilution = Boolean(item.dilution);
         const borderStyle = isItemDilution ? 'border-left:3px solid #f59e0b;padding-left:8px;' : 'padding-left:4px;';
         html += `<div data-gnw-item style="${borderStyle}padding-top:6px;padding-bottom:6px;border-bottom:1px solid #161b22">`;
         html += `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:2px">`;

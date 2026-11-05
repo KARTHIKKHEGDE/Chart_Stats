@@ -3819,20 +3819,26 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
         if not user or not db_validate_session(user, token):
             return jsonify({'error': 'Unauthorized'}), 401
 
+        # Strict regex: only real dilution events (offerings, warrants, ATMs, convertibles, share issuances)
         DILUTION_KW = re.compile(
-            r'offering|warrant|atm|shelf|s-3|s-1|dilut|convert|note|debenture'
-            r'|financing|agreement|securities|prospectus|direct offer'
-            r'|registered direct|private placement|inducement',
-            re.I,
+            r'\b(?:warrant|warrants|inducement)\b'
+            r'|\b(?:registered\s+direct|direct\s+offering|public\s+offering|secondary\s+offering|rights\s+offering|equity\s+offering|underwritten\s+offering)\b'
+            r'|\b(?:private\s+placement|pipe\s+offering|securities\s+purchase\s+agreement)\b'
+            r'|\b(?:at-the-market|atm\s+offering|shelf\s+registration|s-3|s-1|424b\d*)\b'
+            r'|\b(?:convertible\s+note|convertible\s+debenture|convertible\s+preferred)\b'
+            r'|\b(?:dilution|dilutive|share\s+issuance|issuance\s+of\s+(?:common|ordinary)\s+shares?)\b',
+            re.I
         )
         FINANCING_KW = re.compile(
-            r'financing|private placement|registered direct|direct offering'
-            r'|credit facility|loan agreement|securities purchase|convertible note',
-            re.I,
+            r'\b(?:equity|debt|convertible|loan|credit)\s+financing\b'
+            r'|\bprivate\s+placement\b|\bregistered\s+direct\b|\bdirect\s+offering\b|\bpublic\s+offering\b'
+            r'|\bsecurities\s+purchase\s+agreement\b|\bcredit\s+facility\b|\bpromissory\s+note\b|\bconvertible\s+note\b'
+            r'|\bfinancing\s+agreement\b',
+            re.I
         )
-        WARRANT_KW = re.compile(r'warrant|inducement|certificate', re.I)
+        WARRANT_KW = re.compile(r'\b(?:warrant|warrants|inducement|certificate|certificates)\b', re.I)
 
-        cache_key = f'gnw_rss_v4_{ticker}'
+        cache_key = f'gnw_rss_v5_{ticker}'
         cached = cget(cache_key, 120)
         if cached is not None:
             return jsonify(cached)
@@ -3845,17 +3851,16 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
         # 2. Fetch general live press releases
         global_items, _ = _fetch_gnw_feed(['https://www.stocktitan.net/rss/'], max_items=100)
 
-        # Fallback to Google News search if global stream was empty
         if not global_items:
             global_items, _ = _fetch_gnw_feed([
                 'https://news.google.com/rss/search?q=site:globenewswire.com&hl=en-US&gl=US&ceid=US:en'
             ], max_items=25)
 
-        # Tag all items
+        # Strictly tag items as dilution only if they match genuine dilution terms
         for it in ticker_items + global_items:
             it['dilution'] = bool(DILUTION_KW.search(it['title'] + ' ' + it.get('summary', '')))
 
-        # Separate into the 3 categories requested by user
+        # Separate into 3 categories:
         # 1. Public Companies: All types of public-company announcements
         pub_items = []
         pub_seen = set()
@@ -3866,16 +3871,14 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
             if len(pub_items) >= 2:
                 break
 
-        # 2. Financing Agreements: Financing announcements and agreements
+        # 2. Financing Agreements: Strictly financing announcements & agreements
         fin_items = []
         fin_seen = set()
-        # First priority: ticker matching financing/dilution
         for it in ticker_items:
-            if FINANCING_KW.search(it['title'] + ' ' + it.get('summary', '')) or it['dilution']:
+            if FINANCING_KW.search(it['title'] + ' ' + it.get('summary', '')):
                 if it['url'] not in fin_seen:
                     fin_seen.add(it['url'])
                     fin_items.append(it)
-        # Next: global items matching financing
         for it in global_items:
             if FINANCING_KW.search(it['title'] + ' ' + it.get('summary', '')):
                 if it['url'] not in fin_seen:
@@ -3884,29 +3887,26 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
             if len(fin_items) >= 2:
                 break
 
-        # If still < 2, fallback to Google News financing search
         if len(fin_items) < 2:
             extra_fin, _ = _fetch_gnw_feed([
                 'https://news.google.com/rss/search?q=%22private+placement%22+OR+%22registered+direct%22+OR+%22financing+agreement%22+site:globenewswire.com&hl=en-US&gl=US&ceid=US:en'
             ], max_items=4)
             for it in extra_fin:
-                it['dilution'] = True
+                it['dilution'] = bool(DILUTION_KW.search(it['title']))
                 if it['url'] not in fin_seen:
                     fin_seen.add(it['url'])
                     fin_items.append(it)
                 if len(fin_items) >= 2:
                     break
 
-        # 3. Warrants and Certificates: Warrant-related announcements
+        # 3. Warrants and Certificates: Strictly warrant-related announcements
         war_items = []
         war_seen = set()
-        # First priority: ticker matching warrants
         for it in ticker_items:
             if WARRANT_KW.search(it['title'] + ' ' + it.get('summary', '')):
                 if it['url'] not in war_seen:
                     war_seen.add(it['url'])
                     war_items.append(it)
-        # Next: global items matching warrants
         for it in global_items:
             if WARRANT_KW.search(it['title'] + ' ' + it.get('summary', '')):
                 if it['url'] not in war_seen:
@@ -3915,7 +3915,6 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
             if len(war_items) >= 2:
                 break
 
-        # If still < 2, fallback to Google News warrants search
         if len(war_items) < 2:
             extra_war, _ = _fetch_gnw_feed([
                 'https://news.google.com/rss/search?q=%22warrant+inducement%22+OR+%22warrant+exercise%22+OR+%22warrants%22+site:globenewswire.com&hl=en-US&gl=US&ceid=US:en'
@@ -3928,12 +3927,12 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
                 if len(war_items) >= 2:
                     break
 
-        categories = [
+                categories = [
             {
                 'id': 'public',
                 'label': 'Public Companies',
                 'sublabel': 'Start here · All types of public-company announcements',
-                'badge': 'ALL',
+                'badge': 'PUBLIC',
                 'priority': 1,
                 'items': pub_items[:2],
             },
@@ -3941,7 +3940,7 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
                 'id': 'financing',
                 'label': 'Financing Agreements',
                 'sublabel': 'High priority · Financing announcements and agreements',
-                'badge': 'DILUTION',
+                'badge': 'FINANCING',
                 'priority': 2,
                 'items': fin_items[:2],
             },
@@ -3949,12 +3948,12 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
                 'id': 'warrants',
                 'label': 'Warrants and Certificates',
                 'sublabel': 'High priority · Warrant-related announcements',
-                'badge': 'DILUTION',
+                'badge': 'WARRANTS',
                 'priority': 2,
                 'items': war_items[:2],
             },
         ]
-        result = {'categories': categories, 'ticker': ticker}
+                result = {'categories': categories, 'ticker': ticker}
         cput(cache_key, result)
         return jsonify(result)
 
