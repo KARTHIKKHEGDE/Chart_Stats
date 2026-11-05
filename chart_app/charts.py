@@ -3819,7 +3819,6 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
         if not user or not db_validate_session(user, token):
             return jsonify({'error': 'Unauthorized'}), 401
 
-        # Strict regex: only real dilution events (offerings, warrants, ATMs, convertibles, share issuances)
         DILUTION_KW = re.compile(
             r'\b(?:warrant|warrants|inducement)\b'
             r'|\b(?:registered\s+direct|direct\s+offering|public\s+offering|secondary\s+offering|rights\s+offering|equity\s+offering|underwritten\s+offering)\b'
@@ -3838,7 +3837,7 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
         )
         WARRANT_KW = re.compile(r'\b(?:warrant|warrants|inducement|certificate|certificates)\b', re.I)
 
-        cache_key = f'gnw_rss_v5_{ticker}'
+        cache_key = f'gnw_rss_v7_{ticker}'
         cached = cget(cache_key, 120)
         if cached is not None:
             return jsonify(cached)
@@ -3856,83 +3855,86 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
                 'https://news.google.com/rss/search?q=site:globenewswire.com&hl=en-US&gl=US&ceid=US:en'
             ], max_items=25)
 
-        # Strictly tag items as dilution only if they match genuine dilution terms
-        for it in ticker_items + global_items:
+        # Combine all candidates: ticker-specific first, then global
+        all_candidates = []
+        candidate_urls = set()
+        for it in (ticker_items + global_items):
+            u = it.get('url') or ''
+            if u and u not in candidate_urls:
+                candidate_urls.add(u)
+                all_candidates.append(it)
+
+        # Strictly tag each item as dilution ONLY if it matches genuine dilution events
+        for it in all_candidates:
             it['dilution'] = bool(DILUTION_KW.search(it['title'] + ' ' + it.get('summary', '')))
 
-        # Separate into 3 categories:
-        # 1. Public Companies: All types of public-company announcements
-        pub_items = []
-        pub_seen = set()
-        for it in (ticker_items + global_items):
-            if it['url'] not in pub_seen:
-                pub_seen.add(it['url'])
-                pub_items.append(it)
-            if len(pub_items) >= 2:
-                break
+        # Assign strictly with ZERO redundancy across the 3 sections:
+        # An item can appear in ONLY ONE section.
+        assigned_urls = set()
 
-        # 2. Financing Agreements: Strictly financing announcements & agreements
-        fin_items = []
-        fin_seen = set()
-        for it in ticker_items:
-            if FINANCING_KW.search(it['title'] + ' ' + it.get('summary', '')):
-                if it['url'] not in fin_seen:
-                    fin_seen.add(it['url'])
-                    fin_items.append(it)
-        for it in global_items:
-            if FINANCING_KW.search(it['title'] + ' ' + it.get('summary', '')):
-                if it['url'] not in fin_seen:
-                    fin_seen.add(it['url'])
-                    fin_items.append(it)
-            if len(fin_items) >= 2:
-                break
-
-        if len(fin_items) < 2:
-            extra_fin, _ = _fetch_gnw_feed([
-                'https://news.google.com/rss/search?q=%22private+placement%22+OR+%22registered+direct%22+OR+%22financing+agreement%22+site:globenewswire.com&hl=en-US&gl=US&ceid=US:en'
-            ], max_items=4)
-            for it in extra_fin:
-                it['dilution'] = bool(DILUTION_KW.search(it['title']))
-                if it['url'] not in fin_seen:
-                    fin_seen.add(it['url'])
-                    fin_items.append(it)
-                if len(fin_items) >= 2:
-                    break
-
-        # 3. Warrants and Certificates: Strictly warrant-related announcements
+        # 1. Warrants and Certificates: warrant-related announcements take top priority
         war_items = []
-        war_seen = set()
-        for it in ticker_items:
-            if WARRANT_KW.search(it['title'] + ' ' + it.get('summary', '')):
-                if it['url'] not in war_seen:
-                    war_seen.add(it['url'])
-                    war_items.append(it)
-        for it in global_items:
-            if WARRANT_KW.search(it['title'] + ' ' + it.get('summary', '')):
-                if it['url'] not in war_seen:
-                    war_seen.add(it['url'])
-                    war_items.append(it)
-            if len(war_items) >= 2:
-                break
+        for it in all_candidates:
+            if it['url'] not in assigned_urls and WARRANT_KW.search(it['title'] + ' ' + it.get('summary', '')):
+                assigned_urls.add(it['url'])
+                war_items.append(it)
+                if len(war_items) >= 2:
+                    break
 
         if len(war_items) < 2:
             extra_war, _ = _fetch_gnw_feed([
                 'https://news.google.com/rss/search?q=%22warrant+inducement%22+OR+%22warrant+exercise%22+OR+%22warrants%22+site:globenewswire.com&hl=en-US&gl=US&ceid=US:en'
-            ], max_items=4)
+            ], max_items=6)
             for it in extra_war:
-                it['dilution'] = bool(DILUTION_KW.search(it['title']))
-                if it['url'] not in war_seen:
-                    war_seen.add(it['url'])
+                if it['url'] not in assigned_urls:
+                    it['dilution'] = bool(DILUTION_KW.search(it['title']))
+                    assigned_urls.add(it['url'])
                     war_items.append(it)
-                if len(war_items) >= 2:
+                    if len(war_items) >= 2:
+                        break
+
+        # 2. Financing Agreements: financing announcements (not already claimed by warrants)
+        fin_items = []
+        for it in all_candidates:
+            if it['url'] not in assigned_urls and FINANCING_KW.search(it['title'] + ' ' + it.get('summary', '')):
+                assigned_urls.add(it['url'])
+                fin_items.append(it)
+                if len(fin_items) >= 2:
                     break
 
-                categories = [
+        if len(fin_items) < 2:
+            extra_fin, _ = _fetch_gnw_feed([
+                'https://news.google.com/rss/search?q=%22private+placement%22+OR+%22registered+direct%22+OR+%22financing+agreement%22+site:globenewswire.com&hl=en-US&gl=US&ceid=US:en'
+            ], max_items=6)
+            for it in extra_fin:
+                if it['url'] not in assigned_urls:
+                    it['dilution'] = bool(DILUTION_KW.search(it['title']))
+                    assigned_urls.add(it['url'])
+                    fin_items.append(it)
+                    if len(fin_items) >= 2:
+                        break
+
+        # 3. Public Companies: all other announcements (not claimed by warrants or financing)
+        pub_items = []
+        for it in all_candidates:
+            if it['url'] not in assigned_urls:
+                assigned_urls.add(it['url'])
+                pub_items.append(it)
+                if len(pub_items) >= 2:
+                    break
+
+        # Badges: ONLY mark category badge as 'DILUTION' if that section actually contains dilution news!
+        war_has_dil = any(it.get('dilution') for it in war_items)
+        fin_has_dil = any(it.get('dilution') for it in fin_items)
+        pub_has_dil = any(it.get('dilution') for it in pub_items)
+
+        categories = [
             {
                 'id': 'public',
                 'label': 'Public Companies',
                 'sublabel': 'Start here · All types of public-company announcements',
-                'badge': 'PUBLIC',
+                'badge': 'DILUTION' if pub_has_dil else 'PUBLIC',
+                'has_dilution': pub_has_dil,
                 'priority': 1,
                 'items': pub_items[:2],
             },
@@ -3940,7 +3942,8 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
                 'id': 'financing',
                 'label': 'Financing Agreements',
                 'sublabel': 'High priority · Financing announcements and agreements',
-                'badge': 'FINANCING',
+                'badge': 'DILUTION' if fin_has_dil else 'FINANCING',
+                'has_dilution': fin_has_dil,
                 'priority': 2,
                 'items': fin_items[:2],
             },
@@ -3948,12 +3951,13 @@ Be direct. No fluff. Use actual data from context. Do not invent numbers not in 
                 'id': 'warrants',
                 'label': 'Warrants and Certificates',
                 'sublabel': 'High priority · Warrant-related announcements',
-                'badge': 'WARRANTS',
+                'badge': 'DILUTION' if war_has_dil else 'WARRANTS',
+                'has_dilution': war_has_dil,
                 'priority': 2,
                 'items': war_items[:2],
             },
         ]
-                result = {'categories': categories, 'ticker': ticker}
+        result = {'categories': categories, 'ticker': ticker}
         cput(cache_key, result)
         return jsonify(result)
 

@@ -991,111 +991,51 @@ async function loadGnwFeed(panel, ticker) {
 }
 
 function renderGnwPanel(inner, cats, ticker) {
-  const BADGE_COLOR = {WARRANTS: '#f59e0b', FINANCING: '#38bdf8', PUBLIC: '#818cf8', ALL: '#818cf8'};
   let html = '';
   for (const cat of cats) {
-    const bc = BADGE_COLOR[cat.badge] || '#777';
-    html += `<div style="margin-bottom:14px;padding:8px 10px;background:#0d1117;border:1px solid #1f2937;border-radius:5px">`;
-    html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;flex-wrap:wrap">`;
-    html += `<div style="display:flex;align-items:center;gap:7px">`;
-    html += `<span style="font:bold 13px Consolas,monospace;color:#e6edf3">${esc(cat.label)}</span>`;
-    html += `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:${bc}22;color:${bc};border:1px solid ${bc}44;font-weight:bold">${esc(cat.badge)}</span>`;
+    const isDilutionCat = Boolean(cat.has_dilution || cat.badge === 'DILUTION');
+    const badgeBg = isDilutionCat ? '#f59e0b22' : '#38bdf822';
+    const badgeColor = isDilutionCat ? '#f59e0b' : '#38bdf8';
+    const badgeBorder = isDilutionCat ? '#f59e0b44' : '#38bdf844';
+    const badgeText = isDilutionCat ? '⚠ DILUTION' : cat.badge;
+
+    html += `<div style="margin-bottom:14px;padding:12px 14px;background:#0d1117;border:1px solid ${isDilutionCat ? '#42280d' : '#1b2330'};border-radius:6px">`;
+    html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;flex-wrap:wrap">`;
+    html += `<div style="display:flex;align-items:center;gap:8px">`;
+    html += `<span style="font:bold 15px Consolas,monospace;color:#f0f6fc">${esc(cat.label)}</span>`;
+    html += `<span style="font-size:11px;padding:2px 8px;border-radius:3px;background:${badgeBg};color:${badgeColor};border:1px solid ${badgeBorder};font-weight:bold">${esc(badgeText)}</span>`;
     html += `</div>`;
     if (cat.sublabel) {
-      html += `<span style="font-size:11px;color:#8b949e;font-style:italic">${esc(cat.sublabel)}</span>`;
+      html += `<span style="font-size:12.5px;color:#8b949e;font-style:italic">${esc(cat.sublabel)}</span>`;
     }
     html += `</div>`;
 
     const items = cat.items || [];
     if (!items.length) {
-      html += `<div style="color:#6e7681;font-size:12px;padding:4px 0">No recent announcements found in this category.</div>`;
+      html += `<div style="color:#6e7681;font-size:13px;padding:6px 0">No recent announcements found in this category.</div>`;
     } else {
       const show = items.slice(0, 2);
       for (const item of show) {
-        // Tag ONLY if this specific item is actually dilution
         const isItemDilution = Boolean(item.dilution);
-        const borderStyle = isItemDilution ? 'border-left:3px solid #f59e0b;padding-left:8px;' : 'padding-left:4px;';
-        html += `<div data-gnw-item style="${borderStyle}padding-top:6px;padding-bottom:6px;border-bottom:1px solid #161b22">`;
-        html += `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:2px">`;
+        const borderStyle = isItemDilution ? 'border-left:3px solid #f59e0b;padding-left:12px;' : 'padding-left:8px;';
+        html += `<div data-gnw-item style="${borderStyle}padding-top:8px;padding-bottom:8px;border-bottom:1px solid #161b22">`;
+        html += `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:5px">`;
         const pub = item.published ? formatIstDateTime(item.published) : '';
         if (pub) {
-          html += `<span style="display:inline-block;padding:1px 5px;border:1px solid #243547;border-radius:3px;background:#0b131c;color:#8ebdff;font-size:11px;white-space:nowrap">${esc(pub)}</span>`;
+          html += `<span style="display:inline-block;padding:2px 8px;border:1px solid #243547;border-radius:3px;background:#0b131c;color:#8ebdff;font-size:12px;white-space:nowrap">${esc(pub)}</span>`;
         }
         if (isItemDilution) {
-          html += `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b44;font-weight:bold">⚠ DILUTION</span>`;
+          html += `<span style="font-size:11px;padding:2px 8px;border-radius:3px;background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b44;font-weight:bold">⚠ DILUTION</span>`;
         }
-        html += `<span style="color:#6e7681;font-size:11px">GlobeNewswire / Wire</span>`;
+        html += `<span style="color:#7d8590;font-size:12px">GlobeNewswire / Wire</span>`;
         html += `</div>`;
-        html += `<button type="button" class="gnwAiTrigger" style="background:none;border:0;color:#58a6ff;cursor:pointer;font:inherit;text-align:left;padding:0;text-decoration:underline;text-underline-offset:2px;font-size:12px;line-height:1.4" data-url="${esc(item.url)}" data-title="${esc(item.title)}" data-ticker="${esc(ticker||'')}">📊 ${esc(item.title)}</button>`;
-        html += `<div data-gnw-ai-box style="display:none;margin-top:6px"></div>`;
+        html += `<button type="button" class="newsAiTrigger" style="background:none;border:0;color:#58a6ff;cursor:pointer;font:inherit;text-align:left;padding:0;text-decoration:underline;text-underline-offset:3px;font-size:14.5px;line-height:1.5;font-weight:500" data-url="${esc(item.url)}" data-title="${esc(item.title)}" data-published="${esc(item.published||'')}" data-ticker="${esc(ticker||'')}">📊 ${esc(item.title)}</button>`;
         html += `</div>`;
       }
     }
     html += `</div>`;
   }
-  inner.innerHTML = html || '<div style="color:#6e7681;padding:6px 0">No wire announcements available.</div>';
-
-  inner.querySelectorAll('.gnwAiTrigger').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.preventDefault();
-      const row = btn.closest('[data-gnw-item]');
-      const box = row && row.querySelector('[data-gnw-ai-box]');
-      if (!box) return;
-      if (box.dataset.done) {
-        box.style.display = box.style.display === 'none' ? '' : 'none';
-        return;
-      }
-      box.style.display = '';
-      box.innerHTML = '<span style="color:#8b949e;font-size:12px">⚡ Analyzing announcement with AI for dilution &amp; catalyst breakdown…</span>';
-      const url = btn.dataset.url, title = btn.dataset.title, itemTicker = btn.dataset.ticker || ticker || '';
-      const cacheKey = 'gnw_ai_v2_' + url;
-      if (_gnwAiCache[cacheKey]) {
-        renderGnwAiResult(box, _gnwAiCache[cacheKey], url);
-        box.dataset.done = '1';
-        return;
-      }
-      try {
-        const resp = await fetch('/api/news-summary', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({user: currentUser||'', token: sessionToken||'', url, title, ticker: itemTicker})
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error || 'AI summary failed');
-        _gnwAiCache[cacheKey] = data;
-        box.dataset.done = '1';
-        renderGnwAiResult(box, data, url);
-      } catch(err) {
-        box.innerHTML = `<span style="color:#ff8888;font-size:12px">AI explanation unavailable: ${esc(err.message)}</span>`;
-      }
-    });
-  });
-}
-
-function renderGnwAiResult(box, data, url) {
-  const SEN = {bullish: '#3ddc84', bearish: '#ff5a5a', neutral: '#8b949e'};
-  const sc = SEN[data.sentiment] || '#8b949e';
-  let h = `<div style="background:#0b1219;border:1px solid #1f2e3d;border-radius:6px;padding:10px 12px;margin-top:4px;font-size:12px">`;
-  if (data.dilution_impact) {
-    h += `<div style="background:#261806;border:1px solid #d97706;border-radius:4px;padding:8px 10px;margin-bottom:8px;color:#fde68a;font-size:12px;line-height:1.45"><strong style="color:#fbbf24">⚠ Dilution Breakdown:</strong> ${esc(data.dilution_impact)}</div>`;
-  }
-  if (data.summary) {
-    h += `<div style="color:#c9d1d9;line-height:1.5;margin-bottom:6px">${esc(data.summary)}</div>`;
-  }
-  if (data.management_comment) {
-    h += `<div style="color:#8b949e;border-left:2px solid #388bfd;padding-left:8px;margin-bottom:6px;font-style:italic">"${esc(data.management_comment)}"</div>`;
-  }
-  h += `<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-top:6px;padding-top:6px;border-top:1px solid #161f28">`;
-  h += `<div style="display:flex;gap:10px;flex-wrap:wrap">`;
-  h += `<span style="font-size:11px;color:#6e7681">Catalyst: <span style="color:#58a6ff">${esc(data.catalyst_type||'—')}</span></span>`;
-  h += `<span style="font-size:11px;color:#6e7681">Sentiment: <span style="color:${sc};font-weight:bold">${esc(data.sentiment||'—')}</span></span>`;
-  if (data.provider) h += `<span style="font-size:10px;color:#484f58">via ${esc(data.provider)}</span>`;
-  h += `</div>`;
-  if (url) {
-    h += `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" style="color:#58a6ff;font-size:11px;text-decoration:underline">Read full article ↗</a>`;
-  }
-  h += `</div></div>`;
-  box.innerHTML = h;
+  inner.innerHTML = html || '<div style="color:#6e7681;padding:8px 0;font-size:13px">No wire announcements available.</div>';
 }
 
 function newsPressReleaseRow(item,ticker){
@@ -1352,6 +1292,7 @@ document.addEventListener('click',async e=>{
                   'lawsuit/legal':'⚠️','macro/sector':'🌐','unrelated fluff':'📰','unknown':'❓'};
     const catIcon=catMap[d.catalyst_type]||'📰';
     content.innerHTML=`
+      ${d.dilution_impact ? `<div class="newsAiSection" style="background:#261806;border:1px solid #d97706;border-radius:6px;padding:12px 14px;margin-bottom:12px"><h3 style="color:#fbbf24;margin-top:0;margin-bottom:6px;font-size:14px;display:flex;align-items:center;gap:6px"><span>⚠</span> Dilution Breakdown</h3><p style="color:#fde68a;font-size:13.5px;line-height:1.6;margin:0">${esc(d.dilution_impact)}</p></div>` : ''}
       <div class="newsAiSection">
         <h3>Summary <span class="newsAiSentiment ${sentClass}">${sentClass.toUpperCase()}</span> <span style="font-size:12px;color:#8da6bd">${catIcon} ${esc(d.catalyst_type||'unknown')}</span></h3>
         <p>${esc(d.summary||'No summary available.')}</p>
