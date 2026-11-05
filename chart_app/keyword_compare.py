@@ -1278,13 +1278,14 @@ def api_keyword_compare():
         candidate_pool = sorted(candidates, key=lambda item: max(
             float(item.get("dollar_volume") or 0) / 50_000_000,
             float(item.get("fast_move_multiple") or 0) / 2), reverse=True)[:120]
-        for item in candidate_pool:
+
+        def _evaluate_candidate(item):
             symbol = str(item.get("ticker") or "").strip().upper()
             event_day = str(item.get("date") or "")
-            if not re.fullmatch(r"[A-Z.\-]{1,10}", symbol) or (symbol == ticker and not compare_own) or event_day == day and symbol == ticker:
-                continue
-            if asof_arg and event_day >= day:                  # backtest: never use analogs from the future
-                continue
+            if not re.fullmatch(r"[A-Z.\-]{1,10}", symbol) or (symbol == ticker and not compare_own) or (event_day == day and symbol == ticker):
+                return None
+            if asof_arg and event_day >= day:
+                return None
             try:
                 dt.date.fromisoformat(event_day)
                 feat = _compare_event_features(symbol, event_day, window, force=force)
@@ -1292,15 +1293,25 @@ def api_keyword_compare():
                 scores = _compare_similarity(target_for_score, feature_for_score)
                 active = {k: v for k, v in scores.items() if v is not None and weights[k] > 0}
                 total_weight = sum(weights[k] for k in active)
-                if not total_weight: continue
+                if not total_weight: return None
                 overall = sum(scores[k]*weights[k] for k in active)/total_weight
-                eligible.append({"ticker": symbol, "date": event_day, "company": item.get("company") or symbol,
-                                 "keyword": item.get("keyword") or "", "role": item.get("role") or "",
-                                 "headline": item.get("headline") or "", "filing_url": item.get("filing_url") or "",
-                                 "filing_date": item.get("filing_date") or "",
-                                 "scores": scores, "score": overall, "features": feat})
+                return {"ticker": symbol, "date": event_day, "company": item.get("company") or symbol,
+                        "keyword": item.get("keyword") or "", "role": item.get("role") or "",
+                        "headline": item.get("headline") or "", "filing_url": item.get("filing_url") or "",
+                        "filing_date": item.get("filing_date") or "",
+                        "scores": scores, "score": overall, "features": feat}
             except Exception as exc:
                 app.logger.info("Keyword compare candidate %s %s skipped: %s", symbol, event_day, exc)
+                return None
+
+        # Fetch candidate features in parallel across the key pool for high speed
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=min(16, max(1, len(candidate_pool))), thread_name_prefix="kw-candidate") as pool:
+            futures = [pool.submit(_evaluate_candidate, item) for item in candidate_pool]
+            for fut in as_completed(futures):
+                match_res = fut.result()
+                if match_res is not None:
+                    eligible.append(match_res)
         weight_report = {"method": "manual slider override", "sample_size": len(eligible)} if manual_weights else None
         if not manual_weights:
             weights, weight_report = _learn_compare_weights(eligible)
@@ -1348,9 +1359,14 @@ def api_keyword_compare():
                                       "early_hod": sum(1 for x in sample_matches if x["features"].get("hod_min") is not None and x["features"]["hod_min"] < 90)},
                         "formula": "A allocates 40% to recency-weighted price/VWAP, price/TWAP and VWAP/TWAP spread curves; 25% to close and HOD VWAP/TWAP relationships plus gap state; 20% to volume curves; and 15% to price paths. HOD relationships are measured at each event's own HOD time. B compares pre-gap return, relative-volume, log-dollar-volume, ranges and context; C compares post-event behavior. Available A/B/C components are combined with the reported learned/default weights.",
                         "source": "Polygon intraday and daily aggregate candles; SEC keyword-search rows supplied by the current page."})
+    except (ValueError, RuntimeError) as exc:
+        msg = str(exc)
+        if "No intraday price data" in msg or "No daily candle" in msg:
+            return jsonify({"error": f"No market price data found for {ticker} on {day}. Please verify the ticker symbol."}), 400
+        return jsonify({"error": f"Cannot compare {ticker}: {msg}"}), 400
     except Exception as exc:
         app.logger.exception("Keyword compare failed for %s %s", ticker, day)
-        return jsonify({"error": f"Compare data unavailable: {type(exc).__name__}: {exc}"}), 502
+        return jsonify({"error": f"Compare data unavailable: {type(exc).__name__}: {exc}"}), 400
 
 
 @app.route("/keyword-search")
