@@ -18,7 +18,6 @@ from chart_app.application import (
     requests,
     threading,
     time,
-    _schedule_local_warmup,
     yf,
 )
 from chart_app.yahoo_limiter import YAHOO_REQUEST_SEMAPHORE
@@ -332,7 +331,10 @@ def _run_scanner_cycle():
         green_c = sum(1 for r in results if r["status"] == "green")
         yellow_c = sum(1 for r in results if r["status"] == "yellow")
         _scanner_log(f"Scan completed in {time.time()-t0:.2f}s: {len(results)} matches ({green_c} green, {yellow_c} yellow)")
-        _schedule_local_warmup()
+        # Resolve this after application.py has finished importing scanner.py;
+        # importing it at module scope creates a circular-import startup crash.
+        from chart_app import application as _application
+        _application._schedule_local_warmup()
         # Enrich results asynchronously so slow news providers never block prices.
         for item in results[:8]:
             with _scanner_details_lock:
