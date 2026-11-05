@@ -425,12 +425,32 @@ def live_snapshot(t, fast=False, include_profile=True):
             f_daily    = yf_pool.submit(_yahoo_call,lambda: tk.history(period="1y", interval="1d", auto_adjust=False))
             df  = f_intraday.result()
             dly = f_daily.result()
-        if df is None or df.empty:
-            df = _yahoo_call(lambda:tk.history(period="5d", interval="1m", prepost=True, auto_adjust=False))
     if df is None or df.empty:
-        raise RuntimeError(f"No Yahoo intraday data for {t}")
+        df = _yahoo_call(lambda:tk.history(period="5d", interval="1m", prepost=True, auto_adjust=False))
+    if df is None or df.empty:
+        # Polygon 1-minute fallback for low-volume, OTC, or unlisted Yahoo symbols
+        try:
+            today_str = dt.datetime.now(ET).strftime("%Y-%m-%d")
+            start_str = (dt.datetime.now(ET) - dt.timedelta(days=7)).strftime("%Y-%m-%d")
+            pj = poly_get(f"/v2/aggs/ticker/{t.upper()}/range/1/minute/{start_str}/{today_str}", {"limit": 50000})
+            prows = pj.get("results") or []
+            if prows:
+                p_rows = []
+                for b in prows:
+                    b_dt = dt.datetime.fromtimestamp(b["t"]/1000.0, tz=dt.timezone.utc).astimezone(ET)
+                    p_rows.append({"Datetime": b_dt, "Open": float(b["o"]), "High": float(b["h"]), "Low": float(b["l"]), "Close": float(b["c"]), "Volume": float(b["v"])})
+                p_df = pd.DataFrame(p_rows).set_index("Datetime")
+                if not p_df.empty:
+                    df = p_df
+        except Exception:
+            pass
+    if df is None or df.empty:
+        raise RuntimeError(f"No intraday price data available for {t}")
     if dly is not None:dly=dly.dropna()
-    df.index = df.index.tz_convert(ET)
+    if df.index.tz is None:
+        df.index = df.index.tz_localize("UTC").tz_convert(ET)
+    else:
+        df.index = df.index.tz_convert(ET)
     df = df.rename(columns={"Open": "o", "High": "h", "Low": "l", "Close": "c", "Volume": "v"})
     df = df[["o", "h", "l", "c", "v"]].dropna().astype(float)
     day = df.index[-1].date()
