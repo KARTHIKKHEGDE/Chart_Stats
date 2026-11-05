@@ -15,6 +15,18 @@ services:
         value: "50"
       - key: OPTIONAL_WAIT
         value: "1.25"
+      - key: FETCH_WORKERS_CAP
+        value: "100"
+      - key: ANALYZE_WORKERS
+        value: "32"
+      - key: REPORT_WORKERS
+        value: "8"
+      - key: SPIKE_WORKERS
+        value: "50"
+      - key: WARMUP_WORKERS
+        value: "8"
+      - key: SERVER_THREADS
+        value: "50"
       - key: YAHOO_REQUEST_LIMIT
         value: "4"
       - key: POLYGON_API_KEY

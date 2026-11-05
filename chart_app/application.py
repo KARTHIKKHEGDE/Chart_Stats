@@ -73,13 +73,13 @@ POLY_RPM = min(5.0, max(0.1, float(os.getenv("POLYGON_RPM", "5"))))
 POLYGON_KEY_POOL_LIMIT = 50
 LOCAL_MAX = os.getenv("LOCAL_MAX", "1").strip() == "1"
 CPU_COUNT = os.cpu_count() or 4
-FETCH_WORKERS_CAP = 100 if LOCAL_MAX else 50
-ANALYZE_WORKERS = max(4, CPU_COUNT * 2) if LOCAL_MAX else 8
+FETCH_WORKERS_CAP = int(os.getenv("FETCH_WORKERS_CAP", "100" if LOCAL_MAX else "50"))
+ANALYZE_WORKERS = int(os.getenv("ANALYZE_WORKERS", str(max(4, CPU_COUNT * 2) if LOCAL_MAX else 8)))
 STAGE1_WAIT = float(os.getenv("OPTIONAL_WAIT", "1.25"))
-REPORT_WORKERS = max(4, CPU_COUNT // 2) if LOCAL_MAX else 2
-SPIKE_WORKERS = 50
-WARMUP_WORKERS = max(2, CPU_COUNT // 2) if LOCAL_MAX else 1
-SERVER_THREADS = 50
+REPORT_WORKERS = int(os.getenv("REPORT_WORKERS", str(max(4, CPU_COUNT // 2) if LOCAL_MAX else 2)))
+SPIKE_WORKERS = int(os.getenv("SPIKE_WORKERS", "50"))
+WARMUP_WORKERS = int(os.getenv("WARMUP_WORKERS", str(max(2, CPU_COUNT // 2) if LOCAL_MAX else 1)))
+SERVER_THREADS = int(os.getenv("SERVER_THREADS", "50"))
 
 # ----------------------------------------------------------------------------- Polygon client
 _key_pool: list = []
@@ -127,6 +127,7 @@ GAP_MIN = float(os.getenv("GAP_MIN", "0.30"))
 LOOKBACK_DAYS = 365
 HISTORY_DAYS = 740            # retain a full two years of daily candles plus split/calendar buffer
 MAX_EVENTS = int(os.getenv("MAX_EVENTS", "50" if LOCAL_MAX else "12"))
+print(f"[startup] warmup_workers={WARMUP_WORKERS} max_events={MAX_EVENTS}", flush=True)
 SIM_K = int(os.getenv("SIM_K", "20"))
 MIN_PRICE = float(os.getenv("MIN_PRICE", "0.5"))
 MIN_DAY_VOL = int(os.getenv("MIN_DAY_VOL", "100000"))

@@ -2153,7 +2153,7 @@ function drawEvAll(evList, containerEl){
       card._panOffset=0;loadChartContext(card,tabForCharts,edge);
     };
     const renderItem=card._contextChart?{...item,chart:{...item.chart,bars:card._contextChart}}:item;
-    cv._anchorDate=card._sessionDate;cv._eventTicker=tabForCharts?.result?.head?.ticker||item.ticker||'';cv._panOffset=card._panOffset||0;cv._onPanChange=value=>card._panOffset=value;cv._onPanEdge=card._onPanEdge;cv._showVWAP=card._showVWAP!==undefined?card._showVWAP:vwapChecked;cv._showEMA5Ext=card._showEMA5Ext!==undefined?card._showEMA5Ext:ema5ExtChecked;cv._ema5ExtThreshold=card._ema5ExtThreshold||ema5ExtVal;cv._avwapAnchors=card._avwapAnchors||null;
+    cv._anchorDate=card._sessionDate;cv._eventTicker=tabForCharts?.result?.head?.ticker||item.ticker||'';cv._panOffset=card._panOffset||0;cv._yZoom=card._yZoom||1;cv._rangeZoom=card._zoom||1;cv._rangeMeasures=card._rangeMeasures||[];cv._selectedRangeId=card._selectedRangeId||null;cv._onPanChange=value=>card._panOffset=value;cv._onYZoomChange=value=>card._yZoom=value;cv._onPanEdge=card._onPanEdge;cv._showVWAP=card._showVWAP!==undefined?card._showVWAP:vwapChecked;cv._showEMA5Ext=card._showEMA5Ext!==undefined?card._showEMA5Ext:ema5ExtChecked;cv._ema5ExtThreshold=card._ema5ExtThreshold||ema5ExtVal;cv._avwapAnchors=card._avwapAnchors||null;
     if(!card._chartVisible&&$('#chart_modal').style.display!=='flex'){window.evLazyObserver.observe(card);return;}
     if(!item.chart?.bars?.t?.length){if(item.premarketSpikeChart)loadPremarketSpikeChart(tabForCharts,card,item);else if(!String(item.title||'').startsWith('TODAY '))loadGapEventChart(tabForCharts,card,item);}
     const markerDates=card._contextDates?.length?card._contextDates:[card._sessionDate||item.date],markerKey=`${String(tabForCharts?.result?.head?.ticker||'').toUpperCase()}|${[...new Set(markerDates)].sort().join(',')}`;
@@ -3801,6 +3801,54 @@ function loadScannerVoices(){
 
 let scannerCountdownSec = 60;
 let scannerCountdownTimer = null;
+let scannerSessionDate = '';
+let scannerHoverTimer = null;
+let scannerHoverTicker = '';
+const scannerHoverChartCache = new Map();
+
+function hideScannerChartPreview(){
+  if(scannerHoverTimer){clearTimeout(scannerHoverTimer);scannerHoverTimer=null;}
+  scannerHoverTicker='';
+  document.querySelector('#scanner_chart_hover_preview')?.remove();
+}
+function showScannerChartPreview(row){
+  hideScannerChartPreview();
+  const ticker=String(row?.dataset.ticker||'').toUpperCase(),date=scannerSessionDate;
+  if(!ticker||!date)return;
+  scannerHoverTicker=ticker;
+  scannerHoverTimer=setTimeout(async()=>{
+    if(scannerHoverTicker!==ticker||!row.isConnected)return;
+    const width=Math.min(620,innerWidth-24),height=320,rect=row.getBoundingClientRect();
+    const preview=document.createElement('div');preview.id='scanner_chart_hover_preview';
+    preview.style.cssText=`position:fixed;z-index:100002;width:${width}px;height:${height}px;left:${Math.max(12,Math.min(rect.right+12,innerWidth-width-12))}px;top:${Math.max(12,Math.min(rect.top,innerHeight-height-12))}px;background:#050607;border:1px solid #3b596d;box-shadow:0 8px 30px #000c;padding:8px;color:#dce8f3;pointer-events:none`;
+    preview.innerHTML=`<div style="height:22px;font:12px Consolas,monospace;color:#75caff">${ticker} · ${date} · intraday</div><div style="height:280px;position:relative"><canvas style="display:block;width:100%;height:100%"></canvas><div style="position:absolute;left:12px;top:8px;color:#9ba6b0;font:12px Consolas,monospace">Loading intraday chart…</div></div>`;
+    document.body.appendChild(preview);
+    const canvas=preview.querySelector('canvas');
+    try{
+      const key=`${ticker}|${date}`;let chart=scannerHoverChartCache.get(key);
+      if(!chart){
+        const query=new URLSearchParams({ticker,date,user:currentUser||'',token:sessionToken||''});
+        const response=await fetch('/api/session-chart?'+query.toString());
+        const data=await responseJson(response,'Scanner hover chart');
+        chart=data.chart;scannerHoverChartCache.set(key,chart);
+        if(scannerHoverChartCache.size>30)scannerHoverChartCache.delete(scannerHoverChartCache.keys().next().value);
+      }
+      if(scannerHoverTicker!==ticker||!preview.isConnected)return;
+      preview.querySelector('div[style*="position:absolute"]')?.remove();
+      canvas._showVWAP=false;canvas._showEMA5Ext=false;canvas._forceNoVolumeProfile=true;canvas._showVolumeProfile=false;canvas._showBz=false;canvas._marketEvents=[];
+      drawEv(canvas,chart,'none',false,280,'1m',1);
+      canvas.style.width='100%';canvas.style.height='100%';canvas.style.pointerEvents='none';
+    }catch(error){
+      if(scannerHoverTicker===ticker&&preview.isConnected){const message=preview.querySelector('div[style*="position:absolute"]');if(message)message.textContent=`Intraday chart unavailable: ${error.message}`;}
+    }
+  },1000);
+}
+function bindScannerChartHover(){
+  document.querySelectorAll('#scanner_rows .scanner-result-row').forEach(row=>{
+    row.onmouseenter=()=>showScannerChartPreview(row);
+    row.onmouseleave=hideScannerChartPreview;
+  });
+}
 
 function startScannerCountdown(){
   if(scannerCountdownTimer) clearInterval(scannerCountdownTimer);
@@ -3826,12 +3874,15 @@ async function refreshScanner(force=false){
     const res = await fetch(url);
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || 'Scanner request failed');
+    hideScannerChartPreview();
     const tickers = data.tickers || [];
+    scannerSessionDate=String(data.session_date||'');
     checkScannerTickerAnnouncements(tickers, data.session_date);
     const body = $('#scanner_rows');
     
     // Update badge counters
     const greenCount = data.green_count || tickers.filter(t=>t.status==='green').length;
+    const yellowCount = data.yellow_count || tickers.filter(t=>t.status==='yellow').length;
     if($('#scanner_green_badge')) $('#scanner_green_badge').textContent = greenCount;
     const countBadge = $('#scanner_count_badge');
     if(countBadge){
@@ -3916,6 +3967,7 @@ async function refreshScanner(force=false){
       body.querySelectorAll('[data-ticker]').forEach(row=>{
         row.onclick = () => selectScannerTicker(row.dataset.ticker);
       });
+      bindScannerChartHover();
     }
 
     const stamp = new Date((data.updated || Date.now()/1000)*1000).toLocaleTimeString();

@@ -2923,7 +2923,11 @@ def chart_context():
             # an empty chart for an otherwise valid historical session.
             daily=_gap_deepdive_daily_history(ticker,force=True)
             idx=next((i for i,r in enumerate(daily) if r["date"]==day),None)
-        if idx is None and source=='anychart' and day==today_et:
+        # The daily Polygon aggregate for today may not exist yet (especially
+        # before the regular-session close). Keep a placeholder anchor so the
+        # neighboring-session context can still load; intraday bars are fetched
+        # separately below.
+        if idx is None and day==today_et:
             daily.append({'date':day,'o':0,'h':0,'l':0,'c':0,'v':0,'vw':0})
             idx=len(daily)-1
         if idx is None: return jsonify({"error":f"No daily data for {day}"}),404
@@ -2941,6 +2945,11 @@ def chart_context():
                 "dollar_volume":float(row.get("vw") or row.get("c") or 0)*float(row.get("v") or 0),
             }
         if tf=="1d":
+            # For Polygon-backed charts, today is an incomplete daily candle.
+            # Do not plot the all-zero placeholder as a price bar.
+            if source!='anychart' and day==today_et:
+                rows=[row for row in rows if row['date']!=day]
+                daily_metrics.pop(day,None)
             bars={"t":list(range(len(rows))),"d":[r["date"] for r in rows],"o":[r["o"] for r in rows],"h":[r["h"] for r in rows],"l":[r["l"] for r in rows],"c":[r["c"] for r in rows],"v":[r["v"] for r in rows],"vw":[None]*len(rows),"timeframe":"1d"}
             live_error=None
             if source=='anychart' and day==today_et:

@@ -388,7 +388,7 @@ function drawFixedRangeVolumeProfile(cv,x,g,visible){
   x.restore();
 }
 function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
-  const volumeProfileEnabled=(()=>{try{return localStorage.getItem('chart_volume_profile_enabled')==='1'}catch{return false}})();
+  const volumeProfileEnabled=!cv._forceNoVolumeProfile&&(()=>{try{return localStorage.getItem('chart_volume_profile_enabled')==='1'}catch{return false}})();
   cv._showVolumeProfile=volumeProfileEnabled;
   const parentW = (cv.parentElement && cv.parentElement.clientWidth) ? cv.parentElement.clientWidth : 0;
   const dpr = Math.min(3,Math.max(window.devicePixelRatio||1,Number(cv._renderDpr)||2));

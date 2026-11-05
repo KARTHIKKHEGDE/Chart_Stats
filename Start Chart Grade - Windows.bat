@@ -3,6 +3,16 @@ setlocal
 cd /d "%~dp0"
 set "LOCAL_MAX=1"
 set "PORT=8080"
+set "FETCH_WORKERS_CAP=100"
+set "ANALYZE_WORKERS=32"
+set "REPORT_WORKERS=8"
+set "SPIKE_WORKERS=50"
+set "WARMUP_WORKERS=8"
+set "SERVER_THREADS=50"
+set "MAX_EVENTS=50"
+set "OPTIONAL_WAIT=1.25"
+set "POLYGON_RPM=5"
+set "YAHOO_REQUEST_LIMIT=4"
 
 if not exist ".env" (
   copy "env.example" ".env" >nul

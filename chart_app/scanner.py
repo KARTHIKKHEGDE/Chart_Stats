@@ -96,11 +96,12 @@ def _get_scanner_candidate_symbols():
             seen.add(symbol)
             candidates.append(symbol)
     
-    # 1. Screen top percentage gainers on Yahoo
+    # 1. Put stocks with moves above the scanner's 30% cutoff at the front of
+    # the queue, so strongest candidates aren't buried in the full universe.
     try:
         q_gainers = yf.EquityQuery("and", [
             yf.EquityQuery("eq", ["region", "us"]),
-            yf.EquityQuery("gt", ["percentchange", 10]),
+            yf.EquityQuery("gt", ["percentchange", 30]),
         ])
         with YAHOO_REQUEST_SEMAPHORE:
             res_gainers = yf.screen(q_gainers, offset=0, size=250, sortField="percentchange", sortAsc=False)
@@ -109,7 +110,22 @@ def _get_scanner_candidate_symbols():
     except Exception as exc:
         _scanner_log(f"Yahoo gainer screen notice: {exc}")
 
-    # 2. Screen high dollar / share volume movers
+    # 2. Retain previous matches and then scan every bundled US symbol. This
+    # brings non-screener premarket movers (including low-float names) forward
+    # instead of waiting behind both capped Yahoo screens.
+    global _scanner_tracked_symbols
+    with _scanner_cache_lock:
+        tracked = sorted(_scanner_tracked_symbols)
+    for symbol in tracked:
+        add_symbol(symbol)
+
+    # The Yahoo screens above only return a small capped subset. Append every
+    # bundled US symbol so the scanner actually covers the full universe.
+    universe = _load_tc2000_universe()
+    for symbol in universe:
+        add_symbol(symbol)
+
+    # 3. Add high share-volume names outside the bundled universe last.
     try:
         q_volume = yf.EquityQuery("and", [
             yf.EquityQuery("eq", ["region", "us"]),
@@ -122,18 +138,6 @@ def _get_scanner_candidate_symbols():
     except Exception as exc:
         _scanner_log(f"Yahoo volume screen notice: {exc}")
 
-    # 3. Retain previously found qualifiers so any intraday stock is never dropped
-    global _scanner_tracked_symbols
-    with _scanner_cache_lock:
-        tracked = sorted(_scanner_tracked_symbols)
-    for symbol in tracked:
-        add_symbol(symbol)
-
-    # The Yahoo screens above only return a small capped subset. Append every
-    # bundled US symbol so the scanner actually covers the full universe.
-    universe = _load_tc2000_universe()
-    for symbol in universe:
-        add_symbol(symbol)
     _scanner_log(f"Universe loaded: {len(universe)} bundled symbols; {len(candidates)} unique scan candidates")
 
     return candidates
