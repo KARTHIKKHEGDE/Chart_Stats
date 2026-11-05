@@ -1029,17 +1029,25 @@ function publishDilutionProgress(key,progress){
 function dilutionProgressMessage(progress){
   return String(progress?.message||'Reviewing SEC filings…');
 }
+function dilutionAnalysisDate(value=''){return normalizeFilingsDate(value)||latestFilingsAsOfDate();}
+function setAnalysisPrefetchStatus(tab,selector,state,message){
+  const button=tab?.container?.querySelector(selector);if(!button)return;
+  button.dataset.prefetchState=state;button.title=message;
+  if(state==='loading')button.setAttribute('aria-busy','true');else button.removeAttribute('aria-busy');
+  button.dataset.prefetchMessage=message;
+}
 function warmDilutionHistory(ticker,asOfDate=''){
-  const key=`${String(ticker).toUpperCase()}|${asOfDate||''}`;
+  asOfDate=dilutionAnalysisDate(asOfDate);
+  const symbol=String(ticker).toUpperCase(),key=`${symbol}|${asOfDate}`;
   if(dilutionWarmJobs.has(key))return dilutionWarmJobs.get(key);
-  const payload={user:currentUser||'',token:sessionToken||'',ticker:String(ticker).toUpperCase(),as_of:asOfDate||'',request_id:crypto.randomUUID().replace(/-/g,'')};
+  const payload={user:currentUser||'',token:sessionToken||'',ticker:symbol,as_of:asOfDate,request_id:crypto.randomUUID().replace(/-/g,'')};
   const pending=fetch('/api/sec-dilution-history/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
     .then(async response=>{const data=await responseJson(response,'Dilution analysis');return {payload,job_id:data.job_id};})
     .catch(error=>{dilutionWarmJobs.delete(key);console.debug('Dilution prefetch unavailable:',error.message);return null;});
   dilutionWarmJobs.set(key,pending);return pending;
 }
 function getDilutionHistory(ticker,asOfDate='',onProgress=null){
-  const symbol=String(ticker).toUpperCase(),key=`${symbol}|${asOfDate||''}`;
+  const symbol=String(ticker).toUpperCase();asOfDate=dilutionAnalysisDate(asOfDate);const key=`${symbol}|${asOfDate}`;
   const unsubscribe=listenForDilutionProgress(key,onProgress);
   if(dilutionReportCache.has(key)){unsubscribe();return Promise.resolve(dilutionReportCache.get(key));}
   if(dilutionReportJobs.has(key))return dilutionReportJobs.get(key).finally(unsubscribe);
@@ -1402,7 +1410,7 @@ document.addEventListener('submit',async event=>{
 function aioPayload(tab,ticker,dilutionReport){
   const r=tab?.result||{},h=r.head||{},news=(r.news||[]).slice(0,8);
   const events=(tab?.EV||[]).filter(x=>!x.sim).slice(0,20).map(x=>({date:x.date,gap_pct:x.gap||x.gapPct,grade:x.grade,verdict:x.verdict,close_pct:x.closePct??x.close_pct??0}));
-  const sec_filings=[...(tab?.container?.querySelectorAll('.recent-filing-row')||[])].slice(0,25).map(row=>({form:row.querySelector('.recent-filing-form')?.textContent?.trim()||'',title:row.querySelector('.recent-filing-title')?.textContent?.trim()||'',filed_at:row.querySelector('.recent-filing-age')?.getAttribute('datetime')||''})).filter(item=>item.title);
+  const sec_filings=[...(tab?.container?.querySelectorAll('.filing-category-row,.recent-filing-row')||[])].slice(0,25).map(row=>({form:row.querySelector('.filing-category-form,.recent-filing-form')?.textContent?.trim()||'',title:row.querySelector('.filing-category-description,.recent-filing-title')?.textContent?.trim()||row.dataset.title||'',filed_at:row.querySelector('.recent-filing-age')?.getAttribute('datetime')||row.querySelector('.filing-category-date')?.textContent?.trim()||''})).filter(item=>item.title);
   return {user:currentUser||'',token:sessionToken||'',ticker,news,news_status:r.news_status||'',events,sec_filings,dilution_text:dilutionTextForAio(dilutionReport),grade:{grade:h.grade,verdict:h.verdict,score:h.score,n:h.n},current_price:h.price||h.last_price||'',gap_pct:h.gap_pct||h.gap||''};
 }
 function getAioSummary(tab,ticker,dilutionReport){
@@ -1413,9 +1421,13 @@ function getAioSummary(tab,ticker,dilutionReport){
     .catch(error=>{aioWarmCache.delete(key);throw error;});
   aioWarmCache.set(key,pending);return pending;
 }
-function warmAioSummary(tab,ticker){
+function warmAioSummary(tab,ticker,dilutionReport=null){
   const asOf=tab?.container?.querySelector('#recent_filings_asof')?.value||'';
-  return getDilutionHistory(ticker,asOf).then(report=>getAioSummary(tab,ticker,report)).catch(error=>{console.debug('All-in-One prefetch unavailable:',error.message);});
+  setAnalysisPrefetchStatus(tab,'[data-aio-summary-trigger]','loading','All-in-One Summary is preparing in the background.');
+  return (dilutionReport?Promise.resolve(dilutionReport):getDilutionHistory(ticker,asOf))
+    .then(report=>getAioSummary(tab,ticker,report))
+    .then(result=>{setAnalysisPrefetchStatus(tab,'[data-aio-summary-trigger]','ready','All-in-One Summary is ready.');return result;})
+    .catch(error=>{setAnalysisPrefetchStatus(tab,'[data-aio-summary-trigger]','error','Background summary could not finish; click to retry.');console.debug('All-in-One prefetch unavailable:',error.message);return null;});
 }
 function latestFilingsAsOfDate(){
   const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
@@ -1604,7 +1616,7 @@ document.addEventListener('keydown',event=>{const row=event.target.closest?.('[d
 async function requestDilutionHistory(ticker,asOfDate=''){
   const modal=$('#filing_explanation_modal'),status=$('#filing_explanation_status'),content=$('#filing_explanation_content');
   modal.style.display='flex';content.hidden=true;content.innerHTML='';$('#filing_explanation_title').textContent=`${ticker} · Dilution history`;
-  const warmKey=`${String(ticker).toUpperCase()}|${asOfDate||''}`;
+  const warmKey=`${String(ticker).toUpperCase()}|${dilutionAnalysisDate(asOfDate)}`;
   status.textContent=dilutionReportCache.has(warmKey)?'Showing the dilution report already prepared for this ticker.':'Starting SEC filing review…';
   try{
     const result=await getDilutionHistory(ticker,asOfDate,progress=>{
@@ -1932,6 +1944,8 @@ async function loadPremarketSpikeChart(tab,card,item){
 async function loadGapEventChart(tab,card,item){
   if(!tab||item._chartLoading||item._chartError||item.chart?.bars?.t?.length)return;
   item._chartLoading=true;
+  item.chart={bars:{t:[]},loading:true};
+  drawEvAll(tab.EV,tab.container);
   const report=tab.result,query=new URLSearchParams({ticker:report?.head?.ticker||'',date:item.date,user:currentUser||'',token:sessionToken||''});
   try{
     const data=await responseJson(await fetch('/api/session-chart?'+query.toString()),'Historical event chart');
@@ -1942,6 +1956,7 @@ async function loadGapEventChart(tab,card,item){
     card._chartItem=loaded;
   }catch(error){
     item._chartError=true;
+    item.chart={bars:{t:[]},error:error.message||'Request failed'};
     if(tab.result===report&&card.isConnected){item.title=`${item.title||item.date} · chart unavailable: ${error.message}`;}
   }finally{
     item._chartLoading=false;
@@ -2011,7 +2026,7 @@ function renderTab(tab, r, isRefresh){
     `<div>Grade: <span class="badge ${esc(h.gcls)}">${esc(h.grade)}</span> <span class="c">${esc(h.score)}</span> <span class="${esc(h.gcls)}">· ${esc(h.verdict)}</span></div>`+
     `<div class="foot">Based on ${Number(h.n)||0} similar historical gap-up setups and ${Number(h.pm_n)||0} premarket spike sessions (≥20% above prior close, faded measured high→open).</div></div>`;
   const newsItems = r.news || [];
-  o += `<div class="panel" data-news-panel><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px"><span>Latest Press Releases &#x2013; Yahoo Finance</span><span style="display:flex;gap:7px;flex-wrap:wrap"><button type="button" class="aioBtn" onclick="openAioModal(event,this)" data-ticker="${esc(h.ticker)}" style="font-size:11px;padding:4px 10px">&#128202; All-in-One Summary</button><button type="button" class="aioBtn" data-ticker-chat-toggle data-ticker="${esc(h.ticker)}" aria-label="Open AI chat for ${esc(h.ticker)}" style="font-size:11px;padding:4px 10px">&#128172; Ask AI</button></span></div>`+
+  o += `<div class="panel" data-news-panel><div class="ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px"><span>Latest Press Releases &#x2013; Yahoo Finance</span><span style="display:flex;gap:7px;flex-wrap:wrap"><button type="button" class="aioBtn" onclick="openAioModal(event,this)" data-aio-summary-trigger data-ticker="${esc(h.ticker)}" style="font-size:11px;padding:4px 10px">&#128202; All-in-One Summary</button><button type="button" class="aioBtn" data-ticker-chat-toggle data-ticker="${esc(h.ticker)}" aria-label="Open AI chat for ${esc(h.ticker)}" style="font-size:11px;padding:4px 10px">&#128172; Ask AI</button></span></div>`+
     (newsItems.length ? `<div data-news-list>${newsItems.map(item=>newsPressReleaseRow(item,h.ticker)).join('')}</div><div style="display:flex;align-items:center;gap:10px;margin-top:8px"><button type="button" class="newsMoreBtn" data-ticker="${esc(h.ticker)}" data-offset="${newsItems.length}" style="border:1px solid #24577a;border-radius:4px;background:#102333;color:#8ed5ff;padding:6px 12px;cursor:pointer;font:inherit">2 more</button><span class="foot" data-news-more-status role="status"></span></div>` : `<div class="foot">${esc(r.news_status || 'No press releases found on Yahoo Finance.')}</div>`) + `</div>`;
   const reverseSplits=r.reverse_splits||[];
   o += `<div class="panel"><div class="ttl">Reverse Splits · ${reverseSplits.length} ${reverseSplits.length===1?'event':'events'}</div>`+
@@ -2033,7 +2048,7 @@ function renderTab(tab, r, isRefresh){
      `<div class="foot" id="path_norm_foot"><span class="b" data-tip="Median path across this ticker’s historical premarket spike sessions.">━ spike-history median<\/span> &nbsp; <span style="color:#6c8" data-tip="Middle 50% range of the ticker’s historical premarket spike sessions.">▒ p25–p75<\/span> &nbsp; <span class="y">━ today<\/span> &nbsp; <span class="y">┅ expected continuation from the historical spike paths<\/span> &nbsp; <span class="d">━ each historical premarket spike<\/span> &nbsp; Default Y = price / cumulative VWAP − 1; expected price = projected VWAP × (1 + deviation).<\/div><\/div>`;
 
   if(r.pd.rows.length) o += `<div class="panel"><div class="ttl">${esc(T.pd)}</div>${table(r.pd.cols,r.pd.rows,null,false)}<div class="foot">${esc(r.pd.foot||'')}</div></div>`;
-  o += `<div class="panel recent-filings-panel"><div class="recent-filings-heading"><span><span style="color:#25cf91">●</span> LIVE FILINGS · ${esc(h.ticker)}</span><span style="display:flex;align-items:center;flex-wrap:wrap;gap:12px"><button class="recent-filings-dilution-btn" type="button" id="recent_filings_dilution" data-ticker="${esc(h.ticker)}" title="Show filings and active dilution status as of the selected date">Dilution history</button><label class="recent-filings-date" title="Filters all six cards to filings submitted on this day; Dilution history uses the selected date as its as-of date">Filing date <input type="date" id="recent_filings_asof" aria-label="Filter filings by exact date; use as the dilution report as-of date"></label><a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent" target="_blank" rel="noopener noreferrer">Full feed ↗</a></span></div><div class="recent-filings-list" id="recent_filings_feed"></div></div>`;
+  o += `<div class="panel recent-filings-panel"><div class="recent-filings-heading"><span><span style="color:#25cf91">●</span> LIVE FILINGS · ${esc(h.ticker)}</span><span style="display:flex;align-items:center;flex-wrap:wrap;gap:12px"><button class="recent-filings-dilution-btn" type="button" id="recent_filings_dilution" data-ticker="${esc(h.ticker)}" title="Dilution history is preparing in the background">Dilution history</button><label class="recent-filings-date" title="Filters all six cards to filings submitted on this day; Dilution history uses the selected date as its as-of date">Filing date <input type="date" id="recent_filings_asof" aria-label="Filter filings by exact date; use as the dilution report as-of date"></label><a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent" target="_blank" rel="noopener noreferrer">Full feed ↗</a></span></div><div class="recent-filings-list" id="recent_filings_feed"></div></div>`;
 
   tab.container.innerHTML = o;
   syncTickerChatWidget();
@@ -2041,12 +2056,13 @@ function renderTab(tab, r, isRefresh){
   else loadPremarketSpikeDays(tab,r);
   const filingsDate=tab.container.querySelector('#recent_filings_asof');
   const filingsJump=window.gapDeepDiveFilingsJump;
-  if(filingsDate){const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()),part=k=>parts.find(x=>x.type===k)?.value||'00',today=`${part('year')}-${part('month')}-${part('day')}`,jumpDate=filingsJump?.ticker===String(h.ticker).toUpperCase()?normalizeFilingsDate(filingsJump.date):'',savedDate=normalizeFilingsDate(recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]);filingsDate.max=today;filingsDate.value=jumpDate||savedDate||'';recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]=filingsDate.value;filingsDate.onchange=()=>{recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]=filingsDate.value;loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker,filingsDate.value);};}
+  if(filingsDate){const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()),part=k=>parts.find(x=>x.type===k)?.value||'00',today=`${part('year')}-${part('month')}-${part('day')}`,jumpDate=filingsJump?.ticker===String(h.ticker).toUpperCase()?normalizeFilingsDate(filingsJump.date):'',savedDate=normalizeFilingsDate(recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]);filingsDate.max=today;filingsDate.value=jumpDate||savedDate||'';recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]=filingsDate.value;filingsDate.onchange=()=>{const asOf=filingsDate.value;recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]=asOf;const filingsReady=loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker,asOf);setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','loading','Dilution history is preparing in the background.');getDilutionHistory(h.ticker,asOf).then(report=>{setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','ready','Dilution history is ready.');return Promise.all([filingsReady,warmAioSummary(tab,h.ticker,report)]);}).catch(error=>{setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','error','Background dilution review could not finish; click to retry.');console.debug('Dilution prefetch unavailable:',error.message);});};}
   if(filingsJump&&filingsJump.ticker===String(h.ticker).toUpperCase()&&filingsDate){const jumpDate=normalizeFilingsDate(filingsJump.date);if(jumpDate){filingsDate.value=jumpDate;recentFilingsAsOfByTicker[String(h.ticker).toUpperCase()]=jumpDate;window.gapDeepDiveFilingsJump=null;setTimeout(()=>{tab.container.querySelector('.recent-filings-panel')?.scrollIntoView({behavior:'smooth',block:'center'});requestDilutionHistory(h.ticker,jumpDate);},350);}}
-  loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker,filingsDate?.value||'').then(()=>{
-    if(openTabs[h.ticker]===tab&&tab.result===r)return warmAioSummary(tab,h.ticker);
-  }).finally(()=>warmNewsSummaries(h.ticker,newsItems));
-  getDilutionHistory(h.ticker,filingsDate?.value||'').catch(error=>console.debug('Dilution prefetch unavailable:',error.message));
+  const reportAsOf=filingsDate?.value||'';
+  setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','loading','Dilution history is preparing in the background.');
+  const dilutionReady=getDilutionHistory(h.ticker,reportAsOf).then(report=>{setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','ready','Dilution history is ready.');return report;}).catch(error=>{setAnalysisPrefetchStatus(tab,'#recent_filings_dilution','error','Background dilution review could not finish; click to retry.');console.debug('Dilution prefetch unavailable:',error.message);throw error;});
+  const filingsReady=loadRecentFilingsFeed(tab.container.querySelector('#recent_filings_feed'),h.ticker,reportAsOf).finally(()=>warmNewsSummaries(h.ticker,newsItems));
+  Promise.all([dilutionReady,filingsReady]).then(([report])=>{if(openTabs[h.ticker]===tab&&tab.result===r)return warmAioSummary(tab,h.ticker,report);}).catch(()=>{});
   tab.container.querySelectorAll('table.sort').forEach(makeSortable);
 
   const sigSelect = tab.container.querySelector('#sig');

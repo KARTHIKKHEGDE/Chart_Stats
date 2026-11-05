@@ -196,17 +196,21 @@ def _poly_request_one(path: str, params: dict) -> dict:
         raise RuntimeError("POLYGON_API_KEY is not set. Set it and restart the app.")
 
     payload = dict(params)
-    # A large key pool should not turn one unavailable endpoint into minutes of
-    # retries. Retry a small number of distinct configured credentials only.
-    max_attempts = min(3, len(_key_pool))
+    # Try configured credentials in round-robin order. Each concurrent fetch
+    # worker takes a different key; network failures stop quickly, while 401s
+    # and 429s can move on to the rest of the pool.
+    max_attempts = len(_key_pool)
+    network_failures = 0
     for attempt in range(max_attempts):
         key = _next_polygon_key()
         payload["apiKey"] = key
         try:
             response = _POLY_SESSION.get("https://api.polygon.io" + path, params=payload, timeout=(2, 4))
         except requests.RequestException:
-            if attempt + 1 < max_attempts:
-                time.sleep(0.1 * (attempt + 1))
+            network_failures += 1
+            if network_failures >= 3:
+                break
+            time.sleep(0.1 * network_failures)
             continue
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After", "30")
@@ -533,7 +537,7 @@ def run_job(job, t, refresh):
             # event/key can saturate connection pools and trigger rate limits.
             # A single report benefits from more parallel historical fetches;
             # concurrency remains bounded by available Polygon keys and events.
-            fetch_workers=min(n_keys,len(pending_idxs),20)
+            fetch_workers=min(n_keys,len(pending_idxs),50)
             analyze_workers=min(8,len(pending_idxs))
             cached_sessions=sum(cget(f"{t}_{daily[i]['date']}_1m_polygon_v1") is not None for i in pending_idxs)
             uncached_sessions=max(0,len(pending_idxs)-cached_sessions)

@@ -407,8 +407,8 @@ function drawEv(cv, c, sel, bzChecked, targetH, timeframe='2m', zoom=1){
     cv._seriesCache={source,tf:timeframe,bars:b,dates,multi};
   }
   if(!b || !b.t.length){
-    x.fillStyle = '#8a8a8a';
-    x.fillText('No intraday data', 10, 20);
+    x.fillStyle = c.loading ? '#8da6bd' : c.error ? '#ff7777' : '#8a8a8a';
+    x.fillText(c.loading ? 'Loading historical candles…' : c.error ? 'Could not load intraday data' : 'No intraday data', 10, 20);
     return;
   }
   const L = isLarge ? 64 : 50, R = 12, T = 10;
