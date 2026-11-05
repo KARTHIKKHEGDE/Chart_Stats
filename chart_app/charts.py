@@ -3039,7 +3039,10 @@ def chart_context():
                             seed_frames[row['date']]=seeded_frame
         yahoo_today_frame=pd.DataFrame()
         yahoo_today_error=None
-        if is_live_anychart:
+        # Any intraday context that includes today's session must fetch today's bars from Yahoo Finance.
+        # Polygon free-tier returns 403 Forbidden for today's 1-minute aggregates.
+        needs_today_intraday = tf != '1d' and (day == today_et or any(r['date'] == today_et for r in rows))
+        if needs_today_intraday:
             try:
                 live_rows=_yahoo_chart_today_rows(ticker)
                 if live_rows:yahoo_today_frame=poly_frame(live_rows)
@@ -3063,17 +3066,19 @@ def chart_context():
             packed=cget(prepared_key,30 if date>=today_et else 30*86400)
             if packed is not None:
                 packed_by_date[date]=packed;continue
-            if is_live_anychart and date==day:
+            if date==today_et:
                 if not yahoo_today_frame.empty:pack_day(date,yahoo_today_frame)
-                # The live Anychart session must come from Yahoo. Never hide a
-                # Yahoo miss by silently falling back to delayed Polygon bars.
+                # Never request today's 1-minute aggregates from Polygon; Polygon free tier rejects with 403.
+                continue
+            if is_live_anychart and date==day:
                 continue
             if date in seed_frames:
                 pack_day(date,seed_frames.pop(date));continue
             cached_rows=cget(f'{ticker}_{date}_1m_polygon_v1') if date<today_et else None
             if cached_rows is not None:
                 pack_day(date,poly_frame(cached_rows) if cached_rows else pd.DataFrame());continue
-            uncached_dates.append(date)
+            if date < today_et:
+                uncached_dates.append(date)
         chunk_ranges={}
         if 0<len(uncached_dates)<=5:
             # The initial +/-2-session window fits in one small Polygon request.
