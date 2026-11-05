@@ -13,6 +13,8 @@ services:
         sync: false
       - key: POLYGON_API_KEYS
         sync: false
+      - key: SEC_USER_AGENT
+        sync: false
       - key: POLYGON_RPM
         value: "5"          # per-key free-tier limit; pool throughput = 49 keys x 5 = ~245 RPM
       - key: POLY_MAX_PARALLEL

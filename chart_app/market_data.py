@@ -2,7 +2,8 @@
 import json
 import gzip
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from collections import OrderedDict
 from chart_app.yahoo_limiter import YAHOO_REQUEST_SEMAPHORE
 from pathlib import Path
 
@@ -43,9 +44,18 @@ _SEC_SESSION = requests.Session()
 _SEC_SESSION.mount("https://", requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=8))
 _SEC_REQUEST_LOCK = threading.Lock()
 _SEC_NEXT_REQUEST = 0.0
+_FRAME_CACHE_LOCK = threading.RLock()
+_MINUTE_FRAME_CACHE = OrderedDict()
+_VWAP_FRAME_CACHE = OrderedDict()
+_MINUTE_PENDING_LOCK = threading.Lock()
+_MINUTE_PENDING = {}
+_LIVE_SNAPSHOT_LOCK = threading.RLock()
+_LIVE_SNAPSHOT_CACHE = OrderedDict()
+_LIVE_SNAPSHOT_PENDING = {}
+_FRAME_CACHE_MAX = 128
 
 
-def _sec_get(url, headers):
+def _sec_get(url, headers=None, params=None, timeout=(3, 8)):
     """Start SEC requests no faster than eight per second across this process."""
     global _SEC_NEXT_REQUEST
     with _SEC_REQUEST_LOCK:
@@ -54,7 +64,7 @@ def _sec_get(url, headers):
             time.sleep(_SEC_NEXT_REQUEST - now)
             now = time.time()
         _SEC_NEXT_REQUEST = now + 0.125
-    return _SEC_SESSION.get(url, headers=headers, timeout=(3, 8))
+    return _SEC_SESSION.get(url, headers=headers, params=params, timeout=timeout)
 
 
 def _sec_ticker_map():
@@ -361,6 +371,23 @@ def poly_frame(rows):
     return df
 
 
+def _cached_minute_frame(key, rows):
+    with _FRAME_CACHE_LOCK:
+        frame = _MINUTE_FRAME_CACHE.get(key)
+        if frame is not None:
+            _MINUTE_FRAME_CACHE.move_to_end(key)
+            return frame.copy(deep=False)
+    frame = poly_frame(rows) if rows else None
+    if frame is not None and not frame.empty:
+        with _FRAME_CACHE_LOCK:
+            _MINUTE_FRAME_CACHE[key] = frame
+            _MINUTE_FRAME_CACHE.move_to_end(key)
+            while len(_MINUTE_FRAME_CACHE) > _FRAME_CACHE_MAX:
+                _MINUTE_FRAME_CACHE.popitem(last=False)
+        return frame.copy(deep=False)
+    return None
+
+
 def minute_df(t, day, force=False, source="polygon"):
     ticker=str(t).upper()
     source=str(source or "polygon").strip().lower()
@@ -371,13 +398,35 @@ def minute_df(t, day, force=False, source="polygon"):
         seeded=_deepdive_candle_rows(ticker,day)
         if seeded:
             return poly_frame(seeded)
-    rows = None if force else cget(key)
-    if rows is None:
+    if not force:
+        cached = _cached_minute_frame(key, cget(key))
+        if cached is not None:
+            return cached
+    else:
+        with _FRAME_CACHE_LOCK:
+            _MINUTE_FRAME_CACHE.pop(key,None)
+    with _MINUTE_PENDING_LOCK:
+        pending = _MINUTE_PENDING.get(key)
+        owner = pending is None
+        if owner:
+            pending = Future()
+            _MINUTE_PENDING[key] = pending
+    if not owner:
+        rows = pending.result()
+        return _cached_minute_frame(key, rows)
+    try:
         j = poly_get(f"/v2/aggs/ticker/{ticker}/range/1/minute/{day}/{day}",
                      {"adjusted": "false", "sort": "asc", "limit": 50000})
         rows = j.get("results") or []
         cput(key, rows)
-    return poly_frame(rows) if rows else None
+        pending.set_result(rows)
+    except Exception as exc:
+        pending.set_exception(exc)
+        raise
+    finally:
+        with _MINUTE_PENDING_LOCK:
+            _MINUTE_PENDING.pop(key, None)
+    return _cached_minute_frame(key, rows)
 
 
 def _alpaca_live_df(t):
@@ -412,12 +461,14 @@ def _alpaca_live_df(t):
     return None
 
 
-def live_snapshot(t, fast=False, include_profile=True):
+def _live_snapshot_uncached(t, fast=False, include_profile=True):
     tk = yf.Ticker(t.replace(".", "-"))
+    alp_df = _alpaca_live_df(t) if os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_API_SECRET") else None
     if fast:
-        # Keep the blocking live request small. The report already loads Polygon
-        # daily history for prior closes and historical session analysis.
-        df=_yahoo_call(lambda:tk.history(period="1d",interval="1m",prepost=True,auto_adjust=False,timeout=4))
+        # If configured, Alpaca gives the live bars in one fast REST request.
+        # Otherwise keep the Yahoo request small and overlap it with Polygon.
+        df=alp_df if alp_df is not None and not alp_df.empty else _yahoo_call(
+            lambda:tk.history(period="1d",interval="1m",prepost=True,auto_adjust=False,timeout=4))
         dly=None
     else:
         with ThreadPoolExecutor(max_workers=2) as yf_pool:
@@ -469,7 +520,8 @@ def live_snapshot(t, fast=False, include_profile=True):
         except Exception:pass
 
     # Prefer 100% exact real-time tick volume from Alpaca SIP feed if configured in .env
-    alp_df = None if fast else _alpaca_live_df(t)
+    if not fast:
+        alp_df = _alpaca_live_df(t)
     if alp_df is not None and not alp_df.empty:
         d = alp_df
         session_vol = float(d["v"].sum())
@@ -501,6 +553,48 @@ def live_snapshot(t, fast=False, include_profile=True):
             "session_vol": session_vol, "volume_source": volume_source,
             "sector": info.get("industry") or info.get("sector") or "—", "mcap": info.get("marketCap"),
             "latest_time_ist": df.index[-1].astimezone(IST).strftime("%H:%M IST")}
+
+
+def _copy_live_snapshot(snapshot):
+    copied=dict(snapshot)
+    if isinstance(copied.get("df"),pd.DataFrame):
+        copied["df"]=copied["df"].copy(deep=False)
+    copied["hist"]=list(copied.get("hist") or [])
+    return copied
+
+
+def live_snapshot(t, fast=False, include_profile=True):
+    ticker=str(t).upper()
+    if not fast:
+        return _live_snapshot_uncached(ticker,fast,include_profile)
+    cache_key=(ticker,bool(include_profile))
+    with _LIVE_SNAPSHOT_LOCK:
+        entry=_LIVE_SNAPSHOT_CACHE.get(cache_key)
+        if entry and time.time()-entry[0]<12:
+            _LIVE_SNAPSHOT_CACHE.move_to_end(cache_key)
+            return _copy_live_snapshot(entry[1])
+        pending=_LIVE_SNAPSHOT_PENDING.get(cache_key)
+        owner=pending is None
+        if owner:
+            pending=Future()
+            _LIVE_SNAPSHOT_PENDING[cache_key]=pending
+    if not owner:
+        return _copy_live_snapshot(pending.result())
+    try:
+        snapshot=_live_snapshot_uncached(ticker,fast,include_profile)
+        with _LIVE_SNAPSHOT_LOCK:
+            _LIVE_SNAPSHOT_CACHE[cache_key]=(time.time(),snapshot)
+            _LIVE_SNAPSHOT_CACHE.move_to_end(cache_key)
+            while len(_LIVE_SNAPSHOT_CACHE)>64:
+                _LIVE_SNAPSHOT_CACHE.popitem(last=False)
+        pending.set_result(snapshot)
+        return _copy_live_snapshot(snapshot)
+    except Exception as exc:
+        pending.set_exception(exc)
+        raise
+    finally:
+        with _LIVE_SNAPSHOT_LOCK:
+            _LIVE_SNAPSHOT_PENDING.pop(cache_key,None)
 
 
 def yahoo_recent_live_bars(ticker, minutes=20, timeout=3):
@@ -535,7 +629,7 @@ def latest_security_stats(t, force=False):
     one-minute cache; explicit refreshes bypass it.
     """
     key = f"{t}_latest_security_stats"
-    cached = None if force else cget(key, 60)
+    cached = None if force else cget(key, 6 * 3600)
     if cached is not None:
         return cached
 
@@ -659,6 +753,12 @@ def vwap_twap_frame(df):
     """Canonical 1-minute 04:00-16:00 ET references; empty minutes carry price, never volume."""
     if df is None or df.empty:
         return pd.DataFrame()
+    cache_key=id(df)
+    with _FRAME_CACHE_LOCK:
+        cached=_VWAP_FRAME_CACHE.get(cache_key)
+        if cached is not None and cached[0] is df:
+            _VWAP_FRAME_CACHE.move_to_end(cache_key)
+            return cached[1]
     mm = df.index.hour * 60 + df.index.minute
     s = df.loc[(mm >= PM_START) & (mm < RG_END)]
     if s.empty:
@@ -684,6 +784,11 @@ def vwap_twap_frame(df):
     result["spread"] = np.log(result.vwap / result.twap)
     result["cumvol"] = result.volume.cumsum()
     result.attrs["observed_last"] = s.index[-1]
+    with _FRAME_CACHE_LOCK:
+        _VWAP_FRAME_CACHE[cache_key]=(df,result)
+        _VWAP_FRAME_CACHE.move_to_end(cache_key)
+        while len(_VWAP_FRAME_CACHE)>_FRAME_CACHE_MAX:
+            _VWAP_FRAME_CACHE.popitem(last=False)
     return result
 
 
@@ -884,7 +989,13 @@ def metrics(df, pc, full=True):
     vwap_close = float(vw.iloc[-1]) if pd.notna(vw.iloc[-1]) else None
     pm_high = r["pm_high"]
     # Keep the scalar VWAP grade inputs without constructing chart path arrays.
-    sampled_vwap_dev=refs["d_vwap"].iloc[4::5] if not refs.empty else pd.Series(dtype=float)
+    if not refs.empty:
+        by_minute=pd.Series(refs["d_vwap"].to_numpy(),
+                            index=refs.index.hour*60+refs.index.minute)
+        sample_grid=np.arange(PM_START+4,RG_END,5)
+        sampled_vwap_dev=by_minute.reindex(sample_grid,method="ffill")
+    else:
+        sampled_vwap_dev=pd.Series(dtype=float)
     rth_sample_start=(RG_START-PM_START)//5-1
     sampled_rth_vwap_dev=[float(value) for value in sampled_vwap_dev.iloc[rth_sample_start:]
                           if pd.notna(value)]

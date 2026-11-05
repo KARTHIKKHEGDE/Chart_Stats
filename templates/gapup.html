@@ -1787,6 +1787,7 @@ async function run(refresh){
   if(tab.progressTimer)clearInterval(tab.progressTimer);
   tab.progressTimer=setInterval(()=>updateAnalysisProgress(tab),1000);
   switchTab(t);
+  $('#t').value='';
   if(!tab.result)tab.container.innerHTML='';
 
   const statusMsg = refresh 
@@ -2307,7 +2308,27 @@ window.prevModalChart = function(){
 };
 
 window.closeChartModal = function(){
+  const tab=activeTab&&openTabs[activeTab];
+  const card=tab?.container.querySelector(`[data-ev-slot="${currentModalSlot}"]`);
+  const modalCanvas=$('#cm_canvas');
+  if(tab&&card&&modalCanvas){
+    card._chartTf=$('#cm_tf').value||card._chartTf||'2m';
+    card._panOffset=modalCanvas._panOffset||0;
+    card._yZoom=modalCanvas._yZoom||1;
+    card._zoom=modalCanvas._rangeZoom||modalCanvas._zoom||card._zoom||1;
+    card._rangeMeasures=modalCanvas._rangeMeasures||card._rangeMeasures||[];
+    card._selectedRangeId=modalCanvas._selectedRangeId||null;
+    card._avwapAnchors=modalCanvas._avwapAnchors||null;
+    card._showVWAP=modalCanvas._showVWAP!==false;
+    card._showEMA5Ext=modalCanvas._showEMA5Ext!==false;
+    const tf=card.querySelector('.evtf');if(tf)tf.value=card._chartTf;
+  }
   $('#chart_modal').style.display = 'none';
+  if(tab&&card){
+    const cardCanvas=card.querySelector('canvas');
+    if(cardCanvas){cardCanvas._panOffset=card._panOffset;cardCanvas._yZoom=card._yZoom;}
+    drawEvAll(tab.EV,tab.container);
+  }
 };
 window.addEventListener('keydown',e=>{if(e.key!=='Escape'||$('#chart_modal').style.display!=='flex')return;const cv=$('#cm_canvas');if(cancelUnifiedChartSelection(cv,cv._featureUi)){e.preventDefault();e.stopImmediatePropagation();return;}closeChartModal();},true);
 

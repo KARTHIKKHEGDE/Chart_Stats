@@ -11,7 +11,7 @@ Setup
 Optional env
     POLYGON_RPM=5        Per-key request-rate estimate used for progress ETA.
     SEC_USER_AGENT="Your Name your@email.com"   (real SEC contact identity; required for SEC data)
-    GAP_MIN=0.30  MAX_EVENTS=20  SIM_K=20  MIN_PRICE=0.5  MIN_DAY_VOL=100000  MIN_PM_VOL=0
+    GAP_MIN=0.30  MAX_EVENTS=12  SIM_K=20  MIN_PRICE=0.5  MIN_DAY_VOL=100000  MIN_PM_VOL=0
     STOP_PCT=0.20        stop distance (above entry) used for R-multiples + chart stop-outs
 
 Data
@@ -23,7 +23,8 @@ VWAP everywhere = continuous VWAP from 04:00 ET (premarket + regular), like a ch
 Everything fetched from Polygon is cached in ./.gapcache so repeat runs are fast.
 (Cache note: 1-min files are reused as-is, nothing to refetch for the new sections.)
 """
-import os, re, json, time, math, random, threading, uuid, warnings, hashlib, secrets, datetime as dt
+import os, re, json, time, math, random, threading, uuid, warnings, hashlib, secrets, datetime as dt, logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import contextlib
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -33,6 +34,10 @@ import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
+try:
+    import orjson as _orjson
+except ImportError:
+    _orjson = None
 from flask import Flask, request, jsonify, Response, send_file
 from urllib.parse import quote
 
@@ -65,6 +70,16 @@ ET = ZoneInfo("America/New_York")
 IST = ZoneInfo("Asia/Kolkata")
 POLY_KEY = os.getenv("POLYGON_API_KEY", "")
 POLY_RPM = float(os.getenv("POLYGON_RPM", "5"))
+IS_RENDER = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
+LOCAL_MAX = os.getenv("LOCAL_MAX", "0" if IS_RENDER else "1").strip() == "1"
+CPU_COUNT = os.cpu_count() or 4
+FETCH_WORKERS_CAP = 100 if LOCAL_MAX else 50
+ANALYZE_WORKERS = max(4, CPU_COUNT * 2) if LOCAL_MAX else 8
+STAGE1_WAIT = float(os.getenv("OPTIONAL_WAIT", "8" if LOCAL_MAX else "1.25"))
+REPORT_WORKERS = max(4, CPU_COUNT // 2) if LOCAL_MAX else 2
+SPIKE_WORKERS = max(4, CPU_COUNT) if LOCAL_MAX else 4
+WARMUP_WORKERS = max(2, CPU_COUNT // 2) if LOCAL_MAX else 1
+SERVER_THREADS = 64 if LOCAL_MAX else 4
 
 # ----------------------------------------------------------------------------- Polygon client
 _key_pool: list = []
@@ -80,18 +95,32 @@ def _init_key_pool():
     """Load configured Polygon credentials and preserve their round-robin order."""
     global _key_pool, _key_cooldown
     raw = os.getenv("POLYGON_API_KEYS", "") or os.getenv("POLYGON_API_KEY", "")
-    keys = [key.strip() for key in raw.split(",") if key.strip()]
+    keys = [key.strip() for key in re.split(r"[,;\s]+", raw) if key.strip()]
+    # Also accept environments configured as POLYGON_API_KEY_1 … _50.
+    numbered = []
+    for name, value in os.environ.items():
+        match = re.fullmatch(r"POLYGON_API_KEYS?_(\d+)", name)
+        if match and value.strip():
+            numbered.append((int(match.group(1)), value.strip()))
+    keys.extend(value for _, value in sorted(numbered))
     _key_pool = list(dict.fromkeys(keys))
     _key_cooldown = {key: expiry for key, expiry in _key_cooldown.items() if key in _key_pool}
+    if _key_pool:
+        print(f"[polygon] configured key pool: {len(_key_pool)} unique key(s), {POLY_RPM:g} RPM/key", flush=True)
+    else:
+        print("[polygon] no API keys configured", flush=True)
 
 _init_key_pool()   # bootstrap pool at module load (env already loaded above)
+print(f"[startup] LOCAL_MAX={int(LOCAL_MAX)} CPU={CPU_COUNT} report_workers={REPORT_WORKERS} "
+      f"fetch_cap={FETCH_WORKERS_CAP} analyze_workers={ANALYZE_WORKERS} stage1_wait={STAGE1_WAIT:g}s",
+      flush=True)
 
 
 SEC_UA = os.getenv("SEC_USER_AGENT", "").strip()
 GAP_MIN = float(os.getenv("GAP_MIN", "0.30"))
 LOOKBACK_DAYS = 365
 HISTORY_DAYS = 740            # retain a full two years of daily candles plus split/calendar buffer
-MAX_EVENTS = int(os.getenv("MAX_EVENTS", "20"))
+MAX_EVENTS = int(os.getenv("MAX_EVENTS", "30" if LOCAL_MAX else "12"))
 SIM_K = int(os.getenv("SIM_K", "20"))
 MIN_PRICE = float(os.getenv("MIN_PRICE", "0.5"))
 MIN_DAY_VOL = int(os.getenv("MIN_DAY_VOL", "100000"))
@@ -114,7 +143,8 @@ def cget(key, ttl=None):
     if ttl and time.time() - p.stat().st_mtime > ttl:
         return None
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        payload = p.read_bytes()
+        return _orjson.loads(payload) if _orjson else json.loads(payload)
     except Exception:
         return None
 
@@ -123,7 +153,8 @@ def cput(key, val):
     try:
         p = CACHE / f"{key}.json"
         tmp = p.with_name(f"{p.name}.{uuid.uuid4().hex}.tmp")
-        tmp.write_text(json.dumps(val), encoding="utf-8")
+        payload = _orjson.dumps(val) if _orjson else json.dumps(val).encode("utf-8")
+        tmp.write_bytes(payload)
         os.replace(tmp, p)
     except Exception:
         pass
@@ -173,7 +204,7 @@ def _next_polygon_key():
     global _key_cursor
     # Keep each credential within the documented 5 RPM budget; with 50
     # configured keys this allows up to 250 useful requests/minute in aggregate.
-    min_interval = 60.0 / max(0.1, min(5.0, POLY_RPM))
+    min_interval = 60.0 / max(0.1, POLY_RPM)
     while True:
         with _key_lock:
             if not _key_pool:
@@ -211,7 +242,7 @@ def _poly_request_one(path: str, params: dict) -> dict:
         key = _next_polygon_key()
         payload["apiKey"] = key
         try:
-            response = _POLY_SESSION.get("https://api.polygon.io" + path, params=payload, timeout=(2, 4))
+            response = _POLY_SESSION.get("https://api.polygon.io" + path, params=payload, timeout=(3, 15))
         except requests.RequestException:
             network_failures += 1
             if network_failures >= 3:
@@ -229,6 +260,7 @@ def _poly_request_one(path: str, params: dict) -> dict:
                     cooldown = 30.0
             with _key_lock:
                 _key_cooldown[key] = time.time() + cooldown
+            app.logger.warning("[polygon] one configured key was rate-limited; cooling it down for %.0fs (%d key(s) remain configured)", cooldown, len(_key_pool))
             continue
         if response.status_code == 401:
             with _key_lock:
@@ -236,6 +268,8 @@ def _poly_request_one(path: str, params: dict) -> dict:
                     _key_pool.remove(key)
                     _key_cursor = _key_cursor % max(1, len(_key_pool))
                 _key_cooldown.pop(key, None)
+                remaining_keys = len(_key_pool)
+            app.logger.error("[polygon] one configured key was rejected (401); %d key(s) remain in the active pool", remaining_keys)
             if not _key_pool:
                 raise RuntimeError(f"All Polygon keys rejected (401): {response.text[:150]}")
             continue
@@ -296,9 +330,12 @@ from chart_app.market_data import (
 # ----------------------------------------------------------------------------- job runner
 JOBS = {}
 JOB_LOCK = threading.RLock()
-REPORT_JOB_SLOTS = threading.BoundedSemaphore(2)
-from concurrent.futures import ThreadPoolExecutor, as_completed
-REPORT_JOB_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ticker-report")
+ACTIVE_TICKER_JOBS = {}
+REPORT_JOB_SLOTS = threading.BoundedSemaphore(REPORT_WORKERS)
+REPORT_JOB_POOL = ThreadPoolExecutor(max_workers=REPORT_WORKERS, thread_name_prefix="ticker-report")
+_ACTIVE_REPORT_LOCK = threading.Lock()
+_ACTIVE_REPORTS = 0
+_WARMUP_PAUSED = threading.Event()
 
 
 from chart_app.gap_analysis import (
@@ -362,6 +399,45 @@ def run_job(job, t, refresh):
         _security_res = [None]
         _news_res   = [None]
         _err        = [None]
+        hod_times_res=[None]
+        hod_start_lock=threading.Lock()
+        hod_times_thread=[None]
+        def _start_hod_times(hod_daily):
+            if not hod_daily:
+                return
+            with hod_start_lock:
+                if hod_times_thread[0] is not None:
+                    return
+                def _get_recent_hod_times():
+                    try:
+                        hod_times_res[0]=_timed_call(job,"hod_times",lambda:recent_hod_times(t,hod_daily))
+                    except Exception:
+                        hod_times_res[0]={"date_from":None,"date_to":None,"rows":[]}
+                hod_times_thread[0]=threading.Thread(target=_get_recent_hod_times,daemon=True,
+                                                     name=f"hod-times-{t}")
+                hod_times_thread[0].start()
+
+        # When a previous daily snapshot is available, use it immediately for
+        # a speculative candle fan-out while the fresh daily request is in flight.
+        stale_daily=cget(f"{t}_daily_polygon_v1")
+        speculative_thread=None
+        if LOCAL_MAX and isinstance(stale_daily,list) and stale_daily:
+            stale_splits=cget(f"{t}_splits") or []
+            if not refresh:
+                _start_hod_times(stale_daily)
+            def _speculative_prefetch():
+                try:
+                    provisional=detect_events(stale_daily,stale_splits,dt.datetime.now(ET).date())
+                    provisional=provisional[-MAX_EVENTS:]
+                    if provisional:
+                        workers=min(max(1,len(_key_pool)),len(provisional),FETCH_WORKERS_CAP)
+                        with ThreadPoolExecutor(max_workers=workers,thread_name_prefix="spec-minute-fetch") as pool:
+                            list(pool.map(_prefetch_minute,[(t,index,stale_daily) for index in provisional]))
+                except Exception:
+                    app.logger.exception("Speculative historical prefetch failed for %s",t)
+            speculative_thread=threading.Thread(target=_speculative_prefetch,daemon=True,
+                                                name=f"spec-prefetch-{t}")
+            speculative_thread.start()
         core_lock=threading.Lock();core_done=set()
         def core_finished(label):
             with core_lock:
@@ -379,6 +455,7 @@ def run_job(job, t, refresh):
         def _get_daily():
             try:
                 _daily_res[0] = _timed_call(job,"daily",lambda:load_daily(t, refresh))
+                _start_hod_times(_daily_res[0])
             except Exception as ex:
                 _err[0] = ex
             finally:core_finished('daily price history')
@@ -425,7 +502,7 @@ def run_job(job, t, refresh):
         # let them finish in the background instead of holding the whole report.
         for th in stage1_threads[:3]:
             th.join()
-        optional_deadline=time.monotonic()+1.25
+        optional_deadline=time.monotonic()+STAGE1_WAIT
         for th in stage1_threads[3:]:
             th.join(max(0.0,optional_deadline-time.monotonic()))
         sec_history_pending=stage1_threads[3].is_alive()
@@ -440,9 +517,9 @@ def run_job(job, t, refresh):
 
         live   = _live_res[0]
         splits = _splits_res[0]
-        sec    = _sec_res[0]
+        sec    = _sec_res[0] or []
         security_stats = _security_res[0] or {}
-        typ    = security_stats.get("type") or ticker_type(t)
+        typ    = security_stats.get("type") or (None if security_stats_pending else ticker_type(t))
         polygon_float = security_stats.get("float_shares")
         polygon_shares = security_stats.get("shares_outstanding")
         if polygon_float:
@@ -484,15 +561,7 @@ def run_job(job, t, refresh):
         # This report section needs one extra 15-minute request. Start it while
         # the historical event candles are loading so it doesn't add a serial
         # network wait at the end of the report.
-        hod_times_res=[None]
-        hod_times_thread=None
-        if daily:
-            def _get_recent_hod_times():
-                try:hod_times_res[0]=_timed_call(job,"hod_times",lambda:recent_hod_times(t,daily))
-                except Exception:hod_times_res[0]={"date_from":None,"date_to":None,"rows":[]}
-            hod_times_thread=threading.Thread(target=_get_recent_hod_times,daemon=True,
-                                              name=f"hod-times-{t}")
-            hod_times_thread.start()
+        _start_hod_times(daily)
 
         fl_now = live["float"] or live["so"]
         ratio  = None
@@ -516,11 +585,20 @@ def run_job(job, t, refresh):
             cached_event=cget(event_key)
             if isinstance(cached_event,dict) and cached_event.get("fingerprint")==event_fingerprint and "event" in cached_event:
                 cached_result=cached_event["event"]
-                for path_key in ("path","path_vwap","path_vwap_dev","path_twap","path_twap_dev",
-                                 "path_vwap_twap_spread","path_active_twap"):
-                    cached_result.pop(path_key,None)
-                results[i]=cached_result
-                cput(event_key,{"fingerprint":event_fingerprint,"event":cached_result})
+                if isinstance(cached_result,dict):
+                    changed=False
+                    for path_key in ("path","path_vwap","path_vwap_dev","path_twap","path_twap_dev",
+                                     "path_vwap_twap_spread","path_active_twap"):
+                        if path_key in cached_result:
+                            cached_result.pop(path_key)
+                            changed=True
+                    if changed:
+                        cput(event_key,{"fingerprint":event_fingerprint,"event":cached_result})
+                    results[i]=cached_result
+                elif cached_result is None:
+                    results[i]=None
+                else:
+                    pending_idxs.append(i)
             else:
                 pending_idxs.append(i)
         event_cache_hits=len(results)
@@ -534,7 +612,11 @@ def run_job(job, t, refresh):
 
         def _analyze(i):
             event_fingerprint=_event_fingerprint(daily, i, ctx)
-            event=_timed_call(job,f"analyze:{daily[i]['date']}",lambda:clean(analyze_event(t,i,daily,ctx)))
+            try:
+                event=_timed_call(job,f"analyze:{daily[i]['date']}",lambda:clean(analyze_event(t,i,daily,ctx)))
+            except Exception:
+                app.logger.exception("Historical analysis failed for %s %s",t,daily[i]["date"])
+                return i,None
             cput(f"{t}_{daily[i]['date']}_gap_event_v2",
                  {"fingerprint":event_fingerprint,"event":event})
             return i,event
@@ -545,8 +627,8 @@ def run_job(job, t, refresh):
             # event/key can saturate connection pools and trigger rate limits.
             # A single report benefits from more parallel historical fetches;
             # concurrency remains bounded by available Polygon keys and events.
-            fetch_workers=min(n_keys,len(pending_idxs),50)
-            analyze_workers=min(8,len(pending_idxs))
+            fetch_workers=min(n_keys,len(pending_idxs),FETCH_WORKERS_CAP)
+            analyze_workers=min(ANALYZE_WORKERS,len(pending_idxs))
             cached_sessions=sum(cget(f"{t}_{daily[i]['date']}_1m_polygon_v1") is not None for i in pending_idxs)
             uncached_sessions=max(0,len(pending_idxs)-cached_sessions)
             effective_rpm=max(0.1,float(POLY_RPM))*max(1,fetch_workers)
@@ -554,7 +636,7 @@ def run_job(job, t, refresh):
             job.update(stage="loading_history",progress_pct=16+int(56*event_cache_hits/max(1,n_events)),progress_done=event_cache_hits,progress_total=n_events,
                        cached_done=event_cache_hits,uncached_total=uncached_sessions,uncached_done=0,
                        fetch_workers=fetch_workers,estimate_seconds=initial_eta,eta_seconds=initial_eta,
-                       msg=f"Found {n_events} historical sessions · reusing {event_cache_hits} complete analyses · loading the remaining candles with {fetch_workers} worker(s)…")
+                       msg=f"Found {n_events} historical sessions · reusing {event_cache_hits} complete analyses · fetching with {fetch_workers} worker(s) across {n_keys} configured Polygon key(s)…")
             with ThreadPoolExecutor(max_workers=fetch_workers,thread_name_prefix="gap-minute-fetch") as fetch_pool:
                 with ThreadPoolExecutor(max_workers=analyze_workers,thread_name_prefix="gap-event-analysis") as analyze_pool:
                     fetch_futures={fetch_pool.submit(_timed_call,job,f"minute_fetch:{daily[arg[1]]['date']}",lambda arg=arg:_prefetch_minute(arg)):arg for arg in fetch_args}
@@ -567,7 +649,7 @@ def run_job(job, t, refresh):
                         eta=int(max(0,uncached_sessions-uncached_done)*60/effective_rpm + max(3,(n_events-completed)*.2))
                         job.update(progress_done=completed,cached_done=cached_done,uncached_done=uncached_done,
                                    progress_pct=16+int(56*completed/max(1,n_events)),eta_seconds=eta,
-                                   msg=f"Historical minute candles · {completed}/{n_events} sessions fetched · {cached_done} from cache · analyzing as each arrives ({day}{' · cached' if was_cached else ' · no minute bars' if not ok else ''})")
+                                   msg=f"Historical minute candles · {completed}/{n_events} sessions fetched · {cached_done} from cache · {fetch_workers} workers / {n_keys} Polygon keys ({day}{' · cached' if was_cached else ' · no minute bars' if not ok else ''})")
                     # Analyze as soon as each session's bars are fetched. The
                     # old code waited for every analysis at the end, hiding
                     # progress and delaying report readiness behind stragglers.
@@ -647,6 +729,8 @@ def run_job(job, t, refresh):
         notes.append("Historical data is point-in-time for tickers still listed; delisted names are missing, "
                      "which makes fades look weaker than reality (survivorship bias).")
 
+        if hod_times_thread[0]:
+            hod_times_thread[0].join(5)
         hod_times=hod_times_res[0] or {"date_from":None,"date_to":None,"rows":[]}
         report = _timed_call(job,"build_report",lambda:clean(build_report(t, live, lm, events, S, notes, daily, hod_times)))
         report["premarket_surge_days"] = None
@@ -689,10 +773,6 @@ def run_job(job, t, refresh):
                 report["text"] += f"\n- [{item['kind']}] {item['title']} ({item['publisher']}) {item['url']}"
         else:
             report["text"] += f"\n\nLatest Press Releases · Yahoo Finance\n{report['news_status']}"
-        serialize_started=time.perf_counter()
-        serialized_report=json.dumps(report, separators=(",",":"), ensure_ascii=False)
-        job.setdefault("timings",{})["json_serialize"] = round(time.perf_counter()-serialize_started,3)
-        job["report_json_bytes"] = len(serialized_report.encode("utf-8"))
         job["result"] = report
         job["status"] = "done"
         job.update(stage="complete",progress_pct=100,eta_seconds=0,msg="Report ready.",finished_at=time.time())
@@ -704,11 +784,26 @@ def run_job(job, t, refresh):
         job["finished_at"] = time.time()
 
 
-def _run_report_job_limited(job, ticker, refresh):
+def _run_report_job_limited(job, ticker, refresh, user=None):
+    global _ACTIVE_REPORTS
+    with _ACTIVE_REPORT_LOCK:
+        _ACTIVE_REPORTS += 1
+        _WARMUP_PAUSED.set()
     try:
         run_job(job, ticker, refresh)
     finally:
         REPORT_JOB_SLOTS.release()
+        with JOB_LOCK:
+            active_key=(str(user or "").lower(),ticker,bool(refresh))
+            if ACTIVE_TICKER_JOBS.get(active_key)==job.get("job_id"):
+                ACTIVE_TICKER_JOBS.pop(active_key,None)
+        with _ACTIVE_REPORT_LOCK:
+            _ACTIVE_REPORTS=max(0,_ACTIVE_REPORTS-1)
+            warmup_allowed=_ACTIVE_REPORTS==0
+            if warmup_allowed:
+                _WARMUP_PAUSED.clear()
+        if warmup_allowed and LOCAL_MAX:
+            _schedule_local_warmup()
 
 
 # ----------------------------------------------------------------------------- web
@@ -716,6 +811,9 @@ HTML = (Path(__file__).resolve().parent.parent / "templates" / "gapup.html").rea
 KEYWORD_HTML = (Path(__file__).resolve().parent.parent / "templates" / "keyword_search.html").read_text(encoding="utf-8")
 
 app = Flask(__name__, static_folder="../static")
+app.logger.setLevel(logging.INFO)
+if not SEC_UA:
+    app.logger.warning("SEC_USER_AGENT is unset; SEC-based dilution and filing data will be unavailable until a contact identity is configured.")
 
 
 @app.route("/")
@@ -951,8 +1049,71 @@ from chart_app import charts as _charts
 from chart_app import keyword_compare as _keyword_compare
 from chart_app.scanner import _get_scanner_news, _scanner_details
 
-_premarket_spike_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="premarket-spikes")
-_PREMARKET_SPIKE_SLOTS = threading.BoundedSemaphore(2)
+_premarket_spike_pool = ThreadPoolExecutor(max_workers=SPIKE_WORKERS, thread_name_prefix="premarket-spikes")
+_PREMARKET_SPIKE_SLOTS = threading.BoundedSemaphore(SPIKE_WORKERS if LOCAL_MAX else 2)
+
+
+def _run_local_watchlist_warmup():
+    if not LOCAL_MAX:
+        return
+    try:
+        from chart_app.scanner import _scanner_cache, _scanner_tracked_symbols
+        configured=[item.strip().upper() for item in re.split(r"[,;\s]+",os.getenv("LOCAL_WARMUP_TICKERS", "")) if item.strip()]
+        scanned=[str(row.get("ticker") or "").upper() for row in (_scanner_cache.get("rows") or [])[:8]]
+        tracked=sorted(_scanner_tracked_symbols)[:8]
+        tickers=list(dict.fromkeys(configured+scanned+tracked))[:12]
+        for ticker in tickers:
+            if _WARMUP_PAUSED.is_set():
+                return
+            daily=load_daily(ticker)
+            if not daily:
+                continue
+            splits=load_splits(ticker)
+            indices=detect_events(daily,splits,dt.datetime.now(ET).date())[-5:]
+            if not indices:
+                continue
+            workers=min(max(1,len(_key_pool)),len(indices),WARMUP_WORKERS)
+            with ThreadPoolExecutor(max_workers=workers,thread_name_prefix="local-cache-warm") as pool:
+                futures=[pool.submit(_prefetch_minute,(ticker,index,daily)) for index in indices]
+                for future in as_completed(futures):
+                    future.result()
+                    if _WARMUP_PAUSED.is_set():
+                        return
+    except Exception:
+        app.logger.exception("Local watchlist warm-up failed")
+
+
+_LOCAL_WARMUP_POOL=ThreadPoolExecutor(max_workers=1,thread_name_prefix="local-watchlist-warm")
+
+
+def _schedule_local_warmup():
+    if LOCAL_MAX and not _WARMUP_PAUSED.is_set():
+        try:
+            _LOCAL_WARMUP_POOL.submit(_run_local_watchlist_warmup)
+        except RuntimeError:
+            pass
+
+
+def _local_startup_warmup():
+    if not LOCAL_MAX:
+        return
+    if _key_pool:
+        def warm_connection(_):
+            try:
+                response=_POLY_SESSION.get("https://api.polygon.io/v1/marketstatus/now",timeout=(2,4))
+                response.content
+                response.close()
+            except Exception:
+                pass
+        with ThreadPoolExecutor(max_workers=min(50,len(_key_pool)),thread_name_prefix="polygon-tls-warm") as pool:
+            list(pool.map(warm_connection,range(min(50,len(_key_pool)))))
+    if SEC_UA:
+        try:
+            from chart_app.market_data import _sec_ticker_map
+            _sec_ticker_map()
+        except Exception:
+            app.logger.info("SEC ticker map startup warm-up unavailable",exc_info=True)
+    _schedule_local_warmup()
 
 
 def _compute_premarket_spikes(ticker):
@@ -978,7 +1139,7 @@ def _compute_premarket_spikes(ticker):
         if day >= cutoff and row["date"] not in split_dates and prior_close > 0 and high / prior_close - 1 > 0.40:
             candidates.append(index)
     if candidates:
-        workers = min(4, max(1,len(_key_pool)), max(1,len(candidates)))
+        workers = min(SPIKE_WORKERS, max(1,len(_key_pool)), max(1,len(candidates)))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             list(pool.map(_prefetch_minute, [(ticker, index, daily) for index in candidates]))
     found = []
@@ -995,6 +1156,7 @@ def _compute_premarket_spikes(ticker):
                 continue
             high = float(premarket["h"].max())
             high_index = premarket["h"].idxmax()
+            pm_high_minute = int(high_index.hour * 60 + high_index.minute)
             typical_price = (premarket["h"] + premarket["l"] + premarket["c"]) / 3
             dollar_volume = float((typical_price * premarket["v"]).sum())
             rth = bars[(minutes >= 570) & (minutes < 960)]
@@ -1150,17 +1312,26 @@ try:
 except Exception as _e:
     print(f'[news-ai routes] Could not register: {_e}')
 
+if LOCAL_MAX:
+    threading.Thread(target=_local_startup_warmup,daemon=True,name="local-startup-warmup").start()
+
 def main():
     _load_env_file()
-    polygon_key = os.getenv("POLYGON_API_KEY", "")
-    if not polygon_key:
+    if not _key_pool:
         print("WARNING: POLYGON_API_KEY not set — historical data will fail until you set it in .env or environment.")
     else:
-        print("Polygon API Key loaded successfully.")
+        print(f"Polygon key pool loaded: {len(_key_pool)} key(s).")
     import sys
     port = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.getenv("PORT", "8000"))
-    print(f"Open http://127.0.0.1:{port}")
-    app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
+    url=f"http://127.0.0.1:{port}"
+    print(f"Open {url}")
+    if LOCAL_MAX:
+        import webbrowser
+        threading.Timer(1.2,lambda:webbrowser.open(url)).start()
+        from waitress import serve
+        serve(app,host="127.0.0.1",port=port,threads=SERVER_THREADS)
+    else:
+        app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
 
 
 if __name__ == "__main__":

@@ -37,31 +37,21 @@ from chart_app.application import (
     threading,
     time,
 )
-from chart_app.market_data import twap_frame_paths
+from chart_app.market_data import _sec_get as _shared_sec_get, twap_frame_paths
 from chart_app import auth as _auth
 
 _KW_FINANCING_FORMS = ("8-K,6-K,S-1,S-3,S-4,F-1,F-3,F-4,8-A,424B1,424B2,424B3,424B4,424B5,424B6,424B7,10-K,10-Q,20-F,40-F")
 
 
-_kw_sec_request_lock = threading.Lock()
-
-
-_kw_sec_last_request = 0.0
-
-
 def _keyword_sec_get(url, params=None, timeout=25):
-    """Pace SEC request starts below 10 req/s while allowing downloads to overlap."""
-    global _kw_sec_last_request
+    """Use the shared process-wide SEC pace for keyword and filing requests."""
     for attempt in range(3):
-        with _kw_sec_request_lock:
-            wait = 0.13 - (time.monotonic() - _kw_sec_last_request)
-            if wait > 0:
-                time.sleep(wait)
-            _kw_sec_last_request = time.monotonic()
         try:
-            response = requests.get(url, params=params,
-                                    headers={"User-Agent": SEC_UA, "Accept-Encoding": "gzip, deflate"},
-                                    timeout=timeout)
+            response = _shared_sec_get(
+                url, params=params,
+                headers={"User-Agent": SEC_UA, "Accept-Encoding": "gzip, deflate"},
+                timeout=timeout,
+            )
             if response.status_code not in (429, 503) or attempt == 2:
                 return response
         except requests.RequestException:

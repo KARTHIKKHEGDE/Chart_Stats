@@ -18,6 +18,7 @@ from chart_app.application import (
     requests,
     threading,
     time,
+    _schedule_local_warmup,
     yf,
 )
 from chart_app.yahoo_limiter import YAHOO_REQUEST_SEMAPHORE
@@ -33,7 +34,7 @@ _scanner_cache = {
 _scanner_cache_lock = threading.Lock()
 _scanner_scan_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scanner-master")
 _scanner_tracked_symbols = set()
-_SCANNER_RESCAN_SECONDS = 60
+_SCANNER_RESCAN_SECONDS = 300
 
 # Persistent requests session for parallel scraping
 _http_session = requests.Session()
@@ -84,8 +85,17 @@ def _load_tc2000_universe():
 
 
 def _get_scanner_candidate_symbols():
-    """Gather high-probability premarket candidates from screeners + active watchlist."""
-    candidates = set()
+    """Scan the bundled full US ticker universe, prioritizing fresh movers."""
+    candidates = []
+    seen = set()
+
+    def add_symbol(symbol):
+        if not symbol or symbol.endswith((".WS", ".WT", ".RT", ".U")):
+            return
+        symbol = symbol.replace(".", "-").upper()
+        if symbol not in seen:
+            seen.add(symbol)
+            candidates.append(symbol)
     
     # 1. Screen top percentage gainers on Yahoo
     try:
@@ -96,9 +106,7 @@ def _get_scanner_candidate_symbols():
         with YAHOO_REQUEST_SEMAPHORE:
             res_gainers = yf.screen(q_gainers, offset=0, size=250, sortField="percentchange", sortAsc=False)
         for quote in (res_gainers.get("quotes") or []):
-            sym = quote.get("symbol")
-            if sym and not sym.endswith((".WS", ".WT", ".RT", ".U")):
-                candidates.add(sym.replace(".", "-"))
+            add_symbol(quote.get("symbol"))
     except Exception as exc:
         _scanner_log(f"Yahoo gainer screen notice: {exc}")
 
@@ -111,18 +119,25 @@ def _get_scanner_candidate_symbols():
         with YAHOO_REQUEST_SEMAPHORE:
             res_vol = yf.screen(q_volume, offset=0, size=150, sortField="dayvolume", sortAsc=False)
         for quote in (res_vol.get("quotes") or []):
-            sym = quote.get("symbol")
-            if sym and not sym.endswith((".WS", ".WT", ".RT", ".U")):
-                candidates.add(sym.replace(".", "-"))
+            add_symbol(quote.get("symbol"))
     except Exception as exc:
         _scanner_log(f"Yahoo volume screen notice: {exc}")
 
     # 3. Retain previously found qualifiers so any intraday stock is never dropped
     global _scanner_tracked_symbols
     with _scanner_cache_lock:
-        candidates.update(_scanner_tracked_symbols)
+        tracked = sorted(_scanner_tracked_symbols)
+    for symbol in tracked:
+        add_symbol(symbol)
 
-    return list(candidates)
+    # The Yahoo screens above only return a small capped subset. Append every
+    # bundled US symbol so the scanner actually covers the full universe.
+    universe = _load_tc2000_universe()
+    for symbol in universe:
+        add_symbol(symbol)
+    _scanner_log(f"Universe loaded: {len(universe)} bundled symbols; {len(candidates)} unique scan candidates")
+
+    return candidates
 
 
 def _scrape_yahoo_premarket_chart(ticker):
@@ -268,12 +283,12 @@ def _run_scanner_cycle():
 
         _scanner_log(f"Starting parallel Yahoo chart scan for {len(candidates)} candidates...")
         results = []
-        with ThreadPoolExecutor(max_workers=12, thread_name_prefix="yahoo-pm-chart") as pool:
+        with ThreadPoolExecutor(max_workers=16, thread_name_prefix="yahoo-pm-chart") as pool:
             # Keep only a bounded set of futures; candidate universes can contain
             # hundreds of symbols and eager submission retains every Future.
             candidates_iter=iter(candidates)
             pending={}
-            for _ in range(min(12,len(candidates))):
+            for _ in range(min(16,len(candidates))):
                 try:symbol=next(candidates_iter)
                 except StopIteration:break
                 pending[pool.submit(_scrape_yahoo_premarket_chart,symbol)]=symbol
@@ -317,6 +332,7 @@ def _run_scanner_cycle():
         green_c = sum(1 for r in results if r["status"] == "green")
         yellow_c = sum(1 for r in results if r["status"] == "yellow")
         _scanner_log(f"Scan completed in {time.time()-t0:.2f}s: {len(results)} matches ({green_c} green, {yellow_c} yellow)")
+        _schedule_local_warmup()
         # Enrich results asynchronously so slow news providers never block prices.
         for item in results[:8]:
             with _scanner_details_lock:

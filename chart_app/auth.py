@@ -3,8 +3,10 @@ from chart_app.application import (
     IST,
     JOBS,
     JOB_LOCK,
+    ACTIVE_TICKER_JOBS,
     REPORT_JOB_POOL,
     REPORT_JOB_SLOTS,
+    REPORT_WORKERS,
     _run_report_job_limited,
     SUPABASE_KEY,
     SUPABASE_URL,
@@ -422,25 +424,35 @@ def start():
     t = (request.args.get("ticker") or "").strip().upper()
     if not re.fullmatch(r"[A-Z.\-]{1,10}", t):
         return jsonify({"error": "Invalid ticker"}), 400
+    refresh = request.args.get("refresh") == "1"
+    singleflight_key=(u,t,refresh)
     threading.Thread(target=log_search, args=(u, t), daemon=True).start()
     record_activity_async(u, "ticker_search", "/", "Get notes", {"ticker": t})
-    if not REPORT_JOB_SLOTS.acquire(blocking=False):
-        return jsonify({"error":"The server is processing two ticker reports right now. Please retry in a moment."}),503
-    jid = uuid.uuid4().hex[:10]
     with JOB_LOCK:
+        existing_id=ACTIVE_TICKER_JOBS.get(singleflight_key)
+        existing_job=JOBS.get(existing_id) if existing_id else None
+        if existing_job and existing_job.get("status") == "running":
+            return jsonify({"job":existing_id,"shared":True})
+        if not REPORT_JOB_SLOTS.acquire(blocking=False):
+            return jsonify({"error":f"The server is processing {REPORT_WORKERS} ticker reports right now. Please retry in a moment."}),503
+        jid = uuid.uuid4().hex[:10]
         expired=[key for key,value in JOBS.items() if value.get('status') in {'done','error'} and time.time()-value.get('finished_at',0)>900]
         for key in expired:JOBS.pop(key,None)
         if len(JOBS)>=8:
             completed=sorted(((value.get('finished_at',0),key) for key,value in JOBS.items() if value.get('status') in {'done','error'}))
             for _,key in completed[:max(0,len(JOBS)-5)]:JOBS.pop(key,None)
         JOBS[jid] = {"status": "running", "stage": "queued", "progress_pct": 2,
-                     "msg": "Queued · preparing parallel live-data requests…","created_at":time.time()}
+                     "msg": "Queued · preparing parallel live-data requests…","created_at":time.time(),
+                     "job_id":jid,"user":u}
+        ACTIVE_TICKER_JOBS[singleflight_key]=jid
         job=JOBS[jid]
     try:
-        REPORT_JOB_POOL.submit(_run_report_job_limited,job,t,request.args.get("refresh") == "1")
+        REPORT_JOB_POOL.submit(_run_report_job_limited,job,t,refresh,u)
     except Exception:
         REPORT_JOB_SLOTS.release()
-        with JOB_LOCK:JOBS.pop(jid,None)
+        with JOB_LOCK:
+            JOBS.pop(jid,None)
+            ACTIVE_TICKER_JOBS.pop(singleflight_key,None)
         return jsonify({"error":"Could not queue the ticker report. Please retry."}),503
     return jsonify({"job": jid})
 
