@@ -2970,9 +2970,9 @@ def chart_context():
             first,last=bounds
             raw=_gap_chart_context_minute_chunk(ticker,first,last)
             return poly_frame(raw) if raw else pd.DataFrame()
-        with ThreadPoolExecutor(max_workers=min(4,max(1,len(chunks)))) as pool:
+        with ThreadPoolExecutor(max_workers=min(12,max(1,len(chunks)))) as pool:
             chunk_iter=iter(chunks);futures={}
-            for _ in range(min(4,len(chunks))):
+            for _ in range(min(12,len(chunks))):
                 try:_,(bounds,dates)=next(chunk_iter)
                 except StopIteration:break
                 futures[pool.submit(read_chunk,bounds)]=dates
@@ -3000,10 +3000,10 @@ def chart_context():
         for part in packed_parts:
             for field in fields:bars[field].extend(part.get(field,[]))
         bars['timeframe']=tf
-        del packed_parts,packed_by_date,seed_frames,yahoo_today_frame
-        used_yahoo=bool(is_live_anychart and not yahoo_today_frame.empty)
-        result={"bars":bars,"dates":[p["d"][0] for p in packed_parts],"daily":False,"metrics":daily_metrics,"after_hours":include_after_hours,
-                "source":"yahoo_finance" if used_yahoo else "polygon","live_source_error":yahoo_today_error}
+        dates_out = [p["d"][0] for p in packed_parts]
+        used_yahoo = bool(is_live_anychart and not yahoo_today_frame.empty)
+        result = {"bars": bars, "dates": dates_out, "daily": False, "metrics": daily_metrics, "after_hours": include_after_hours,
+                  "source": "yahoo_finance" if used_yahoo else "polygon", "live_source_error": yahoo_today_error}
         cput(context_key,result)
         return jsonify(result)
     except Exception as exc: return jsonify({"error":f"{type(exc).__name__}: {exc}"}),502
