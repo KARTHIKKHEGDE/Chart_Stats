@@ -398,6 +398,7 @@ body.anychart-page #tabs_view,body.anychart-page #tab_bar,body.anychart-page #mu
         </div>
         <label style="display:inline-flex;align-items:center;gap:7px;white-space:nowrap;background:#060a0f;border:1px solid #1f2e3d;border-radius:4px;padding:6px 9px;font-size:12px;color:#cbd6df;cursor:pointer"><input id="scanner_voice_enabled" type="checkbox" style="appearance:auto;-webkit-appearance:checkbox;width:14px;min-width:14px;height:14px;min-height:14px;margin:0;padding:0;flex:none;accent-color:#00e676"> Read ticker names</label>
         <label style="display:inline-flex;align-items:center;gap:7px;white-space:nowrap;background:#060a0f;border:1px solid #1f2e3d;border-radius:4px;padding:6px 9px;font-size:12px;color:#cbd6df;cursor:pointer" title="Speak the latest headline after each ticker announcement"><input id="scanner_news_read" type="checkbox" style="appearance:auto;-webkit-appearance:checkbox;width:14px;min-width:14px;height:14px;min-height:14px;margin:0;padding:0;flex:none;accent-color:#00e676"> Read latest news</label>
+        <label style="display:inline-flex;align-items:center;gap:7px;white-space:nowrap;background:#060a0f;border:1px solid #1f2e3d;border-radius:4px;padding:6px 9px;font-size:12px;color:#cbd6df;cursor:pointer" title="When off, announce each new ticker when it arrives and once more after five minutes, then stop. When on, repeat every five minutes."><input id="scanner_repeat_5min" type="checkbox" style="appearance:auto;-webkit-appearance:checkbox;width:14px;min-width:14px;height:14px;min-height:14px;margin:0;padding:0;flex:none;accent-color:#00e676"> Auto-repeat every 5 min</label>
         <button id="scanner_refresh_btn" style="height:32px;font-size:12px;padding:0 12px;background:#042114;border:1px solid #00e676;color:#00e676;cursor:pointer;font-weight:bold;border-radius:4px;display:flex;align-items:center;gap:5px">↻ Refresh Now</button>
         <button id="scanner_close_btn" style="height:32px;font-size:12px;padding:0 12px;background:#141a21;border:1px solid #334455;color:#aaa;cursor:pointer;border-radius:4px" onclick="closeScanner()">✕ Close</button>
       </div>
@@ -3895,7 +3896,7 @@ let scannerAlertSession = '';
 let scannerSeenApproaches = new Set();
 let scannerAnnouncementSession = '';
 let scannerTickerAnnouncements = {};
-const scannerSettingsDefaults = {version:6,voice_enabled:true,approach_pct:2,vwap_enabled:true,news_enabled:false};
+const scannerSettingsDefaults = {version:7,voice_enabled:true,approach_pct:2,vwap_enabled:true,news_enabled:false,repeat_5min:false};
 let scannerSettings = {...scannerSettingsDefaults};
 let scannerSettingsUser = '';
 let scannerSettingsLoadPromise = null;
@@ -3921,10 +3922,11 @@ function migrateScannerSettings(settings){
   const migrated = {...scannerSettingsDefaults, ...source};
   if(Number(source.version || 0) < 6) migrated.voice_enabled = true;
   if(Number(source.version || 0) < 5) migrated.news_enabled = false;
+  if(Number(source.version || 0) < 7) migrated.repeat_5min = false;
   delete migrated.bone_2m_enabled;
   delete migrated.bone_5m_enabled;
   delete migrated.voice_volume;
-  migrated.version = 6;
+  migrated.version = 7;
   return migrated;
 }
 
@@ -3933,13 +3935,15 @@ function applyScannerSettings(settings){
   scannerAlarmEnabled = !!scannerSettings.voice_enabled;
   if($('#scanner_voice_enabled')) $('#scanner_voice_enabled').checked = scannerAlarmEnabled;
   if($('#scanner_news_read')) $('#scanner_news_read').checked = !!scannerSettings.news_enabled;
+  if($('#scanner_repeat_5min')) $('#scanner_repeat_5min').checked = !!scannerSettings.repeat_5min;
 }
 
 function readScannerSettingsControls(){
   return {
-    version: 6,
+    version: 7,
     voice_enabled: $('#scanner_voice_enabled') ? $('#scanner_voice_enabled').checked : scannerAlarmEnabled,
     news_enabled: $('#scanner_news_read') ? $('#scanner_news_read').checked : !!scannerSettings.news_enabled,
+    repeat_5min: $('#scanner_repeat_5min') ? $('#scanner_repeat_5min').checked : !!scannerSettings.repeat_5min,
     approach_pct: scannerSettings.approach_pct || 2,
     vwap_enabled: scannerSettings.vwap_enabled !== false
   };
@@ -4126,17 +4130,19 @@ function checkScannerTickerAnnouncements(tickers, sessionDate){
     const ticker = String(row.ticker || '').toUpperCase();
     if(!ticker) continue;
     const isFirstTime = !window._scannerFirstSeen.has(ticker);
-    const last = Number(scannerTickerAnnouncements[ticker] || 0);
+    const savedAnnouncement=scannerTickerAnnouncements[ticker];
+    const last=Number(typeof savedAnnouncement==='object'?(savedAnnouncement?.last||0):savedAnnouncement||0);
+    const announcedCount=Number(typeof savedAnnouncement==='object'?(savedAnnouncement?.count||1):savedAnnouncement?1:0);
     const sinceLastSpoken = last ? now - last : Infinity;
-    // Always announce on first appearance (with news headline)
-    // Re-announce every 5 min for name only (news only if news_enabled)
-    if(!isFirstTime && sinceLastSpoken < 5 * 60 * 1000) continue;
+    // Every ticker is announced on arrival and once again after five minutes.
+    // The optional setting keeps repeating on each subsequent five-minute scan.
+    if(!isFirstTime && (sinceLastSpoken < 5 * 60 * 1000 || (!scannerSettings.repeat_5min && announcedCount >= 2))) continue;
     const headline = String(row.latest_news || '').trim();
     // First appearance: always read the news headline if available
     // Repeat every 5 min: only read news if news_enabled checkbox is on
     const readNews = headline && (isFirstTime || scannerSettings.news_enabled);
     announceScannerTicker(ticker, readNews ? 'Latest news. ' + headline : '');
-    scannerTickerAnnouncements[ticker] = now;
+    scannerTickerAnnouncements[ticker] = {last:now,count:announcedCount+1};
     if(isFirstTime){
       window._scannerFirstSeen.add(ticker);
       firstSeenChanged = true;
@@ -4400,6 +4406,7 @@ if($('#scanner_voice_enabled')) $('#scanner_voice_enabled').onchange = e=>{
   }
 };
 if($('#scanner_news_read')) $('#scanner_news_read').onchange = saveScannerSettings;
+if($('#scanner_repeat_5min')) $('#scanner_repeat_5min').onchange = saveScannerSettings;
 loadScannerVoices();
 if('speechSynthesis' in window) window.speechSynthesis.onvoiceschanged = loadScannerVoices;
 window.addEventListener('pointerdown', ()=>{
