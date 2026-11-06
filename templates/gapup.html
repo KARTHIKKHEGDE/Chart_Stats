@@ -398,7 +398,7 @@ body.anychart-page #tabs_view,body.anychart-page #tab_bar,body.anychart-page #mu
         </div>
         <label style="display:inline-flex;align-items:center;gap:7px;white-space:nowrap;background:#060a0f;border:1px solid #1f2e3d;border-radius:4px;padding:6px 9px;font-size:12px;color:#cbd6df;cursor:pointer"><input id="scanner_voice_enabled" type="checkbox" style="appearance:auto;-webkit-appearance:checkbox;width:14px;min-width:14px;height:14px;min-height:14px;margin:0;padding:0;flex:none;accent-color:#00e676"> Read ticker names</label>
         <label style="display:inline-flex;align-items:center;gap:7px;white-space:nowrap;background:#060a0f;border:1px solid #1f2e3d;border-radius:4px;padding:6px 9px;font-size:12px;color:#cbd6df;cursor:pointer" title="Speak the latest headline after each ticker announcement"><input id="scanner_news_read" type="checkbox" style="appearance:auto;-webkit-appearance:checkbox;width:14px;min-width:14px;height:14px;min-height:14px;margin:0;padding:0;flex:none;accent-color:#00e676"> Read latest news</label>
-        <label style="display:inline-flex;align-items:center;gap:7px;white-space:nowrap;background:#060a0f;border:1px solid #1f2e3d;border-radius:4px;padding:6px 9px;font-size:12px;color:#cbd6df;cursor:pointer" title="When off, announce each new ticker when it arrives and once more after five minutes, then stop. When on, repeat every five minutes."><input id="scanner_repeat_5min" type="checkbox" style="appearance:auto;-webkit-appearance:checkbox;width:14px;min-width:14px;height:14px;min-height:14px;margin:0;padding:0;flex:none;accent-color:#00e676"> Auto-repeat every 5 min</label>
+        <label style="display:inline-flex;align-items:center;gap:7px;white-space:nowrap;background:#060a0f;border:1px solid #1f2e3d;border-radius:4px;padding:6px 9px;font-size:12px;color:#cbd6df;cursor:pointer" title="Repeat the names of qualifying tickers every five minutes while they remain on the scanner."><input id="scanner_repeat_5min" type="checkbox" checked style="appearance:auto;-webkit-appearance:checkbox;width:14px;min-width:14px;height:14px;min-height:14px;margin:0;padding:0;flex:none;accent-color:#00e676"> Repeat ticker names every 5 min</label>
         <button id="scanner_refresh_btn" style="height:32px;font-size:12px;padding:0 12px;background:#042114;border:1px solid #00e676;color:#00e676;cursor:pointer;font-weight:bold;border-radius:4px;display:flex;align-items:center;gap:5px">↻ Refresh Now</button>
         <button id="scanner_close_btn" style="height:32px;font-size:12px;padding:0 12px;background:#141a21;border:1px solid #334455;color:#aaa;cursor:pointer;border-radius:4px" onclick="closeScanner()">✕ Close</button>
       </div>
@@ -3896,7 +3896,7 @@ let scannerAlertSession = '';
 let scannerSeenApproaches = new Set();
 let scannerAnnouncementSession = '';
 let scannerTickerAnnouncements = {};
-const scannerSettingsDefaults = {version:7,voice_enabled:true,approach_pct:2,vwap_enabled:true,news_enabled:false,repeat_5min:false};
+const scannerSettingsDefaults = {version:8,voice_enabled:true,approach_pct:2,vwap_enabled:true,news_enabled:false,repeat_5min:true};
 let scannerSettings = {...scannerSettingsDefaults};
 let scannerSettingsUser = '';
 let scannerSettingsLoadPromise = null;
@@ -3922,11 +3922,11 @@ function migrateScannerSettings(settings){
   const migrated = {...scannerSettingsDefaults, ...source};
   if(Number(source.version || 0) < 6) migrated.voice_enabled = true;
   if(Number(source.version || 0) < 5) migrated.news_enabled = false;
-  if(Number(source.version || 0) < 7) migrated.repeat_5min = false;
+  if(Number(source.version || 0) < 8) migrated.repeat_5min = true;
   delete migrated.bone_2m_enabled;
   delete migrated.bone_5m_enabled;
   delete migrated.voice_volume;
-  migrated.version = 7;
+  migrated.version = 8;
   return migrated;
 }
 
@@ -3940,7 +3940,7 @@ function applyScannerSettings(settings){
 
 function readScannerSettingsControls(){
   return {
-    version: 7,
+    version: 8,
     voice_enabled: $('#scanner_voice_enabled') ? $('#scanner_voice_enabled').checked : scannerAlarmEnabled,
     news_enabled: $('#scanner_news_read') ? $('#scanner_news_read').checked : !!scannerSettings.news_enabled,
     repeat_5min: $('#scanner_repeat_5min') ? $('#scanner_repeat_5min').checked : !!scannerSettings.repeat_5min,
@@ -4281,7 +4281,7 @@ async function refreshScanner(force=false){
     // Update badge counters
     const greenCount = data.green_count || tickers.filter(t=>t.status==='green').length;
     const yellowCount = data.yellow_count || tickers.filter(t=>t.status==='yellow').length;
-    if($('#scanner_green_badge')) $('#scanner_green_badge').textContent = greenCount;
+    if($('#scanner_green_badge')) $('#scanner_green_badge').textContent = tickers.length;
     const countBadge = $('#scanner_count_badge');
     if(countBadge){
       countBadge.textContent = tickers.length;

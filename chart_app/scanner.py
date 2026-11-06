@@ -139,7 +139,7 @@ def _get_scanner_candidate_symbols(refresh_universe=False):
     seen = set()
 
     def add_symbol(symbol):
-        if not symbol or symbol.endswith((".WS", ".WT", ".RT", ".U")):
+        if not symbol:
             return
         symbol = symbol.replace(".", "-").upper()
         if symbol not in seen:
@@ -194,18 +194,21 @@ def _get_scanner_candidate_symbols(refresh_universe=False):
     except Exception as exc:
         _scanner_log(f"Yahoo volume screen notice: {exc}")
 
-    _scanner_log(f"Universe loaded: {len(universe)} bundled symbols; {len(candidates)} unique scan candidates")
+    _scanner_log(
+        f"Universe loaded: {len(universe)} bundled symbols and {len(yahoo_universe)} Yahoo symbols; "
+        f"{len(candidates)} unique scan candidates"
+    )
 
     return candidates
 
 
 def _scrape_yahoo_premarket_chart(ticker):
     """Scrape 1m premarket data using Yahoo's chart endpoint:
-    https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=2d&interval=1m&includePrePost=true
-    Compares against yesterday's true regular session closing candle.
+    https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=5d&interval=1m&includePrePost=true
+    Compares against the most recent completed regular-session closing candle.
     """
     clean_sym = ticker.replace(".", "-")
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{clean_sym}?range=2d&interval=1m&includePrePost=true"
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{clean_sym}?range=5d&interval=1m&includePrePost=true"
     try:
         resp = None
         for attempt in range(3):
@@ -361,11 +364,10 @@ def _scrape_yahoo_premarket_chart(ticker):
         pm_spike_pct = ((pm_high - prev_close) / prev_close) * 100.0 if prev_close > 0 else 0.0
         current_pct = ((cur_price - prev_close) / prev_close) * 100.0 if prev_close > 0 else 0.0
 
-        # Scanner qualification:
-        # Green: current change >30% (or spiked and currently >=50%)
-        # Yellow: spiked >=50% in premarket, now faded below 50%
-        # Volume: dollar volume >$500k, share price strictly between $0.30 and $15.0
-        meets_criteria = (current_pct > 30.0 or pm_spike_pct >= 50.0) and eff_dvol > 500_000 and 0.30 <= cur_price <= 15.0
+        # Every result must meet the displayed current-gain, dollar-volume,
+        # and price criteria. Yellow only distinguishes a qualifying ticker
+        # that spiked >=50% in premarket and then faded below 50%.
+        meets_criteria = current_pct > 30.0 and eff_dvol > 500_000 and 0.30 < cur_price < 15.0
         if meets_criteria:
             if current_pct >= 50.0 or (current_pct > 30.0 and pm_spike_pct < 50.0):
                 status = "green"
