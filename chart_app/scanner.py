@@ -41,6 +41,9 @@ _scanner_cache_lock = threading.Lock()
 _scanner_scan_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scanner-master")
 _scanner_tracked_symbols = set()
 _SCANNER_RESCAN_SECONDS = 300
+_scanner_universe_lock = threading.Lock()
+_scanner_yahoo_universe = []
+_scanner_yahoo_universe_at = 0.0
 
 # Persistent requests session for parallel scraping
 _http_session = requests.Session()
@@ -90,8 +93,48 @@ def _load_tc2000_universe():
     return symbols
 
 
-def _get_scanner_candidate_symbols():
-    """Scan the bundled full US ticker universe, prioritizing fresh movers."""
+def _load_yahoo_us_universe(force=False):
+    """Load all Yahoo US equity screener pages, caching them between refreshes."""
+    global _scanner_yahoo_universe, _scanner_yahoo_universe_at
+    with _scanner_universe_lock:
+        if _scanner_yahoo_universe and not force and time.time() - _scanner_yahoo_universe_at < 24 * 60 * 60:
+            return list(_scanner_yahoo_universe)
+
+        symbols = []
+        seen = set()
+        offset = 0
+        page_size = 250
+        query = yf.EquityQuery("eq", ["region", "us"])
+        while offset < 20000:
+            try:
+                with YAHOO_REQUEST_SEMAPHORE:
+                    page = yf.screen(query, offset=offset, count=page_size)
+            except Exception as exc:
+                _scanner_log(f"Yahoo US universe page {offset} failed: {exc}")
+                break
+            quotes = (page or {}).get("quotes") or []
+            if not quotes:
+                break
+            page_symbols = []
+            for quote in quotes:
+                symbol = (quote.get("symbol") or "").upper()
+                if symbol and symbol not in seen:
+                    seen.add(symbol)
+                    symbols.append(symbol)
+                    page_symbols.append(symbol)
+            offset += len(quotes)
+            total = (page or {}).get("total")
+            if len(quotes) < page_size or not page_symbols or (isinstance(total, int) and offset >= total):
+                break
+
+        if symbols:
+            _scanner_yahoo_universe = symbols
+            _scanner_yahoo_universe_at = time.time()
+        return list(_scanner_yahoo_universe)
+
+
+def _get_scanner_candidate_symbols(refresh_universe=False):
+    """Scan Yahoo's paged US equity universe plus bundled symbols, prioritizing movers."""
     candidates = []
     seen = set()
 
@@ -126,10 +169,16 @@ def _get_scanner_candidate_symbols():
     for symbol in tracked:
         add_symbol(symbol)
 
-    # The Yahoo screens above only return a small capped subset. Append every
-    # bundled US symbol so the scanner actually covers the full universe.
+    # Keep the bundled symbols early in the scan order so thinly traded names
+    # such as DBGI don't wait behind the much larger paged universe.
     universe = _load_tc2000_universe()
     for symbol in universe:
+        add_symbol(symbol)
+
+    # Yahoo caps each response at 250; page through its complete US equity
+    # screener and merge it with the bundled symbols and current movers.
+    yahoo_universe = _load_yahoo_us_universe(force=refresh_universe)
+    for symbol in yahoo_universe:
         add_symbol(symbol)
 
     # 3. Add high share-volume names outside the bundled universe last.
@@ -191,13 +240,11 @@ def _scrape_yahoo_premarket_chart(ticker):
             r_start = p_end
         now_ts = time.time()
 
-        # Determine true yesterday close price:
-        # In Yahoo's chart API, chartPreviousClose and previousClose are always
-        # the official previous session closing price. regularMarketPrice reflects
-        # the current/latest trading price (even in premarket), so it must NEVER
-        # be used as prev_close!
+        # Always derive the reference close from the most recent completed
+        # regular session in the chart bars. Yahoo's chartPreviousClose metadata
+        # can lag a session around the overnight refresh, so don't use it here.
         is_premarket_now = (now_ts < r_start) if r_start else True
-        prev_close = float(meta.get("chartPreviousClose") or meta.get("previousClose") or meta.get("regularMarketPreviousClose") or 0.0)
+        prev_close = 0.0
 
         timestamps = chart.get("timestamp") or []
         quote = ((chart.get("indicators") or {}).get("quote") or [{}])[0]
@@ -205,15 +252,44 @@ def _scrape_yahoo_premarket_chart(ticker):
         closes = quote.get("close") or []
         volumes = quote.get("volume") or []
 
-        # If still missing or zero, extract the last regular session bar before today's premarket
-        if not prev_close or prev_close <= 0:
-            reg_periods = (meta.get("tradingPeriods") or {}).get("regular") or []
-            y_sessions = [p[0] for p in reg_periods if p and p[0].get("start", 0) < p_start]
-            if y_sessions:
-                last_y_sess = y_sessions[-1]
-                y_bars = [c for t, c in zip(timestamps, closes) if last_y_sess.get("start", 0) <= t <= last_y_sess.get("end", 0) and c is not None]
-                if y_bars:
-                    prev_close = float(y_bars[-1])
+        # Yahoo groups regular periods by day (sometimes as nested lists).
+        # Choose the latest completed regular period before today's premarket,
+        # then take its final valid close candle.
+        reg_periods = (meta.get("tradingPeriods") or {}).get("regular") or []
+        sessions = []
+        for period in reg_periods:
+            entries = period if isinstance(period, list) else [period]
+            for session in entries:
+                if isinstance(session, dict) and session.get("start", 0) < p_start:
+                    sessions.append(session)
+        if sessions:
+            last_session = max(sessions, key=lambda session: session.get("start", 0))
+            session_bars = [(ts, closes[i]) for i, ts in enumerate(timestamps)
+                            if ts is not None and i < len(closes) and closes[i] is not None
+                            and last_session.get("start", 0) <= ts <= last_session.get("end", 0)]
+            if session_bars:
+                prev_close = float(max(session_bars, key=lambda bar: bar[0])[1])
+
+        # Some OTC symbols have no tradingPeriods metadata. Recover the prior
+        # regular close from timestamps before using Yahoo's summary fields.
+        if prev_close <= 0:
+            regular_bars = []
+            for index, ts in enumerate(timestamps):
+                if ts is None or ts >= p_start or index >= len(closes) or closes[index] is None:
+                    continue
+                bar_time = dt.datetime.fromtimestamp(ts, ET)
+                if dt.time(9, 30) <= bar_time.time() < dt.time(16, 0):
+                    regular_bars.append((bar_time.date(), ts, closes[index]))
+            if regular_bars:
+                last_regular_day = max(bar[0] for bar in regular_bars)
+                prev_close = float(max((bar for bar in regular_bars if bar[0] == last_regular_day),
+                                       key=lambda bar: bar[1])[2])
+
+        # Use Yahoo's metadata close only when this symbol has no usable
+        # regular-session bars (for example, some OTC quote feeds).
+        if prev_close <= 0:
+            prev_close = float(meta.get("chartPreviousClose") or meta.get("previousClose") or
+                               meta.get("regularMarketPreviousClose") or 0.0)
 
         if not prev_close or prev_close <= 0:
             return None
@@ -245,9 +321,25 @@ def _scrape_yahoo_premarket_chart(ticker):
             if ts >= p_start and c is not None and c > 0:
                 today_closes.append(c)
 
-        # Current price: most recent bar today, or fulldayPrice / regularMarketPrice
+        pm_quote_time = meta.get("preMarketTime") or 0
+        pm_quote_price = meta.get("preMarketPrice") or 0
+        pm_quote_volume = meta.get("preMarketVolume") or 0
+        has_current_pm_quote = (p_start <= pm_quote_time < p_end and pm_quote_price > 0)
+        if is_premarket_now and has_current_pm_quote:
+            # Some OTC feeds publish a timestamped PM quote but no 1-minute bars.
+            if pm_high <= 0:
+                pm_high = float(pm_quote_price)
+                pm_high_time = int(pm_quote_time)
+            if pm_vol <= 0 and pm_quote_volume > 0:
+                pm_vol = int(pm_quote_volume)
+                pm_dvol = float(pm_quote_price) * pm_vol
+
+        # Current price: today's bars, then a time-matched PM quote, then Yahoo's
+        # regular-session fields.
         if today_closes:
             cur_price = today_closes[-1]
+        elif is_premarket_now and has_current_pm_quote:
+            cur_price = float(pm_quote_price)
         elif meta.get("fulldayPrice"):
             cur_price = float(meta["fulldayPrice"])
         elif meta.get("regularMarketPrice"):
@@ -255,14 +347,12 @@ def _scrape_yahoo_premarket_chart(ticker):
         else:
             cur_price = float(pm_high or prev_close)
 
-        # If in premarket and no discrete premarket high bar was formed, use current price / day high
-        if is_premarket_now and pm_high <= 0:
-            pm_high = max(cur_price, float(meta.get("regularMarketDayHigh") or 0.0))
-
-        # If Yahoo 1m feed did not stream individual 1m volume ticks during premarket,
-        # fallback to the cumulative market volume recorded in meta
-        eff_vol = max(pm_vol, meta.get("regularMarketVolume") or 0)
-        eff_dvol = max(pm_dvol, eff_vol * cur_price)
+        # Only use actual bars in today's premarket window. Yahoo's
+        # regularMarketDayHigh/regularMarketVolume describe the regular session
+        # and can be yesterday's values before the open; treating them as PM
+        # data creates false spikes and volume-qualified rows.
+        eff_vol = pm_vol
+        eff_dvol = pm_dvol
 
         if pm_high <= 0:
             return None
@@ -313,7 +403,7 @@ def _scrape_yahoo_premarket_chart(ticker):
     return None
 
 
-def _run_scanner_cycle():
+def _run_scanner_cycle(refresh_universe=False):
     """Execute a single parallel premarket scan cycle."""
     session_date = _scanner_session_date()
     t0 = time.time()
@@ -321,7 +411,7 @@ def _run_scanner_cycle():
         _scanner_cache["scanning"] = True
 
     try:
-        candidates = _get_scanner_candidate_symbols()
+        candidates = _get_scanner_candidate_symbols(refresh_universe=refresh_universe)
         with _scanner_cache_lock:
             _scanner_cache["candidates_count"] = len(candidates)
 
@@ -395,13 +485,20 @@ def _run_scanner_cycle():
 
 
 def _scanner_background_loop():
-    """Background daemon loop that re-scans every 60 seconds."""
+    """Re-scan regularly and align one daily refresh to 06:00 Asia/Kolkata."""
     time.sleep(2)
     _run_scanner_cycle()
     while True:
         try:
-            time.sleep(_SCANNER_RESCAN_SECONDS)
-            _run_scanner_cycle()
+            now = dt.datetime.now(IST)
+            next_refresh = now.replace(hour=6, minute=0, second=0, microsecond=0)
+            if next_refresh <= now:
+                next_refresh += dt.timedelta(days=1)
+            # Keep the normal scan cadence, but shorten the wait when needed so
+            # one cycle starts at the daily 06:00 IST close refresh boundary.
+            seconds_to_refresh = (next_refresh - now).total_seconds()
+            time.sleep(min(_SCANNER_RESCAN_SECONDS, max(1, seconds_to_refresh)))
+            _run_scanner_cycle(refresh_universe=seconds_to_refresh <= _SCANNER_RESCAN_SECONDS)
         except Exception as exc:
             _scanner_log(f"Background worker loop error: {exc}")
             time.sleep(5)

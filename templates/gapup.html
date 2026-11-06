@@ -2447,7 +2447,7 @@ function drawEvAll(evList, containerEl){
     const dateList=tabForCharts?tabForCharts.sessionDates:[];
     card._sessionPos=dateList.indexOf(card._sessionDate);
     const title=card.querySelector(`#evtitle${i}`), tf=card.querySelector('.evtf');
-    if(title) title.innerHTML=esc(formatChartTitleDates(item.title))+(item.sim?'':'<span class="d"> (not in similar set)</span>');
+    if(title) title.innerHTML=esc(formatChartTitleDates(item.title))+(item.sim?'':'<span class="d" title="Similar setups require a premarket spike of at least 50% with at least $500K premarket dollar volume, or at least $50M total session dollar volume."> (not in similar set)</span>');
     const eventDateTag=card.querySelector('[data-event-date]');if(eventDateTag){eventDateTag.textContent=`Event ${formatDateMDY(card._eventDate)||'date'}`;}
     if(tf){tf.value=card._chartTf;tf.onclick=e=>e.stopPropagation();tf.onchange=e=>{e.stopPropagation();const previousTf=card._chartTf;card._chartTf=tf.value;card._panOffset=0;card._yZoom=1;card._contextEdgeDone={};if(tf.value==='1d')card._chartDays=200;else if(previousTf==='1d')card._chartDays=5;card._zoom=1;card._contextChart=null;loadChartContext(card,tabForCharts);};}
     card.querySelectorAll('.evzoom').forEach(btn=>btn.onclick=e=>{e.stopPropagation();zoomGapUpChartCard(card,tabForCharts,btn.dataset.zoom==='in'?1:-1);});
@@ -2616,8 +2616,8 @@ window.renderModalChart = function(){
   $('#cm_title').textContent = formatChartTitleDates(item.title);
   const eventDate=card?._eventDate||item.date;$('#cm_event_date').textContent=eventDate?`Event ${formatDateMDY(eventDate)}`:'';
   $('#cm_badge').innerHTML = item.sim 
-    ? '<span style="color:#3ddc84;background:#141414;border:1px solid #333;padding:2px 8px;border-radius:2px;font-size:11px">SIMILAR SETUP</span>' 
-    : '<span style="color:#777;font-size:11px">(not in similar set)</span>';
+    ? '<span title="Premarket spike ≥50% with ≥$500K premarket dollar volume, or total session dollar volume ≥$50M." style="color:#3ddc84;background:#141414;border:1px solid #333;padding:2px 8px;border-radius:2px;font-size:11px">SIMILAR SETUP</span>'
+    : '<span title="Similar setups require a premarket spike of at least 50% with at least $500K premarket dollar volume, or at least $50M total session dollar volume." style="color:#777;font-size:11px">(not in similar set)</span>';
   const sessionCount=(tab.sessionDates||[]).length, sessionPos=card?card._sessionPos:-1;
   const cv = $('#cm_canvas');
   cv._hoverTimeReadout=$('#cm_hover_time');

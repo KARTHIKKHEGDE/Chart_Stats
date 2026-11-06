@@ -23,6 +23,9 @@ MAX_EVENTS = app.MAX_EVENTS
 MIN_DAY_VOL = app.MIN_DAY_VOL
 MIN_PM_VOL = app.MIN_PM_VOL
 PM_GRADE_MIN_SPIKE = 0.20
+SIM_PM_MIN_SPIKE = 0.50
+SIM_PM_MIN_DOLLAR_VOLUME = 500_000
+SIM_MIN_DAY_DOLLAR_VOLUME = 50_000_000
 MIN_PRICE = app.MIN_PRICE
 STOP_PCT = app.STOP_PCT
 dt = app.dt
@@ -44,12 +47,18 @@ def analyze_event(t, i, daily, ctx):
     if df is None or df.empty:
         return None
     m = metrics(df, pc, True)
-    if not m["rg"] or m["open"] <= 0 or m["pm_vol"] < MIN_PM_VOL:
+    if not m["rg"] or m["open"] <= 0:
         return None
     pm_high_pct = (m["pm_high"] / pc - 1) if m.get("pm_high") and pc > 0 else None
     is_gap_up = (m["open"] / pc - 1) >= GAP_MIN
     is_pm_spike = pm_high_pct is not None and pm_high_pct >= PM_GRADE_MIN_SPIKE and m["pm_vol"] > 0
-    if not is_gap_up and not is_pm_spike:
+    day_dv = float(m.get("pm_dv") or 0) + float(m.get("rg_dv") or 0)
+    is_high_dollar_volume = day_dv >= SIM_MIN_DAY_DOLLAR_VOLUME
+    is_similar_pm_spike = (pm_high_pct is not None and pm_high_pct >= SIM_PM_MIN_SPIKE and
+                           float(m.get("pm_dv") or 0) >= SIM_PM_MIN_DOLLAR_VOLUME)
+    if m["pm_vol"] < MIN_PM_VOL and not is_high_dollar_volume and not is_similar_pm_spike:
+        return None
+    if not is_gap_up and not is_pm_spike and not is_high_dollar_volume:
         return None
     fl, stale = float_at(row["date"], ctx)
     cf = ctx_feats(daily, i)
@@ -69,7 +78,8 @@ def analyze_event(t, i, daily, ctx):
         "f5_ret": m["f5_ret"], "f5_red": m["f5_red"], "f5_l2c": m["f5_l2c"], "f5_rng": m["f5_rng"],
         "orl_broke": m["orl_broke"],
         "below_pm": (o < m["pm_high"]) if m["pm_high"] else None,
-        "pm_vol": m["pm_vol"], "pm_dv": m["pm_dv"], "rg_dv": m.get("rg_dv"), "pm_fade": (o / m["pm_high"] - 1) if m["pm_high"] else None,
+        "pm_vol": m["pm_vol"], "pm_dv": m["pm_dv"], "rg_dv": m.get("rg_dv"), "day_dv": day_dv,
+        "pm_fade": (o / m["pm_high"] - 1) if m["pm_high"] else None,
         "pm_range": m["pm_range"], "pm_spikes": m["pm_spikes"], "pm_dv_hi": m["pm_dv_hi"],
         "pm_vb": m["pm_vb"], "pm_vr": m["pm_vr"], "pm_vr_all": m["pm_vr_all"],
         "pmb_to_open": (o / m["pm_vb_price"] - 1) if m["pm_vb_price"] else None,
@@ -155,7 +165,10 @@ def detect_events(daily, splits, session_day):
         pc = daily[i - 1]["c"]
         is_gap_up = pc > 0 and r["o"] / pc - 1 >= GAP_MIN and r["o"] >= MIN_PRICE
         possible_pm_spike = pc > 0 and r.get("h", 0) / pc - 1 >= PM_GRADE_MIN_SPIKE and r.get("h", 0) >= MIN_PRICE
-        if pc > 0 and (is_gap_up or possible_pm_spike) and r["v"] >= MIN_DAY_VOL:
+        estimated_day_dv = float(r.get("v") or 0) * float(r.get("c") or 0)
+        possible_high_dollar_volume = estimated_day_dv >= SIM_MIN_DAY_DOLLAR_VOLUME
+        enough_volume = r["v"] >= MIN_DAY_VOL or possible_high_dollar_volume or possible_pm_spike
+        if pc > 0 and (is_gap_up or possible_pm_spike or possible_high_dollar_volume) and enough_volume:
             out.append(i)
     return out[-MAX_EVENTS:]
 
@@ -574,9 +587,10 @@ def build_report(t, live, lm, events, S, notes, daily, hod_times=None):
             pass
         evch.append({"title": f"TODAY {day_str}  gap {pct(gap_live, 0)}  (live · {chart_source})", "date": day_str, "sim": True,
                      "chart": chart_pack(today_chart_df, {**lm, "_refs": None}, pc, day_obj, fl_now)})
-    for i, e in enumerate(events, 1):
+    similar_events = [e for e in events if id(e) in simset]
+    for i, e in enumerate(similar_events, 1):
         evch.append({"title": f"#{i}  {fdate(e['date'])}  gap {pct(e['gap'], 0)}  O→C {pct(e['o2c'], 0)}", "date": e["date"],
-                     "sim": id(e) in simset})
+                     "sim": True})
 
     # ---- extras: stats / patterns
     summary = summary_text(st)

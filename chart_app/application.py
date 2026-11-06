@@ -11,7 +11,7 @@ Setup
 Optional env
     POLYGON_RPM=5        Per-key request-rate ceiling (50 keys = 250 requests/minute).
     SEC_USER_AGENT="Your Name your@email.com"   (real SEC contact identity; required for SEC data)
-    GAP_MIN=0.30  MAX_EVENTS=12  SIM_K=20  MIN_PRICE=0.5  MIN_DAY_VOL=100000  MIN_PM_VOL=0
+    GAP_MIN=0.30  MAX_EVENTS=12  MIN_PRICE=0.5  MIN_DAY_VOL=100000  MIN_PM_VOL=0
     STOP_PCT=0.20        stop distance (above entry) used for R-multiples + chart stop-outs
 
 Data
@@ -128,7 +128,6 @@ LOOKBACK_DAYS = 365
 HISTORY_DAYS = 740            # retain a full two years of daily candles plus split/calendar buffer
 MAX_EVENTS = int(os.getenv("MAX_EVENTS", "50" if LOCAL_MAX else "12"))
 print(f"[startup] warmup_workers={WARMUP_WORKERS} max_events={MAX_EVENTS}", flush=True)
-SIM_K = int(os.getenv("SIM_K", "20"))
 MIN_PRICE = float(os.getenv("MIN_PRICE", "0.5"))
 MIN_DAY_VOL = int(os.getenv("MIN_DAY_VOL", "100000"))
 MIN_PM_VOL = int(os.getenv("MIN_PM_VOL", "0"))
@@ -346,6 +345,9 @@ _WARMUP_PAUSED = threading.Event()
 
 from chart_app.gap_analysis import (
     C,
+    SIM_MIN_DAY_DOLLAR_VOLUME,
+    SIM_PM_MIN_DOLLAR_VOLUME,
+    SIM_PM_MIN_SPIKE,
     analyze_event,
     big,
     build_report,
@@ -595,7 +597,7 @@ def run_job(job, t, refresh):
         results={}
         pending_idxs=[]
         for i in idxs:
-            event_key=f"{t}_{daily[i]['date']}_gap_event_v2"
+            event_key=f"{t}_{daily[i]['date']}_gap_event_v4"
             event_fingerprint=_event_fingerprint(daily, i, ctx)
             cached_event=cget(event_key)
             if isinstance(cached_event,dict) and cached_event.get("fingerprint")==event_fingerprint and "event" in cached_event:
@@ -632,7 +634,7 @@ def run_job(job, t, refresh):
             except Exception:
                 app.logger.exception("Historical analysis failed for %s %s",t,daily[i]["date"])
                 return i,None
-            cput(f"{t}_{daily[i]['date']}_gap_event_v2",
+            cput(f"{t}_{daily[i]['date']}_gap_event_v4",
                  {"fingerprint":event_fingerprint,"event":event})
             return i,event
 
@@ -723,9 +725,16 @@ def run_job(job, t, refresh):
                 d += 0.3 * abs(math.log(e["float"] / lf["float"]))
             return d
 
-        # Premarket-only spike sessions inform the dedicated PM fade grade, but
-        # should not contaminate the regular-session gap-up analog set.
-        S = sorted((e for e in events if e.get("gap", 0) >= GAP_MIN), key=dist)[:SIM_K]
+        # Similar setups are strong premarket spikes with meaningful PM
+        # dollar volume, or sessions with at least $50M in total dollar volume.
+        def is_similar_setup(e):
+            pm_spike_match = (e.get("pm_high_pct") is not None and
+                              e["pm_high_pct"] >= SIM_PM_MIN_SPIKE and
+                              float(e.get("pm_dv") or 0) >= SIM_PM_MIN_DOLLAR_VOLUME)
+            high_dollar_volume_match = float(e.get("day_dv") or 0) >= SIM_MIN_DAY_DOLLAR_VOLUME
+            return pm_spike_match or high_dollar_volume_match
+
+        S = sorted((e for e in events if is_similar_setup(e)), key=dist)
         notes = []
         if lg < GAP_MIN:
             notes.append(f"Today's gap ({lg*100:+.0f}%) is below the {GAP_MIN*100:.0f}% threshold; showing history anyway.")
