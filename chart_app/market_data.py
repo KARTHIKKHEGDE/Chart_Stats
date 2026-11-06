@@ -865,6 +865,10 @@ def mdl(rg, start_ts, entry, entry_min, close, stop_price, exclude_entry_bar=Fal
     stop_m = int(hit.index[0].hour * 60 + hit.index[0].minute) if len(hit) else None
     risk = max(stop_price / entry - 1, 0.0)
     stop_hit = bool(len(hit))
+    # Measure squeeze only until the trade exits. Bars after a hit stop are
+    # irrelevant to the position and must not inflate its adverse excursion.
+    if stop_hit:
+        hi = float(seg.loc[:hit.index[0], "h"].max())
     return {"pnl": -risk if stop_hit else (entry - close) / entry,
             "mae": max(hi / entry - 1, 0.0), "stop_pct": risk,
             "stop_price": float(stop_price), "stop_hit": stop_hit,

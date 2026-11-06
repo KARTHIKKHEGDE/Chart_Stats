@@ -82,6 +82,9 @@ def main() -> int:
             updated = snapshot()
             if updated == current:
                 if server.poll() is not None:
+                    if server.returncode == 0:
+                        print("Server exited cleanly; stopping the watcher.", flush=True)
+                        return 0
                     print(f"Server exited with code {server.returncode}; restarting in 2 seconds.", flush=True)
                     time.sleep(2)
                     server = start_server(port)

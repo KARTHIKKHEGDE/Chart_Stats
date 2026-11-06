@@ -773,16 +773,16 @@ def run_job(job, t, refresh):
                             if reverse_splits else "No reverse splits found in Polygon's available split history.")
         recent_news = _news_res[0] or []
         report["news"] = recent_news
-        report["news_status"] = ("Latest press releases are still loading; refresh the report to update this section." if news_pending else
+        report["news_status"] = ("Latest news is still loading; refresh the report to update this section." if news_pending else
                                   _scanner_details.get(t, {}).get("news_status") or
-                                  ("Latest press releases found on Yahoo Finance" if recent_news else
-                                   "No press releases found on Yahoo Finance"))
+                                  ("Latest news found on Yahoo Finance" if recent_news else
+                                   "Yahoo Finance returned no recent news"))
         if recent_news:
-            report["text"] += "\n\nLatest Press Releases · Yahoo Finance"
+            report["text"] += "\n\nLatest News · Yahoo Finance"
             for item in recent_news:
                 report["text"] += f"\n- [{item['kind']}] {item['title']} ({item['publisher']}) {item['url']}"
         else:
-            report["text"] += f"\n\nLatest Press Releases · Yahoo Finance\n{report['news_status']}"
+            report["text"] += f"\n\nLatest News · Yahoo Finance\n{report['news_status']}"
         job["result"] = report
         job["status"] = "done"
         job.update(stage="complete",progress_pct=100,eta_seconds=0,msg="Report ready.",finished_at=time.time())

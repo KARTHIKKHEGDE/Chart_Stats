@@ -1,4 +1,6 @@
 """Scanner feature module with live parallel Yahoo Finance scraping."""
+from html import unescape
+import json
 from chart_app.application import (
     ET,
     IST,
@@ -8,6 +10,8 @@ from chart_app.application import (
     _get_app_ui_visibility,
     app,
     as_completed,
+    cget,
+    cput,
     dt,
     jsonify,
     np,
@@ -21,6 +25,9 @@ from chart_app.application import (
     yf,
 )
 from chart_app.yahoo_limiter import YAHOO_REQUEST_SEMAPHORE
+
+_FINVIZ_SCORE_SEMAPHORE=threading.BoundedSemaphore(3)
+_FINVIZ_DILUTION_URL="https://finviz.com/stock"
 
 _scanner_cache = {
     "at": 0.0,
@@ -432,38 +439,44 @@ def _normalize_yahoo_news(article, kind):
             "published": published or "", "kind": kind}
 
 
-def _fetch_yahoo_news(ticker, minimum_count=2):
+def _fetch_yahoo_news(ticker, minimum_count=2, status_out=None):
     items = []
+    errors=[]
     minimum_count = max(1, min(100, int(minimum_count or 2)))
-    press_wire_pattern = re.compile(
-        r"globe.?newswire|pr\s*newswire|business\s*wire|newsfile|access\s*newswire|"
-        r"the.?newswire|newsdirect|eqs.?news|cnw.?group", re.I
-    )
-    for query in (ticker, f"{ticker} press release"):
+    # Yahoo's ticker feed includes ordinary company coverage as well as wires.
+    # The prior publisher whitelist silently discarded Reuters, Yahoo, and other
+    # non-wire headlines, which made active tickers look like they had no news.
+    for query in (ticker, f"{ticker} news"):
         try:
             with YAHOO_REQUEST_SEMAPHORE:
-                search = yf.Search(query=query, news_count=20, enable_fuzzy_query=False, timeout=8)
+                search = yf.Search(query=query, news_count=max(20, minimum_count), enable_fuzzy_query=False, timeout=6)
             for article in (search.news or []):
-                content = article.get("content") if isinstance(article.get("content"), dict) else {}
-                provider = content.get("provider") or article.get("publisher") or ""
-                if isinstance(provider, dict):
-                    provider = provider.get("displayName") or provider.get("name") or ""
-                if not press_wire_pattern.search(str(provider)):
-                    continue
-                item = _normalize_yahoo_news(article, "Press release")
+                item = _normalize_yahoo_news(article, "News")
                 if item:
                     items.append(item)
-        except Exception:
-            pass
+        except Exception as exc:
+            errors.append(type(exc).__name__)
+            app.logger.info("Yahoo Finance news lookup failed for %s (%s)",ticker,type(exc).__name__)
         if len(items) >= minimum_count:
             break
 
     unique, seen = [], set()
     for item in items:
-        key = re.sub(r"\W+", " ", item["title"].lower()).strip() or item["url"]
+        key = item["url"].strip().lower() or re.sub(r"\W+", " ", item["title"].lower()).strip()
         if key not in seen:
             unique.append(item)
             seen.add(key)
+    def published_timestamp(item):
+        value=str(item.get("published") or "").strip()
+        try:
+            parsed=dt.datetime.fromisoformat(value.replace("Z","+00:00"))
+            if parsed.tzinfo is None:parsed=parsed.replace(tzinfo=dt.timezone.utc)
+            return parsed.timestamp()
+        except (TypeError,ValueError,OverflowError):
+            return 0
+    unique.sort(key=published_timestamp,reverse=True)
+    if status_out is not None:
+        status_out["error"] = errors[-1] if errors and not unique else None
     return unique[:minimum_count]
 
 
@@ -475,11 +488,14 @@ def _get_scanner_news(ticker, limit=2):
         cached_news = list(cached.get("news") or [])
         if now - cached.get("news_at", 0) < 60 and len(cached_news) >= limit:
             return cached_news[:limit]
-    fetched = _fetch_yahoo_news(ticker, minimum_count=limit)
+    fetch_status={}
+    fetched = _fetch_yahoo_news(ticker, minimum_count=limit, status_out=fetch_status)
     with _scanner_details_lock:
         cached = _scanner_details.setdefault(ticker, {})
         cached.update(news=fetched, news_at=now,
-                      news_status=("Latest press releases found on Yahoo Finance" if fetched else "No press releases found"))
+                      news_status=("Latest news found on Yahoo Finance" if fetched else
+                                   f"Yahoo Finance news temporarily unavailable ({fetch_status['error']})" if fetch_status.get('error') else
+                                   "Yahoo Finance returned no recent news"))
         if len(_scanner_details)>500:
             oldest=sorted(_scanner_details,key=lambda key:_scanner_details[key].get('news_at',0))[:len(_scanner_details)-400]
             for old_key in oldest:_scanner_details.pop(old_key,None)
@@ -514,7 +530,144 @@ def scanner_news_more_api():
         return jsonify({"error": "Session expired. Please sign in again."}), 401
     all_news = _get_scanner_news(ticker, limit=offset + 3)
     page = all_news[offset:offset + 2]
-    return jsonify({"ticker": ticker, "offset": offset, "news": page, "has_more": len(all_news) > offset + 2})
+    status=_scanner_details.get(ticker,{}).get("news_status") or "Latest news found on Yahoo Finance"
+    return jsonify({"ticker": ticker, "offset": offset, "news": page, "has_more": len(all_news) > offset + 2,"status":status})
+
+
+def _parse_finviz_dilution_score(page_html):
+    """Read only Finviz's overall badge; never substitute a driver score."""
+    raw=unescape(str(page_html or ""))
+    flat=re.sub(r"(?s)<[^>]+>"," ",raw)
+    flat=re.sub(r"\s+"," ",flat)
+    updated_match=re.search(r"\bUpdated\s+([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4})",flat)
+    updated=updated_match.group(1) if updated_match else None
+    # Finviz's page payload separates the composite badge from its driver scores.
+    # Read this exact path; a recursively discovered score may be Offering,
+    # Cash Need, Overhang, or History rather than the displayed total.
+    for attrs,body in re.findall(r"(?is)<script\b([^>]*)>(.*?)</script>",raw):
+        if not re.search(r"\bid\s*=\s*['\"]route-init-data['\"]",attrs,re.I):continue
+        try:route_data=json.loads(body.strip())
+        except (ValueError,TypeError):continue
+        if not isinstance(route_data,dict):continue
+        overall=(route_data.get("badges") or {}).get("overall") or {}
+        if not isinstance(overall,dict):continue
+        raw_score=overall.get("score")
+        if isinstance(raw_score,(int,float)) and not isinstance(raw_score,bool):score=int(raw_score)
+        elif isinstance(raw_score,str):
+            parsed=re.fullmatch(r"\s*(\d{1,3})(?:\s*/\s*100)?\s*",raw_score)
+            score=int(parsed.group(1)) if parsed else None
+        else:score=None
+        if score is not None and 0<=score<=100:
+            level=str(overall.get("label") or overall.get("band") or "").strip().title() or None
+            return score,level,updated
+    # Fallback only to the explicitly labeled overall headline, never a generic
+    # nested number from a card or driver.
+    match=re.search(r"\bDilution\s+Risk\s+(Minimal|Low|Moderate|Medium|High|Severe)\s+(\d{1,3})\s*/\s*100\b",flat,re.I)
+    if match:return int(match.group(2)),match.group(1).title(),updated
+    return None,None,None
+
+
+def _get_finviz_dilution_score(ticker):
+    # v4 invalidates scores from the old recursive parser, which could mistake
+    # a driver score for the overall badge.
+    cache_key=f"finviz_dilution_score_v4_{ticker}"
+    cached=cget(cache_key,30*60)
+    if isinstance(cached,dict):return cached
+    # Match the verified Finviz request exactly: /stock?t=...&ty=di&ta=1&p=d.
+    # Passing params also lets requests encode symbols consistently.
+    params={"t":ticker,"ty":"di","ta":"1","p":"d"}
+    url=f"{_FINVIZ_DILUTION_URL}?t={ticker}&ty=di&ta=1&p=d"
+    try:
+        response=None
+        for attempt in range(3):
+            with _FINVIZ_SCORE_SEMAPHORE:
+                response=_http_session.get(_FINVIZ_DILUTION_URL,params=params,
+                    headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+                             "Accept":"text/html,application/xhtml+xml","Referer":"https://finviz.com/"},timeout=(5,20))
+            if response.status_code not in {429,500,502,503,504} or attempt==2:
+                break
+            retry_after=response.headers.get("Retry-After")
+            try:delay=max(1.0,min(6.0,float(retry_after))) if retry_after else (1.5*(attempt+1))
+            except (TypeError,ValueError):delay=1.5*(attempt+1)
+            time.sleep(delay)
+        response.raise_for_status()
+        # Finviz embeds its page payload in <script id="route-init-data">.
+        # Reject mismatched payloads so a proxy/cache response can't score the wrong symbol.
+        route_data=None
+        for attrs,body in re.findall(r"(?is)<script\b([^>]*)>(.*?)</script>",response.text):
+            if re.search(r"\bid\s*=\s*['\"]route-init-data['\"]",attrs,re.I):
+                try:route_data=json.loads(body.strip())
+                except (ValueError,TypeError):route_data=None
+                break
+        returned_ticker=str((route_data or {}).get("ticker") or "").upper() if isinstance(route_data,dict) else ""
+        if returned_ticker and returned_ticker!=ticker:
+            app.logger.warning("Finviz returned route-init-data for %s when %s was requested",returned_ticker,ticker)
+            return {"ticker":ticker,"score":None,"level":None,"source_url":response.url,
+                    "error":f"Finviz returned data for {returned_ticker}, not {ticker}."}
+        score,level,updated=_parse_finviz_dilution_score(response.text)
+        if score is None:
+            has_route_data=bool(re.search(r"(?is)<script\b[^>]*route-init-data",response.text))
+            title_match=re.search(r"(?is)<title[^>]*>(.*?)</title>",response.text)
+            page_title=re.sub(r"\s+"," ",unescape(title_match.group(1))).strip() if title_match else "(no title)"
+            app.logger.warning("Finviz score unavailable for %s: parser found no score (HTTP %s, %d bytes, route data=%s, title=%r)",
+                               ticker,response.status_code,len(response.content),has_route_data,page_title)
+            return {"ticker":ticker,"score":None,"level":None,"source_url":url,
+                    "error":"Finviz page loaded, but its score could not be extracted."}
+        result={"ticker":ticker,"score":score,"level":level,
+                "as_of":None,"source_url":url,"source":"Finviz"}
+        if updated:
+            try:result["as_of"]=dt.datetime.strptime(updated.group(1),"%b %d, %Y").date().isoformat()
+            except ValueError:pass
+        cput(cache_key,result)
+        return result
+    except requests.RequestException as exc:
+        app.logger.warning("Finviz dilution score fetch failed for %s via %s (%s): %s",ticker,url,type(exc).__name__,exc)
+        if isinstance(exc,requests.HTTPError) and exc.response is not None:
+            message=f"Finviz request rejected (HTTP {exc.response.status_code})."
+        elif isinstance(exc,requests.Timeout):message="Finviz request timed out."
+        else:message="Finviz DNS/network connection failed."
+        return {"ticker":ticker,"score":None,"level":None,"source_url":url,
+                "error":message}
+
+
+@app.route("/api/finviz-dilution-score")
+def finviz_dilution_score_api():
+    """Return Finviz's displayed dilution risk score for one ticker."""
+    username=(request.args.get("user") or "").strip().lower()
+    token=(request.args.get("token") or "").strip()
+    ticker=(request.args.get("ticker") or "").strip().upper()
+    if not username or not _db_validate_session(username,token):
+        return jsonify({"error":"Session expired. Please sign in again."}),401
+    if not re.fullmatch(r"[A-Z0-9.\-]{1,12}",ticker):
+        return jsonify({"error":"Invalid ticker."}),400
+    return jsonify(_get_finviz_dilution_score(ticker))
+
+
+@app.route("/api/finviz-dilution-scores",methods=["POST"])
+def finviz_dilution_scores_api():
+    """Fetch a scanner batch after one session check, with per-ticker results."""
+    data=request.get_json(silent=True) or {}
+    username=(data.get("user") or "").strip().lower()
+    token=(data.get("token") or "").strip()
+    raw_tickers=data.get("tickers") or []
+    if not username or not _db_validate_session(username,token):
+        return jsonify({"error":"Session expired. Please sign in again."}),401
+    if not isinstance(raw_tickers,list):
+        return jsonify({"error":"Tickers must be a list."}),400
+    tickers=list(dict.fromkeys(str(value).strip().upper() for value in raw_tickers if re.fullmatch(r"[A-Za-z0-9.\-]{1,12}",str(value).strip())))[:100]
+    if not tickers:
+        return jsonify({"scores":{}})
+    scores={}
+    with ThreadPoolExecutor(max_workers=min(3,len(tickers)),thread_name_prefix="finviz-dilution") as pool:
+        futures={pool.submit(_get_finviz_dilution_score,ticker):ticker for ticker in tickers}
+        for future in as_completed(futures):
+            ticker=futures[future]
+            try:scores[ticker]=future.result()
+            except Exception as exc:
+                app.logger.exception("Unexpected Finviz dilution score error for %s",ticker)
+                scores[ticker]={"ticker":ticker,"score":None,"level":None,
+                                "error":f"Score request failed: {type(exc).__name__}."}
+    return jsonify({"scores":scores})
 
 
 @app.route("/api/scanner")

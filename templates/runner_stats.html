@@ -264,12 +264,12 @@ function render(j){
       +'<span style="color:var(--d);font-size:12px">1-minute OHLCV · extended hours · all chart times IST</span>'
       +'<label style="margin-left:auto;flex-direction:row;align-items:center;gap:5px;color:#ddd">Interval <select id="runner_chart_tf" style="height:30px"><option>1m</option><option selected>2m</option><option>3m</option><option>5m</option><option>15m</option><option>30m</option><option value="1d">Day</option></select></label>'
       +'<label style="flex-direction:row;align-items:center;gap:5px;color:#ddd">Sessions <select id="runner_chart_days" style="height:30px"><option value="1">1</option><option value="3">3</option><option value="5" selected>5</option><option value="10">10</option><option value="20">20</option><option value="60">60</option></select></label>'
-      +'<label style="flex-direction:row;align-items:center;gap:5px;color:#d7ff6e"><input type="checkbox" id="runner_chart_bz" checked style="width:14px;height:14px"> Bone Zone (9/21 EMA)</label>'
+      +'<label style="flex-direction:row;align-items:center;gap:5px;color:#d7ff6e"><input type="checkbox" id="runner_chart_bz" style="width:14px;height:14px"> Bone Zone (9/21 EMA)</label>'
       +'<label style="flex-direction:row;align-items:center;gap:5px;color:#fff"><input type="checkbox" id="runner_chart_vwap" checked style="width:14px;height:14px"> VWAP</label>'
       +'<label style="flex-direction:row;align-items:center;gap:5px;color:#8fd3ff;cursor:pointer" title="When enabled, drag across the chart to set or adjust the profile range; drag its edges to resize."><input type="checkbox" data-volume-profile-toggle style="width:14px;height:14px"> Volume Profile</label>'
-      +'<label style="display:inline-flex;flex-direction:row;align-items:center;gap:4px;color:#ff5a5a;font-size:12px;cursor:pointer"><input type="checkbox" id="runner_chart_ema5ext" checked style="width:14px;height:14px"><span>EMA5 Ext ≥</span><input id="runner_chart_ema5ext_val" type="number" min="5" max="300" step="5" value="30" style="width:46px;height:22px;padding:0 3px;background:#0d1117;border:1px solid #ff5a5a;color:#ff8888;font:bold 12px Consolas,monospace;border-radius:3px;text-align:center" title="Extension % threshold above 5m 9-EMA"><span>%</span></label>'
+      +'<label style="display:inline-flex;flex-direction:row;align-items:center;gap:4px;color:#ff5a5a;font-size:12px;cursor:pointer"><input type="checkbox" id="runner_chart_ema5ext" style="width:14px;height:14px"><span>EMA5 Ext ≥</span><input id="runner_chart_ema5ext_val" type="number" min="5" max="300" step="5" value="30" style="width:46px;height:22px;padding:0 3px;background:#0d1117;border:1px solid #ff5a5a;color:#ff8888;font:bold 12px Consolas,monospace;border-radius:3px;text-align:center" title="Extension % threshold above 5m 9-EMA"><span>%</span></label>'
       +'<button id="runner_chart_avwap" class="btn-tool" title="Select two points to draw anchored VWAP">AVWAP</button><button id="runner_chart_clear_avwap" class="btn-tool">Clear AVWAP</button>'
-      +'<button id="runner_chart_measure" class="btn-tool">Measure range</button><button id="runner_chart_pan" class="btn-tool">Pan</button>'
+      +'<button id="runner_chart_measure" class="btn-tool">Measure range</button><button id="runner_chart_pan" class="btn-tool">Pan</button><button id="runner_chart_wheel_pan" class="btn-tool" type="button" aria-pressed="false" title="Use the wheel to slide horizontally">Wheel Pan</button><button id="runner_chart_hline" class="btn-tool" type="button" aria-pressed="false" title="Click a price level to draw a line rightward">H-Line</button>'
       +'<button id="runner_chart_zoom_reset" class="btn-tool">Reset</button><button id="runner_chart_fullscreen" class="btn-tool">Full screen</button><button id="runner_chart_copy" class="btn-tool">Copy PNG</button></header>'
       +'<div style="display:flex;gap:14px;flex-wrap:wrap;color:#aab4bf;font-size:11px;padding:4px 2px 8px"><span style="color:#fff">━ VWAP</span><span style="color:#ff5a5a">▼ EMA5 Extension</span><span style="color:#ffe45c">AVWAP</span><span style="color:#ffd23f">N News</span><span style="color:#62c8ff">S SEC filing</span></div>'
       +'<div id="runner_chart_wrap" style="position:relative;height:540px;min-height:300px;background:#050607;border:1px solid #242b33;overflow:hidden">'
@@ -529,7 +529,7 @@ function renderRunnerStockChart(){
   cv._anchorDate=state.anchorDate;cv._activeDate=state.anchorDate;cv._chartDays=state.days;cv._hoverTimeReadout=$('runner_chart_hover_time');
   cv._marketEvents=state.events||[];cv._floatShares=state.floatShares;
   cv._panOffset=state.panOffset||0;cv._rangeZoom=state.zoom||1;cv._zoom=cv._rangeZoom;cv._yZoom=state.yZoom||1;
-  cv._rangeMeasures=state.rangeMeasures||(state.rangeMeasures=[]);cv._selectedRangeId=state.selectedRangeId||null;
+  cv._rangeMeasures=state.rangeMeasures||(state.rangeMeasures=[]);cv._selectedRangeId=state.selectedRangeId||null;cv._horizontalLines=state.horizontalLines||(state.horizontalLines=[]);cv._selectedHLineId=null;
   cv._avwapAnchors=state.avwapAnchors||null;cv._showVWAP=$('runner_chart_vwap').checked;cv._showEMA5Ext=$('runner_chart_ema5ext').checked;cv._ema5ExtThreshold=Number($('runner_chart_ema5ext_val')?.value)||Number(localStorage.getItem('gap_ema5ext_threshold'))||30;
   cv._showHODAVWAP=false;cv._showCrosshair=true;cv._showOhlcTip=true;cv._renderDpr=2;
   if(!cv._featureControlsBound){
@@ -547,7 +547,7 @@ function renderRunnerStockChart(){
   window.bindUnifiedChartFeatures(cv,ui,()=>{
     state.panOffset=cv._panOffset||0;state.yZoom=cv._yZoom||1;state.zoom=cv._rangeZoom||1;
     state.avwapAnchors=cv._avwapAnchors;state.rangeMeasures=cv._rangeMeasures||[];
-    state.selectedRangeId=cv._selectedRangeId;
+    state.selectedRangeId=cv._selectedRangeId;state.horizontalLines=cv._horizontalLines||[];
   },renderRunnerStockChart);
   const chartHeight=document.fullscreenElement===$('c15section')?Math.max(300,window.innerHeight-210):540;
   window.drawSharedStockChart(cv,state.chart,'none',$('runner_chart_bz').checked,chartHeight,state.timeframe,state.zoom||1);
@@ -579,7 +579,7 @@ function initChart15(data){
     floatShares:Number(data.float_val)||null,panOffset:0,zoom:1,yZoom:1,rangeMeasures:[],selectedRangeId:null,avwapAnchors:null,loading:false
   };
   _chartState=state;$('runner_chart_tf').value=state.timeframe;$('runner_chart_days').value='5';
-  $('runner_chart_vwap').checked=true;$('runner_chart_ema5ext').checked=true;$('runner_chart_bz').checked=true;
+  $('runner_chart_vwap').checked=true;$('runner_chart_ema5ext').checked=false;$('runner_chart_bz').checked=false;
   if($('runner_chart_ema5ext_val')){
     $('runner_chart_ema5ext_val').value=localStorage.getItem('gap_ema5ext_threshold')||'30';
     const onVal=e=>{e.stopPropagation();const val=Math.max(1,Math.min(500,Number($('runner_chart_ema5ext_val').value)||30));try{localStorage.setItem('gap_ema5ext_threshold',String(val));}catch{}renderRunnerStockChart();};

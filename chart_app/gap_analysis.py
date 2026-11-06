@@ -379,26 +379,31 @@ def tbl_text(cols, rows):
 
 
 def model_rows(S):
-    rows = []
+    sortable_rows = []
     for name in ["2m ORB low break", "5m ORB low break", "Short at open"]:
         ms = [e["models"][name] for e in S if name in e["models"]]
         if not ms:
             continue
         eff = [x["pnl"] for x in ms]
         wins = [p for p in eff if p > 0]
-        loss = [p for p in eff if p <= 0]
         wr = len(wins) / len(eff)
-        exp = float(np.mean(eff))
         maes = [x["mae"] for x in ms]
+        avg_fade = float(np.mean(eff))
+        avg_squeeze = float(np.mean(maes))
         avg_risk = float(np.mean([x["stop_pct"] for x in ms]))
+        stopped = any(x.get("stop_hit", False) for x in ms)
         stop_rule = {"2m ORB low break": "First 2m candle high",
                      "5m ORB low break": "First 5m candle high",
                      "Short at open": "20% above entry"}[name]
-        rows.append([C(name), C(stop_rule), C(str(len(ms))), C(f"{wr:.0%}", "g" if wr >= .55 else "y" if wr >= .45 else "r", wr),
-                     C(pct(np.mean(wins)) if wins else "—", "g"), C(pct(np.mean(loss)) if loss else "—", "r"),
-                     C(pct(exp), sc(exp), exp), C(f"{exp / avg_risk:+.2f}R" if avg_risk else "—", sc(exp), exp),
-                     C(pct(med(maes), 0), "y", med(maes)), C(pct(max(maes), 0), "r", max(maes))])
-    return rows
+        rows = [C(name), C(stop_rule),
+                C(f"n={len(ms)}", "nlow", len(ms)) if len(ms) < 5 else C(str(len(ms)), "w", len(ms)),
+                C(f"{wr:.0%}", "g" if wr >= .55 else "y" if wr >= .45 else "r", wr),
+                C(pct(avg_fade), "g" if avg_fade > 0 else "r" if avg_fade < 0 else "w", avg_fade),
+                C(pct(avg_squeeze, 0), "r" if stopped else "y", avg_squeeze)]
+        sortable_rows.append((avg_fade, avg_squeeze, rows))
+    # Highest net short return first; for ties show the smaller average squeeze first.
+    sortable_rows.sort(key=lambda item: (-item[0], item[1]))
+    return [item[2] for item in sortable_rows]
 
 
 def fdate(d):
@@ -586,11 +591,11 @@ def build_report(t, live, lm, events, S, notes, daily, hod_times=None):
     else:
         head = {"grade": "N/A", "score": "—", "gcls": "r", "verdict": "Not enough history.", "total": len(gap_events), "pm_n": pm_st["n"]}
 
-    mcols = ["Entry (short; exit at close / stop)", "Stop loss", "Trades", "Win %", "Avg win", "Avg loss", "Expectancy",
-             "Avg R (per-model stop)", "Median squeeze", "Worst squeeze"]
+    mcols = ["Entry", "Stop loss", "Trades", "Win %", "Avg fade", "Avg squeeze"]
     mrows = model_rows(S)
-    mfoot = ("2m/5m ORB shorts enter on a break below the opening-range low; stop = the high of the first "
-             "2-minute/5-minute candle, respectively. Short at open stop = 20% above entry.")
+    mfoot = ("Short returns are measured from entry to close, or to the stop if hit; positive fades are green and losses red. "
+             "Avg squeeze is the mean highest move against each entry up to exit (orange unless a stop was hit, then red). "
+             "Dim n= counts have fewer than 5 trades. 2m/5m ORB shorts enter on a break below the opening-range low.")
 
     head.update(ticker=t, n=st["n"], summary=summary,
                 sub=f"Chart-Based Gap Up Analysis — Current Day: {day_display} · Times in IST", notes=notes)
