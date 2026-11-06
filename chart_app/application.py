@@ -532,7 +532,9 @@ def run_job(job, t, refresh):
         polygon_shares = security_stats.get("shares_outstanding")
         if polygon_float:
             live["float"] = polygon_float
-            live["float_source"] = f"Polygon · {security_stats.get('float_asof') or 'date unavailable'}"
+            live["float_source"] = (f"{security_stats.get('float_source')} · {security_stats.get('float_asof') or 'date unavailable'}"
+                                    if security_stats.get("float_source") else
+                                    f"Polygon · {security_stats.get('float_asof') or 'date unavailable'}")
         elif live.get("float"):
             live["float_source"] = "Yahoo Finance fallback · date unavailable"
         elif polygon_shares or live.get("so"):
@@ -545,15 +547,20 @@ def run_job(job, t, refresh):
         live["security_stats_errors"] = security_stats.get("errors", [])
 
         cap_shares = polygon_shares or live.get("so")
-        if cap_shares and live.get("cur"):
+        if security_stats.get("market_cap") is not None:
+            live["mcap"] = security_stats["market_cap"]
+            live["market_cap_source"] = security_stats.get("market_cap_source") or "ShareStructure.io"
+        elif security_stats.get("provider") == "ShareStructure.io":
+            # ShareStructure's documented partner response does not include a
+            # market-cap field. Do not silently substitute another vendor.
+            live["mcap"] = None
+            live["market_cap_source"] = "Not supplied by ShareStructure.io"
+        elif cap_shares and live.get("cur"):
             live["mcap"] = cap_shares * live["cur"]
             live["market_cap_source"] = (
                 "Latest price × Polygon shares" if polygon_shares
                 else "Latest price × Yahoo shares"
             )
-        elif security_stats.get("market_cap"):
-            live["mcap"] = security_stats["market_cap"]
-            live["market_cap_source"] = "Polygon reference value"
         elif live.get("mcap"):
             live["market_cap_source"] = "Yahoo Finance fallback · date unavailable"
         else:

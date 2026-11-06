@@ -897,12 +897,19 @@ def gap_deepdive_float(job_id):
     if not job or not any(item.get('ticker')==ticker for item in job.get('results',[])):
         return jsonify({'error':'Ticker is not part of this scan.'}),404
     key=f"gap_deepdive_float_{ticker}"
-    cached=cget(key,30*86400)
+    cached=cget(key,6*3600)
     if cached is None:
         try:
-            from chart_app.runner import poly_float
-            shares,asof,percent,error=poly_float(ticker)
-            cached={'float_shares':shares,'asof':asof,'float_percent':percent,'error':error}
+            from chart_app.market_data import latest_security_stats
+            stats=latest_security_stats(ticker)
+            shares=stats.get('float_shares')
+            if shares is not None:
+                cached={'float_shares':shares,'asof':stats.get('float_asof'),
+                        'float_percent':None,'source':stats.get('float_source') or 'ShareStructure.io', 'error':None}
+            else:
+                from chart_app.runner import poly_float
+                shares,asof,percent,error=poly_float(ticker)
+                cached={'float_shares':shares,'asof':asof,'float_percent':percent,'source':'Polygon fallback','error':error}
         except Exception as exc:
             cached={'float_shares':None,'error':str(exc)}
         cput(key,cached)
@@ -1846,6 +1853,33 @@ def _parse_report_number(value):
     match=re.search(r'(?<![\w.])(-?\d+(?:\.\d+)?)\s*([kmb])?\b',text)
     if not match:
         return None
+
+
+def _sharestructure_assessment(ticker):
+    """Return a ShareStructure partner assessment, or None when unavailable."""
+    key = os.getenv('SHARESTRUCTURE_API_KEY', '').strip()
+    if not key:
+        return None
+    cache_key=f'sharestructure_issuer_v1_{ticker}'
+    cached=cget(cache_key,6*3600)
+    if cached is not None:
+        return cached
+    try:
+        response = requests.get(
+            f'https://www.sharestructure.io/api/v1/issuers/{quote(ticker, safe="")}',
+            headers={'Authorization': f'Bearer {key}', 'Accept': 'application/json'},
+            timeout=8)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict):
+            issuer=payload.get('issuer') if isinstance(payload.get('issuer'), dict) else payload
+            cput(cache_key,issuer)
+            return issuer
+    except Exception as exc:
+        app.logger.info('ShareStructure lookup unavailable for %s (%s)', ticker, type(exc).__name__)
+    return None
     try:
         multiplier={'k':1_000,'m':1_000_000,'b':1_000_000_000}.get(match.group(2),1)
         return float(match.group(1))*multiplier
@@ -1873,6 +1907,29 @@ def sec_dilution_history():
         return jsonify({'error':'As-of date cannot be in the future.'}),400
     today=asof_date.isoformat()
     score_only=bool(body.get('score_only'))
+    # ShareStructure is the preferred source for the report. Its assessment is
+    # current, so use it only for a current-date request; historical requests
+    # continue through the point-in-time SEC/AI workflow below.
+    if not score_only and asof_date == current_day:
+        request_started=time.monotonic()
+        update_progress_job_id=str(body.get('_progress_job_id') or '').strip()
+        if re.fullmatch(r'[0-9a-f]{32}', update_progress_job_id):
+            job_key=f'sec_dilution_job_{update_progress_job_id}'
+            job=cget(job_key,15*60) or {}
+            cput(job_key,{**job,'progress':{'stage':'sharestructure','message':'Checking ShareStructure.io assessment…','updated_at':dt.datetime.now(dt.timezone.utc).isoformat()}})
+        assessment=_sharestructure_assessment(ticker)
+        if assessment and assessment.get('dilution'):
+            result={'ticker':ticker,'as_of':today,'source':'sharestructure','sharestructure':assessment,
+                    'summary':assessment.get('summary') or '',
+                    'market_snapshot':{'shares_outstanding':(assessment.get('shares_outstanding') or {}).get('assessed') or (assessment.get('shares_outstanding') or {}).get('reported'),
+                                       'shares_as_of':(assessment.get('shares_outstanding') or {}).get('assessed_as_of') or (assessment.get('shares_outstanding') or {}).get('reported_as_of'),
+                                       'float_shares':(assessment.get('float') or {}).get('estimated'),
+                                       'float_as_of':(assessment.get('float') or {}).get('estimated_as_of')},
+                    'today_math':{'float':(assessment.get('float') or {}).get('estimated'),
+                                  'float_basis':'ShareStructure.io filing-based estimated float'},
+                    'risk_signals':{'sharestructure':assessment.get('dilution') or {}}}
+            cput(f'sharestructure_report_v1_{ticker}',result)
+            return jsonify(result)
     score_cache_key=f'sec_dilution_score_v1_{ticker}_{today}'
     if score_only:
         quick_cached=cget(score_cache_key,30*60)
@@ -2108,7 +2165,8 @@ def sec_dilution_history():
         market_inputs=market_inputs_future.result()
         market_snapshot={'market_date':None,'last_price':None,'shares_outstanding':None,
                          'shares_filed':None,'shares_as_of':None,'float_shares':None,
-                         'float_as_of':None,'adtv_20d':None,'public_float_pricing_date':None,
+                         'float_as_of':None,'market_cap':None,'market_cap_source':None,
+                         'adtv_20d':None,'public_float_pricing_date':None,
                          'public_float_price':None,'requested_pricing_date':'highest completed close in the preceding 60 calendar days',
                          'pricing_method':'Highest completed daily close in the preceding 60 calendar days; historical bars adjusted for recorded splits through the selected date',
                          'price_source':'Polygon daily aggregates (adjusted for recorded splits through the selected date)',
@@ -2210,6 +2268,8 @@ def sec_dilution_history():
                 stats=market_inputs['stats']
                 market_snapshot['float_shares']=stats.get('float_shares')
                 market_snapshot['float_as_of']=stats.get('float_asof')
+                market_snapshot['market_cap']=stats.get('market_cap')
+                market_snapshot['market_cap_source']=stats.get('market_cap_source') or ('ShareStructure.io' if stats.get('float_source','').startswith('ShareStructure') else None)
                 market_snapshot['vendor_shares_outstanding']=stats.get('shares_outstanding')
                 market_snapshot['notes'].extend(stats.get('errors') or [])
             else:
@@ -2239,6 +2299,8 @@ def sec_dilution_history():
             "adjusted for recorded splits after its period end, but not yet adjusted for post-filing issuances unless shown in the filings).\n"
             f"Vendor float estimate: {fmt(market_snapshot['float_shares'])} shares "
             f"(effective date {market_snapshot['float_as_of'] or 'unavailable'}; vendor estimate, not a holder-by-holder calculation).\n"
+            f"ShareStructure market cap: {fmt(market_snapshot['market_cap'])} "
+            f"(source {market_snapshot['market_cap_source'] or 'not supplied by ShareStructure'}).\n"
             f"20-session average daily volume: {fmt(market_snapshot['adtv_20d'])} shares "
             f"(through market data date {market_snapshot['market_date'] or 'unavailable'}).\n"
             f"Calculation inputs: close ${fmt(market_snapshot['last_price'])}; ADTV {fmt(market_snapshot['adtv_20d'])} shares; "

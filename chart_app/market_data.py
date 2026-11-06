@@ -633,6 +633,40 @@ def latest_security_stats(t, force=False):
     if cached is not None:
         return cached
 
+    # Prefer the licensed ShareStructure filing-based float whenever present.
+    # The API key stays server-side; Polygon remains a fallback for tickers
+    # without a ShareStructure assessment.
+    ss_key = os.getenv("SHARESTRUCTURE_API_KEY", "").strip()
+    if ss_key:
+        try:
+            response = requests.get(
+                f"https://www.sharestructure.io/api/v1/issuers/{t}",
+                headers={"Authorization": f"Bearer {ss_key}", "Accept": "application/json"},
+                timeout=8)
+            if response.ok:
+                issuer = response.json()
+                issuer = issuer.get("issuer", issuer) if isinstance(issuer, dict) else {}
+                share_float = issuer.get("float") or {}
+                outstanding = issuer.get("shares_outstanding") or {}
+                result = {
+                    "type": None,
+                    "shares_outstanding": outstanding.get("assessed") or outstanding.get("reported"),
+                    "market_cap": issuer.get("market_cap") or (issuer.get("market") or {}).get("market_cap"),
+                    "market_cap_source": "ShareStructure.io" if (issuer.get("market_cap") is not None or (issuer.get("market") or {}).get("market_cap") is not None) else None,
+                    "float_shares": share_float.get("estimated") if share_float.get("estimated") is not None else share_float.get("reported"),
+                    "float_asof": share_float.get("estimated_as_of") or share_float.get("reported_as_of") or issuer.get("assessed_at"),
+                    "float_source": ("ShareStructure.io filing-based estimate" if share_float.get("estimated") is not None else "ShareStructure.io reported float"),
+                    "provider": "ShareStructure.io",
+                    "errors": [],
+                }
+                if result["float_shares"] is not None or result["shares_outstanding"] is not None:
+                    cput(key, result)
+                    return result
+        except Exception:
+            # Continue to the existing providers when the partner API is
+            # unavailable; no third-party key or error reaches the browser.
+            pass
+
     def fetch_details():
         try:
             return (poly_get(f"/v3/reference/tickers/{t}").get("results") or {}), None

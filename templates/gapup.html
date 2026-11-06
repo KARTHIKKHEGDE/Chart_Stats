@@ -1383,6 +1383,7 @@ const tickerChatPending=new Set();
 let tickerChatDisplayedTicker='';
 function dilutionTextForAio(report){
   if(!report)return '';
+  if(report.source==='sharestructure')return `ShareStructure.io assessment for ${report.ticker} as of ${report.as_of}: ${JSON.stringify(report.sharestructure||{})}`.slice(0,10000);
   const sections=[`SEC review as of ${report.as_of||'latest'}: ${report.summary||''}`,`Current status: ${report.current_status||''}`];
   if(report.ceo_ownership)sections.push(`CEO ownership: ${JSON.stringify(report.ceo_ownership)}`);
   if(report.active_participants?.length)sections.push(`Banks/underwriters/placement agents involved in active dilution: ${JSON.stringify(report.active_participants)}`);
@@ -1542,10 +1543,12 @@ document.addEventListener('submit',async event=>{
   }
 });
 function aioPayload(tab,ticker,dilutionReport){
-  const r=tab?.result||{},h=r.head||{},news=(r.news||[]).slice(0,8);
+  const r=tab?.result||{},h=r.head||{},baseNews=(r.news||[]).slice(0,8);
+  const wireNews=[...(tab?.container?.querySelectorAll('[data-gnw-item]')||[])].slice(0,12).map(card=>{const link=card.querySelector('.newsAiTrigger');return link?{title:link.dataset.title||link.textContent.trim(),url:link.dataset.url||'',published:link.dataset.published||'',source:'GlobeNewswire / wire'}:null;}).filter(Boolean);
+  const news=[...wireNews,...baseNews].slice(0,16);
   const events=(tab?.EV||[]).filter(x=>!x.sim).slice(0,20).map(x=>({date:x.date,gap_pct:x.gap||x.gapPct,grade:x.grade,verdict:x.verdict,close_pct:x.closePct??x.close_pct??0}));
   const sec_filings=[...(tab?.container?.querySelectorAll('.filing-category-row,.recent-filing-row')||[])].slice(0,25).map(row=>({form:row.querySelector('.filing-category-form,.recent-filing-form')?.textContent?.trim()||'',title:row.querySelector('.filing-category-description,.recent-filing-title')?.textContent?.trim()||row.dataset.title||'',filed_at:row.querySelector('.recent-filing-age')?.getAttribute('datetime')||row.querySelector('.filing-category-date')?.textContent?.trim()||''})).filter(item=>item.title);
-  return {user:currentUser||'',token:sessionToken||'',ticker,news,news_status:r.news_status||'',events,sec_filings,dilution_text:dilutionTextForAio(dilutionReport),dilution_risk_signals:dilutionReport?.risk_signals||{},grade:{grade:h.grade,verdict:h.verdict,score:h.score,n:h.n},current_price:h.price||h.last_price||'',gap_pct:h.gap_pct||h.gap||''};
+  return {user:currentUser||'',token:sessionToken||'',ticker,news,news_status:wireNews.length?'GlobeNewswire / wire headlines included.':(r.news_status||''),events,sec_filings,dilution_text:dilutionTextForAio(dilutionReport),dilution_risk_signals:dilutionReport?.risk_signals||{},grade:{grade:h.grade,verdict:h.verdict,score:h.score,n:h.n},current_price:h.price||h.last_price||'',gap_pct:h.gap_pct||h.gap||''};
 }
 function getAioSummary(tab,ticker,dilutionReport){
   const payload=aioPayload(tab,ticker,dilutionReport),key=JSON.stringify(payload);
@@ -1751,6 +1754,33 @@ function calculateDilutionReportScore(data){
 
 function renderDilutionHistory(data){
   const status=$('#filing_explanation_status'),content=$('#filing_explanation_content'),title=$('#filing_explanation_title');
+  if(data.source==='sharestructure'){
+    const ss=data.sharestructure||{},flt=ss.float||{},dil=ss.dilution||{},sharesOut=ss.shares_outstanding||{},atm=ss.atm||{};
+    const escText=value=>esc(value===0?'0':value??'Not reported');
+    const compact=value=>{const n=Number(value);if(!Number.isFinite(n))return 'Not reported';return n>=1e9?(n/1e9).toFixed(2)+'B':n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':n.toLocaleString();};
+    const date=value=>formatDateMDY(value)||value||'Date unavailable';
+    const secLink=row=>row.url|| (row.accession_number?`https://www.sec.gov/Archives/edgar/data/${String(ss.cik||'').replace(/^0+/,'')}/${String(row.accession_number).replaceAll('-','')}/`:null);
+    const linkRows=(ss.registrations||[]).map(row=>`<article class="dilutionSourceEntry"><b>${escText(row.form_type||'SEC filing')}</b><time>${escText(date(row.filed_date))}</time><div>${escText(row.file_number||'')} · ${escText(row.shares_registered==null?'Share count not stated':compact(row.shares_registered)+' shares')} · ${row.effective_date?'Effective '+escText(date(row.effective_date)):''}<div style="margin-top:5px">${secLink(row)?`<a href="${esc(secLink(row))}" target="_blank" rel="noopener noreferrer">Open SEC filing ↗</a>`:'SEC link unavailable'}</div></div></article>`).join('');
+    const flags=(ss.red_flags||[]).map(row=>`<article class="dilutionReportItem"><h4>${escText(row.category)} <span class="dilutionRatingBadge">${escText(row.severity)}</span></h4><p>${escText(row.description||row.detail||row.timeframe||'Flag recorded in ShareStructure assessment.')}</p>${row.shares_involved!=null?`<p>${escText(compact(row.shares_involved))} shares involved</p>`:''}</article>`).join('');
+    const mechanisms=(ss.active_mechanisms||[]).map(row=>`<article class="dilutionReportItem"><h4>${escText(row.name||row.type||row.mechanism||'Active mechanism')}</h4><p>${escText(row.description||row.summary||row.details||row.status||'Details not supplied by the assessment.')}</p></article>`).join('');
+    const people=(ss.counterparties||[]).map(row=>`<article class="dilutionReportItem"><h4>${escText(row.name)} <span class="dilutionRatingBadge">${escText(row.role||'Counterparty')}</span></h4><p>${row.high_risk?'Flagged high risk by ShareStructure.':'Counterparty identified in the assessment.'}</p></article>`).join('');
+    const splits=(ss.reverse_splits||[]).map(row=>`<article class="dilutionReportItem"><h4>Reverse split · ${escText(row.ratio||'Ratio unavailable')}</h4><p>${escText(date(row.date))}</p></article>`).join('');
+    const events=(ss.financing_history||ss.financings||ss.history||[]).map(row=>`<article class="dilutionReportItem"><h4>${escText(row.title||row.event||row.type||'Financing event')}</h4><p>${escText(row.summary||row.description||row.amount||'Details not supplied by the assessment.')}</p><p class="dilutionHistoryDate">${escText(date(row.date||row.filed_date))}</p></article>`).join('');
+    const marketCap=ss.market_cap??ss.market?.market_cap??null;
+    title.textContent=`${ss.ticker||data.ticker||''} · Dilution report`;
+    content.innerHTML=`<div class="filingExplainMeta">${escText(ss.name||data.ticker)} · ${escText(ss.exchange||'')} · Assessed ${escText(date(ss.assessed_at))}</div>
+      <section class="dilutionRatingPanel"><div class="dilutionRatingTop"><div class="dilutionRatingScore"><b>${escText(dil.score??'—')}<small style="font-size:13px">${dil.score!=null?'/10':''}</small></b><span>${escText(dil.rating||'UNRATED')}</span></div><div class="dilutionRatingIntro"><strong>Dilution risk · ${escText(dil.confidence||'Confidence unavailable')} confidence</strong><p>${escText(ss.summary||'ShareStructure assessment retrieved.')}</p></div></div></section>
+      <section class="filingExplainSection"><h3>Float assessment</h3><div class="dilutionSnapshotGrid"><span><b>Estimated float</b>${escText(compact(flt.estimated))}<small>ShareStructure filing-based estimate · ${escText(date(flt.estimated_as_of))}</small></span><span><b>Reported float</b>${escText(compact(flt.reported))}<small>Data-service figure · ${escText(date(flt.reported_as_of))}</small></span><span><b>Float status</b>${escText(flt.status||'Not reported')}<small>Pending overhang ${flt.pending_overhang_pct==null?'Not reported':escText(flt.pending_overhang_pct)+'%'}</small></span><span><b>Shares outstanding</b>${escText(compact(sharesOut.assessed??sharesOut.reported))}<small>Assessed ${escText(date(sharesOut.assessed_as_of||sharesOut.reported_as_of))}</small></span><span><b>Market cap</b>${marketCap==null?'Not supplied by ShareStructure':`$${escText(compact(marketCap))}`}<small>Only shown when supplied by ShareStructure</small></span></div></section>
+      <section class="filingExplainSection"><h3>From estimated float to potential supply</h3><div class="dilutionMetricGrid">${[['Estimated float',flt.estimated],['Effective supply',flt.effective_supply],['Fully diluted',flt.fully_diluted],['Pending overhang',flt.pending_overhang_pct==null?null:`${flt.pending_overhang_pct}%`]].map(([label,value])=>`<div class="dilutionMetric"><b>${escText(label)}</b><span>${escText(value==null?'Not reported':typeof value==='number'&&label!=='Pending overhang'?compact(value):value)}</span></div>`).join('')}</div><p>ATM active: ${escText(atm.active==null?'Not reported':atm.active?'Yes':'No')} · Remaining capacity: ${escText(atm.remaining_capacity_usd==null?'Not reported':'$'+compact(atm.remaining_capacity_usd))} · Baby-shelf cap: ${escText(atm.baby_shelf_cap_usd==null?'Not reported':'$'+compact(atm.baby_shelf_cap_usd))}</p></section>
+      <section class="filingExplainSection"><h3>Red flags (${(ss.red_flags||[]).length})</h3>${flags?`<div class="dilutionReportCards">${flags}</div>`:'<p>No red flags supplied in the assessment.</p>'}</section>
+      <section class="filingExplainSection"><h3>Active dilution mechanisms</h3>${mechanisms?`<div class="dilutionReportCards">${mechanisms}</div>`:'<p>No mechanism details supplied.</p>'}</section>
+      <section class="filingExplainSection"><h3>Counterparties</h3>${people?`<div class="dilutionReportCards">${people}</div>`:'<p>No counterparties supplied.</p>'}</section>
+      <section class="filingExplainSection"><h3>Financing history</h3>${events?`<div class="dilutionReportCards">${events}</div>`:'<p>Financing history is not included in the documented partner API response.</p>'}</section>
+      <section class="filingExplainSection"><h3>Reverse splits</h3>${splits?`<div class="dilutionReportCards">${splits}</div>`:'<p>No reverse split data supplied.</p>'}</section>
+      <section class="filingExplainSection"><h3>Linked SEC filings</h3>${linkRows?`<div class="dilutionSourceGroup">${linkRows}</div>`:'<p>No registration links supplied.</p>'}</section>
+      <section class="dilutionStatusCard"><h3>ShareStructure.io assessment</h3><p><a href="${esc(ss.links?.assessment||ss.attribution?.link||'https://www.sharestructure.io/')}" target="_blank" rel="noopener noreferrer" style="color:#ffd0a6">Powered by ShareStructure.io · Open full assessment ↗</a></p></section>`;
+    status.textContent='';content.hidden=false;return;
+  }
   title.textContent=`${data.ticker||''} · Dilution history`;
   const snap=data.market_snapshot||{},math=data.today_math||{},fin=data.financial_position||{};
   const asof=formatDateMDY(data.as_of)||data.as_of||'date not confirmed';
@@ -2241,7 +2271,7 @@ function renderTab(tab, r, isRefresh){
     : '';
 
   o += `<div class="refresh_banner" style="display:none;background:#141414;border:1px solid #29a8ff;padding:8px 12px;margin-bottom:14px;color:#29a8ff;font-size:13px"></div>`;
-  o += `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:14px"><span class="big">Ticker: <span class="c">${esc(h.ticker)}</span></span><button class="dilutionReportTopButton" type="button" id="recent_filings_dilution" data-ticker="${esc(h.ticker)}" title="Open the SEC-based dilution report">Dilution Report</button><a href="${esc(r.dilution_url)}" target="_blank" rel="noopener noreferrer" style="color:#d8b4fe;font-size:13px;font-weight:normal">Finviz Dilution ↗</a>${refreshBadge}</div>`;
+  o += `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:14px"><span class="big">Ticker: <span class="c">${esc(h.ticker)}</span></span><button class="dilutionReportTopButton" type="button" id="recent_filings_dilution" data-ticker="${esc(h.ticker)}" title="Open the SEC-based dilution report">Dilution Report</button><a href="${esc(r.dilution_url)}" target="_blank" rel="noopener noreferrer" style="color:#d8b4fe;font-size:13px;font-weight:normal">Finviz Dilution ↗</a><a href="https://www.sharestructure.io/scanner/${encodeURIComponent(h.ticker)}" target="_blank" rel="noopener noreferrer" style="color:#8fd3ff;font-size:13px;font-weight:normal" title="Open the ${esc(h.ticker)} ShareStructure float and dilution assessment">ShareStructure ↗</a>${refreshBadge}</div>`;
   o += `<div class="panel"><div class="ttl">Chart-Based Fade Grade</div>`+
     `<div>Grade: <span class="badge ${esc(h.gcls)}">${esc(h.grade)}</span> <span class="c">${esc(h.score)}</span> <span class="${esc(h.gcls)}">· ${esc(h.verdict)}</span></div>`+
     `<div class="foot">Based on ${Number(h.n)||0} similar historical gap-up setups and ${Number(h.pm_n)||0} premarket spike sessions (≥20% above prior close, faded measured high→open).</div></div>`;

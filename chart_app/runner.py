@@ -141,8 +141,24 @@ def details(tkr, date=None):
 
 
 def poly_float(tkr):
-    """Polygon GET /stocks/vX/float  (experimental endpoint, current float only).
-    Returns (free_float, effective_date, free_float_percent, error)."""
+    """Return the preferred current float, with Polygon as the unassessed fallback."""
+    ss_key = os.getenv("SHARESTRUCTURE_API_KEY", "").strip()
+    if ss_key:
+        try:
+            response = requests.get(
+                f"https://www.sharestructure.io/api/v1/issuers/{tkr}",
+                headers={"Authorization": f"Bearer {ss_key}", "Accept": "application/json"}, timeout=8)
+            if response.ok:
+                issuer = response.json()
+                issuer = issuer.get("issuer", issuer) if isinstance(issuer, dict) else {}
+                float_data = issuer.get("float") or {}
+                if float_data.get("estimated") is not None:
+                    return (float(float_data["estimated"]),
+                            float_data.get("estimated_as_of") or issuer.get("assessed_at"),
+                            None, None)
+        except Exception:
+            pass
+    # Polygon GET /stocks/vX/float is the fallback when no assessment exists.
     try:
         j = pg(f"{BASE}/stocks/vX/float", {"ticker": tkr})
         res = (j or {}).get("results") or []
